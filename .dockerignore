@@ -1,0 +1,32 @@
+# Keep build context lean and, critically, keep secrets out of image layers.
+node_modules
+.next
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Claude Code worktrees (contain junctions Docker can't read).
+.claude
+
+# Never bake local secrets or databases into the image.
+lake
+.env
+.env.local
+.env.*.local
+prisma/sample.db
+prisma/*.db
+prisma/*.db-journal
+
+# Tests, docs, and dev artefacts the image doesn't need.
+*.md
+!README.md
+/tmp
+*.log
+coverage
+.cache
+
+# Docker meta doesn't copy itself.
+Dockerfile
+.dockerignore

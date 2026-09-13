@@ -1,0 +1,452 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Design tokens — the provenance-led system.
+
+   Three neutral surfaces do the layout work: a cool-white *ground*
+   (--background, the page and the rails), a white *surface*
+   (--card / --popover, anything that holds content) and a *sunk*
+   well (--muted / --secondary / --accent, inputs, hover states,
+   inset panels). Ink comes in three weights: --foreground,
+   --muted-foreground and --faint. One interactive indigo
+   (--primary, with --primary-ink for hover/pressed and
+   --primary-soft for tints) is reserved for things you can act
+   on; status is carried by --success / --warning / --destructive
+   and never by the accent. Radii are an explicit 4 / 8 / 12 / 20
+   scale; elevation is mostly borders, with a quiet ink-tinted
+   shadow for the few surfaces that float.
+
+   Values are HSL triples so Tailwind can apply opacity
+   modifiers (bg-success/10). Hex sources, light → dark:
+   ground #F6F7FB → #0D0F16, surface #FFFFFF → #151824,
+   sunk #EEF0F6 → #1C2030, ink #101321 → #EDEFF7,
+   accent #3B37D1 → #9A96FF, verified #0E7C5B → #4CCF9E,
+   warn #A8690F → #E3A94E, critical #B4304A → #F2728A.
+============================================================ */
+
+@layer base {
+  :root {
+    /* Surfaces */
+    --background: 228 38.5% 97.5%;
+    --foreground: 229 34.7% 9.6%;
+    --card: 0 0% 100%;
+    --card-foreground: 229 34.7% 9.6%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 229 34.7% 9.6%;
+    --muted: 225 30.8% 94.9%;
+    --muted-foreground: 225 11.4% 41.2%;
+    --faint: 226 12% 59%;
+    --border: 226 27.7% 90.8%;
+    --input: 226 27.7% 90.8%;
+
+    /* Interactive indigo — the only accent, reserved for "act" */
+    --primary: 242 62.6% 51.8%;
+    --primary-ink: 241 61.2% 40.4%;
+    --primary-soft: 244 66.7% 95.3%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 242 62.6% 51.8%;
+
+    /* Sunk wells (shadcn's secondary/accent are hover + inset surfaces) */
+    --secondary: 225 30.8% 94.9%;
+    --secondary-foreground: 229 34.7% 9.6%;
+    --accent: 225 30.8% 94.9%;
+    --accent-foreground: 229 34.7% 9.6%;
+
+    /* Status — verified / warn / critical. Meaning, never decoration. */
+    --success: 162 79.7% 27.1%;
+    --success-foreground: 0 0% 100%;
+    --warning: 35 83.6% 35.9%;
+    --warning-foreground: 0 0% 100%;
+    --destructive: 348 57.9% 44.7%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Radius scale 4 / 8 / 12 / 20. tailwind.config.ts maps
+       sm→4, md+lg→8, xl→12, 2xl→20, report→12. */
+    --radius-sm: 4px;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 20px;
+    --radius-report: var(--radius-lg);
+
+    /* Rails share the ground; a 1px rule separates them */
+    --sidebar: 228 38.5% 97.5%;
+    --sidebar-border: 226 27.7% 90.8%;
+    --sidebar-foreground: 229 34.7% 9.6%;
+    --sidebar-muted: 225 11.4% 41.2%;
+
+    /* Elevation — ink-tinted (16 19 33) and quiet: borders carry most
+       separation, shadows only lift the few surfaces that float. */
+    --shadow-sm: 0 1px 2px 0 rgb(16 19 33 / 0.04);
+    --shadow: 0 1px 2px 0 rgb(16 19 33 / 0.05), 0 0 0 1px rgb(16 19 33 / 0.03);
+    --shadow-md: 0 4px 12px -4px rgb(16 19 33 / 0.08), 0 1px 2px 0 rgb(16 19 33 / 0.04);
+    --shadow-lg: 0 16px 32px -12px rgb(16 19 33 / 0.12), 0 4px 8px -4px rgb(16 19 33 / 0.05);
+
+    color-scheme: light;
+  }
+
+  /* Dark. Two ways in: an explicit `.dark` on <html> (the user chose
+     dark on /account — see lib/themeMode.ts), or the OS asking for it
+     while the user is on "auto" (no class at all). An explicit `.light`
+     opts out of the OS. The two blocks below carry the same values and
+     must stay identical. */
+  .dark {
+    color-scheme: dark;
+    --background: 227 25.7% 6.9%;
+    --foreground: 228 38.5% 94.9%;
+    --card: 228 26.3% 11.2%;
+    --card-foreground: 228 38.5% 94.9%;
+    --popover: 228 26.3% 11.2%;
+    --popover-foreground: 228 38.5% 94.9%;
+    --muted: 228 26.3% 14.9%;
+    --muted-foreground: 226 15.7% 68.8%;
+    --faint: 228 13.4% 49.8%;
+    --border: 226 21.6% 19%;
+    --input: 226 21.6% 19%;
+
+    --primary: 242 100% 79.4%;
+    --primary-ink: 243 100% 86.5%;
+    --primary-soft: 237 34.5% 21.6%;
+    /* On-colour text is the dark ground: white on the lifted accent /
+       status hues fails contrast (2.6:1), ground on them passes (≥6.9:1). */
+    --primary-foreground: 227 25.7% 6.9%;
+    --ring: 242 100% 79.4%;
+
+    --secondary: 228 26.3% 14.9%;
+    --secondary-foreground: 228 38.5% 94.9%;
+    --accent: 228 26.3% 14.9%;
+    --accent-foreground: 228 38.5% 94.9%;
+
+    --success: 158 57.7% 55.5%;
+    --success-foreground: 227 25.7% 6.9%;
+    --warning: 37 72.7% 59.8%;
+    --warning-foreground: 227 25.7% 6.9%;
+    --destructive: 349 83.1% 69.8%;
+    --destructive-foreground: 227 25.7% 6.9%;
+
+    --sidebar: 227 25.7% 6.9%;
+    --sidebar-border: 226 21.6% 19%;
+    --sidebar-foreground: 228 38.5% 94.9%;
+    --sidebar-muted: 226 15.7% 68.8%;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow: 0 1px 2px 0 rgb(0 0 0 / 0.35), 0 0 0 1px rgb(0 0 0 / 0.2);
+    --shadow-md: 0 4px 12px -4px rgb(0 0 0 / 0.45), 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-lg: 0 16px 32px -12px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.35);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not(.light) {
+      color-scheme: dark;
+      --background: 227 25.7% 6.9%;
+      --foreground: 228 38.5% 94.9%;
+      --card: 228 26.3% 11.2%;
+      --card-foreground: 228 38.5% 94.9%;
+      --popover: 228 26.3% 11.2%;
+      --popover-foreground: 228 38.5% 94.9%;
+      --muted: 228 26.3% 14.9%;
+      --muted-foreground: 226 15.7% 68.8%;
+      --faint: 228 13.4% 49.8%;
+      --border: 226 21.6% 19%;
+      --input: 226 21.6% 19%;
+
+      --primary: 242 100% 79.4%;
+      --primary-ink: 243 100% 86.5%;
+      --primary-soft: 237 34.5% 21.6%;
+      --primary-foreground: 227 25.7% 6.9%;
+      --ring: 242 100% 79.4%;
+
+      --secondary: 228 26.3% 14.9%;
+      --secondary-foreground: 228 38.5% 94.9%;
+      --accent: 228 26.3% 14.9%;
+      --accent-foreground: 228 38.5% 94.9%;
+
+      --success: 158 57.7% 55.5%;
+      --success-foreground: 227 25.7% 6.9%;
+      --warning: 37 72.7% 59.8%;
+      --warning-foreground: 227 25.7% 6.9%;
+      --destructive: 349 83.1% 69.8%;
+      --destructive-foreground: 227 25.7% 6.9%;
+
+      --sidebar: 227 25.7% 6.9%;
+      --sidebar-border: 226 21.6% 19%;
+      --sidebar-foreground: 228 38.5% 94.9%;
+      --sidebar-muted: 226 15.7% 68.8%;
+
+      --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+      --shadow: 0 1px 2px 0 rgb(0 0 0 / 0.35), 0 0 0 1px rgb(0 0 0 / 0.2);
+      --shadow-md: 0 4px 12px -4px rgb(0 0 0 / 0.45), 0 1px 2px 0 rgb(0 0 0 / 0.3);
+      --shadow-lg: 0 16px 32px -12px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.35);
+    }
+  }
+
+  * { @apply border-border; }
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body {
+    @apply bg-background text-foreground;
+    font-variant-ligatures: contextual;
+  }
+
+  /* Numeric tabular alignment for KPI values, tables */
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  /* Subtle radial gradient behind hero/login surfaces */
+  .bg-gradient-chrome {
+    background:
+      radial-gradient(at 20% 0%, hsl(var(--primary) / 0.08), transparent 60%),
+      radial-gradient(at 80% 100%, hsl(var(--primary) / 0.06), transparent 55%),
+      hsl(var(--background));
+  }
+
+  /* Glass-ish surface for app shell chrome */
+  .surface-chrome {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--background)) 0%,
+      hsl(var(--sidebar)) 100%
+    );
+  }
+
+  /* Analytic App ground — a faint tint of the app's own accent (set as
+     --app-accent by PublicAppShell), the prototype's tinted --t-bg without
+     hardcoding a hex: only accentColor, a real per-tenant brand value, may
+     vary it. The plain hsl() line is the fallback for a browser without
+     color-mix() support, or the rare render with no --app-accent set —
+     an unsupported color-mix() value is dropped, leaving it in effect. */
+  .app-ground {
+    background: hsl(var(--muted) / 0.4);
+    background: color-mix(in srgb, var(--app-accent, hsl(var(--primary))) 4%, hsl(var(--background)));
+  }
+
+  /* Phase 10 — the app tab strip scrolls horizontally instead of
+     wrapping; this edge mask-fade reads overflow as "more tabs" rather
+     than a hard clip. Applied statically (not overflow-aware) — a small,
+     usually-invisible clip at rest is an acceptable tradeoff against the
+     complexity of a resize-observed toggle. */
+  .app-tabs-scroll {
+    mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
+  }
+
+  /* Selection highlight */
+  ::selection { background: hsl(var(--primary) / 0.18); color: hsl(var(--foreground)); }
+}
+
+/* ============================================================
+   react-grid-layout + resizable handles (match our selection UI)
+============================================================ */
+
+.react-grid-layout { position: relative; transition: height 200ms ease; }
+.react-grid-item {
+  transition: all 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition-property: left, top, width, height;
+}
+.react-grid-item.cssTransforms { transition-property: transform, width, height; }
+.react-grid-item.react-draggable-dragging {
+  transition: none;
+  z-index: 3;
+  will-change: transform;
+  box-shadow: var(--shadow-lg);
+}
+.react-grid-item.react-grid-placeholder {
+  background: hsl(var(--primary) / 0.10);
+  border: 2px dashed hsl(var(--primary) / 0.6);
+  border-radius: var(--radius-lg);
+  transition-duration: 100ms;
+  z-index: 2;
+}
+.react-resizable { position: relative; }
+.react-resizable-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  bottom: 2px;
+  right: 2px;
+  cursor: se-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 45%,
+    hsl(var(--muted-foreground) / 0.7) 45%,
+    hsl(var(--muted-foreground) / 0.7) 58%,
+    transparent 58%,
+    transparent 70%,
+    hsl(var(--muted-foreground) / 0.5) 70%,
+    hsl(var(--muted-foreground) / 0.5) 80%,
+    transparent 80%
+  );
+  border-radius: 3px;
+  opacity: 0.5;
+  transition: opacity 120ms;
+}
+.react-grid-item:hover .react-resizable-handle { opacity: 1; }
+
+/* ============================================================
+   Designer-specific polish
+============================================================ */
+
+/* Canvas page: paper-ish background with very subtle grid */
+.designer-canvas {
+  background:
+    linear-gradient(hsl(var(--border) / 0.35) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(90deg, hsl(var(--border) / 0.35) 1px, transparent 1px) 0 0 / 40px 40px,
+    hsl(var(--muted) / 0.4);
+}
+
+/* Block card shadow/hover on the canvas.
+   Note: `transform` is intentionally NOT transitioned — react-grid-layout
+   uses transform to drive drag/resize, and a CSS transition on it makes
+   motion stuttery. */
+.block-card {
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 150ms, border-color 150ms;
+}
+.block-card:hover { box-shadow: var(--shadow-md); }
+.block-card[data-selected="true"] {
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.7), var(--shadow-md);
+}
+
+/* ============================================================
+   Print: hide chrome, let pages flow naturally
+============================================================ */
+
+@media print {
+  .no-print { display: none !important; }
+  .report-doc { padding: 0 !important; background: white !important; gap: 0 !important; }
+  .report-page { box-shadow: none !important; margin: 0 auto; }
+}
+
+/* ============================================================
+   Animations
+============================================================ */
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.animate-fade-in { animation: fade-in 200ms ease-out both; }
+
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 0%,
+    hsl(var(--muted) / 0.6) 50%,
+    hsl(var(--muted)) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* A reduced-motion viewer gets the end state immediately, not a frozen
+   mid-animation frame — .animate-in (tailwindcss-animate) and .animate-fade-in
+   both key off transform/opacity, so forcing those back to their resting
+   values is enough; .animate-spin is left alone (a loading spinner with no
+   motion communicates nothing). */
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .animate-out,
+  .animate-fade-in,
+  .skeleton,
+  .animate-pulse {
+    animation: none !important;
+  }
+  .animate-in,
+  .animate-fade-in {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================
+   Presentation mode — Story slides + Dashboard kiosk
+   ===========================================================
+   When a block renders inside `[data-story-slide]` or
+   `[data-presentation]`, we scale up the typography so a single
+   block fills the slide nicely. Charts auto-scale via their own
+   ResponsiveContainer — only KPI / Callout / Title needed help.
+*/
+[data-story-slide],
+[data-presentation] {
+  /* KPI block — fill the slide with the value */
+  & .text-2xl,
+  & .text-xl,
+  & .text-lg {
+    font-size: clamp(3rem, 12vw, 8rem);
+    line-height: 1;
+  }
+  & p.text-sm {
+    /* labels */
+    font-size: clamp(1rem, 2vw, 1.5rem);
+    line-height: 1.3;
+  }
+  & p.text-xs {
+    /* deltas, captions */
+    font-size: clamp(0.875rem, 1.6vw, 1.25rem);
+  }
+  /* Suffix/prefix text in KPI value row */
+  & span.text-base {
+    font-size: clamp(1.25rem, 3vw, 2.5rem);
+  }
+  /* Title block subtitle */
+  & h1, & h2 {
+    font-size: clamp(2rem, 5vw, 4rem);
+    line-height: 1.15;
+  }
+  /* Callout title + body */
+  & p.font-semibold {
+    font-size: clamp(1.5rem, 3vw, 2.5rem);
+    margin-bottom: 0.5rem;
+  }
+  & p.opacity-90 {
+    font-size: clamp(1rem, 2vw, 1.5rem);
+    line-height: 1.5;
+  }
+  /* Vertically center single-line content on the slide */
+  & > div:has(p.text-sm):not(:has(svg)) {
+    justify-content: center !important;
+  }
+}
+
+/* ============================================================
+   Premium chart polish — applied workspace-wide
+   ===========================================================
+   Recharts is fine out of the box; these overrides bring it up
+   to enterprise-deck quality: rounded bar tops, drop-shadow on
+   pie slices, softer grid, weightier axis labels. Keeps native
+   editability — no PNG fallback needed.
+*/
+.recharts-bar-rectangle path {
+  filter: drop-shadow(0 1px 2px rgb(16 19 33 / 0.12));
+}
+.recharts-pie-sector path,
+.recharts-sector path {
+  filter: drop-shadow(0 4px 12px rgb(16 19 33 / 0.18));
+  transition: transform 200ms ease;
+}
+.recharts-pie-sector:hover path,
+.recharts-sector:hover path {
+  transform: scale(1.02);
+  transform-origin: center;
+}
+.recharts-cartesian-axis-tick text {
+  font-weight: 500;
+  fill: hsl(var(--muted-foreground));
+}
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: hsl(var(--border));
+  stroke-dasharray: 2 4;
+  stroke-opacity: 0.6;
+}
+.recharts-default-legend {
+  padding-top: 0.75rem !important;
+}
+.recharts-legend-item-text {
+  font-weight: 500;
+  font-size: 0.875rem !important;
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  border-radius: var(--radius) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  box-shadow: var(--shadow-lg) !important;
+  padding: 0.75rem 1rem !important;
+}

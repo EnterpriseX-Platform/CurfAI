@@ -1,0 +1,1656 @@
+// Prisma schema for Curf. Postgres in every environment; `docker compose up -d`
+// starts a local one (see prisma/POSTGRES.md for the RLS policies).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Organizations (Growth+ multi-workspace oversight) ----------
+
+// Groups multiple Tenants (workspaces) under one umbrella so a Platform
+// Admin can see every workspace in the org without being a member of each
+// one. Every Tenant belongs to exactly one Organization (even a solo
+// Community-tier tenant gets a trivial 1-tenant org) — the org itself does
+// nothing observable until a second tenant joins it or the tenant's tier
+// unlocks `featureGate(user, "org.platform_admin")` (see src/lib/orgAdmin.ts).
+model Organization {
+  id          String   @id @default(cuid())
+  // Primary display name — Thai for an "organization"-type signup, or the
+  // person/workspace name for an "individual" one.
+  name        String
+  // English name — only collected (and required) when accountType is
+  // "organization"; null for "individual" accounts.
+  nameEn      String?
+  // "individual" | "organization" — which choice the signer-upper made.
+  // Purely descriptive (UI/reporting); doesn't gate any behavior itself.
+  accountType String   @default("individual")
+  slug        String   @unique
+  createdAt   DateTime @default(now())
+
+  tenants        Tenant[]
+  orgMemberships OrgMembership[]
+}
+
+// Grants a User org-wide oversight of every Tenant under one Organization,
+// without a per-tenant Membership row for each — see loadMembershipsForUserId()
+// in src/lib/auth.ts for how this is surfaced as virtual/synthesized
+// workspace-switcher entries. `role` only ever holds "platform_admin" today
+// (kept as a string, not a boolean, for room to add finer org-level roles
+// later) — it must NEVER be written into Membership.role or ApiKey.role or
+// accepted by the SCIM role mapping; those stay scoped to the 4
+// per-workspace values (admin/developer/executive/viewer).
+model OrgMembership {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role           String       @default("platform_admin")
+  createdAt      DateTime     @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+// ---------- Tenants (multi-tenancy) ----------
+
+model Tenant {
+  id                       String        @id @default(cuid())
+  slug                     String        @unique
+  name                     String
+  // Which Organization this workspace belongs to. Nullable during the
+  // migration window (scripts/migrate-orgs.ts backfills every existing
+  // row) — new tenants always get one at creation time. See
+  // src/lib/orgAdmin.ts for how Platform Admin visibility reads this.
+  organizationId           String?
+  organization             Organization? @relation(fields: [organizationId], references: [id])
+  // Subscription tier - source of truth for feature gates. Updated by the
+  // Stripe webhook on subscription lifecycle events. See src/lib/billing.ts.
+  tier                     String        @default("community") // community | growth | business | enterprise
+  // Cached Stripe state. Empty until the tenant first opens a checkout.
+  stripeCustomerId         String?       @unique
+  stripeSubscriptionId     String?       @unique
+  stripePriceId            String?
+  stripeStatus             String? // active | trialing | past_due | canceled | incomplete
+  stripeCurrentPeriodEnd   DateTime?
+  // Executive Brief config: { pinnedKpis: [{reportId, blockId}], pinnedReportIds: string[], comparison: 'wow'|'mom'|'qoq', greeting?: string }
+  // Read by /brief at SSR time. Editable by admins via /admin/brief.
+  briefConfigJson          String?       @default("{}")
+  // ---- LLM provider config ----
+  // Per-tenant LLM provider selection + credentials. Curf is provider-
+  // agnostic: anthropic | openai | gemini | openai-compatible. The
+  // unified `callLLM()` (see src/lib/llm/) routes to the right driver.
+  //
+  // `llmProvider` defaults to "anthropic" for back-compat with tenants
+  // that pre-date this column. `llmKeyEnc` is the AES-256-GCM encrypted
+  // API key for the selected provider. `llmModel` is the model id (e.g.
+  // claude-sonnet-4-6, gpt-4o, gemini-2.5-pro, kimi-k2). `llmBaseUrl` is
+  // only used by the openai-compatible driver — paste in Together /
+  // OpenRouter / Groq / Kimi / DeepSeek / Ollama base URLs to use those.
+  llmProvider              String?       @default("anthropic")
+  llmKeyEnc                String?
+  llmModel                 String?
+  llmBaseUrl               String?
+  // Optional second model, same provider/key, for Q&A-shaped calls (Ask,
+  // captions, why-digests, request drafts, briefs — see FAST_KINDS in
+  // src/lib/llm/index.ts). A reasoning model as `llmModel` is right for
+  // Master Builder's design work and wrong for a grounded one-sentence
+  // answer, where it burns its whole budget thinking. Null = every call
+  // uses `llmModel`, exactly as before.
+  llmFastModel             String?
+  // Per-tenant SMTP transport, configured from Admin → Tenant so production
+  // deploys don't hardcode SMTP_* env vars. JSON of shape
+  // { host, port, secure, user, passwordEnc, from } — passwordEnc is
+  // AES-256-GCM via lib/secrets.ts. Null → delivery falls back to SMTP_* env.
+  smtpConfigJson           String?
+  // Rolling-24h LLM spend alert threshold (micro-USD; 10_000_000 = $10).
+  // Cron tick fires the `ai.usage.threshold` webhook when the past-24h
+  // sum crosses this; null disables the alert. Default $10 — small
+  // enough to catch a runaway loop quickly, large enough to skip the
+  // first day of normal use.
+  llmCostThresholdMicroUsd Int?          @default(10000000)
+  // Last time we fired the threshold-crossed webhook for this tenant.
+  // Read by the cron tick to debounce — we only re-fire after 24h of
+  // continued spend over threshold so the channel doesn't get spammed.
+  llmCostLastNotifyAt      DateTime?
+  // Workspace default currency (ISO 4217, e.g. "THB", "USD"). Null → "USD".
+  // Individual reports can override via Report.currency; this is the
+  // fallback every block's currency formatting resolves to otherwise.
+  // Deliberately NOT part of brandJson — that panel is Business-tier
+  // gated and seeing your own currency correctly isn't a paid feature.
+  currency                 String?
+  // Self-declared jurisdiction (e.g. "th", "eu"), set by the tenant at
+  // Admin -> Tenant. This is metadata only, NOT a data-residency guarantee
+  // — the deployment stays single-region regardless of this value (real
+  // multi-region residency is tracked as a gap on /admin/compliance and is
+  // a Data Lake Phase 3 item, see ROADMAP-DATA-LAYER.md). Read by the PDPA
+  // processing record panel to decide whether to show Thailand-specific
+  // guidance or a generic note. See src/lib/tenantRegion.ts.
+  region                   String?
+  // ---- Legacy (pre-LLM-pivot) Anthropic key ----
+  // Kept for back-compat: getLLMKey() still reads this when llmKeyEnc is
+  // null AND llmProvider is "anthropic". A migration script will copy
+  // it over on next admin login. Don't reference this in new code.
+  anthropicKeyEnc          String?
+  // ---- Audit log retention (round 8) ----
+  // Per-event-kind retention windows in days. Shape:
+  //   { "*": 365, "signin": 90, "export.*": 730 }
+  // The "*" key is the default. Exact match wins over prefix; prefix
+  // wins over default. The cron sweep deletes AuditEvent rows older
+  // than their resolved retention.
+  //
+  // null/empty means "keep forever" — same as the pre-round-8 default.
+  auditRetentionJson       String?       @default("{}")
+  // Per-tenant HMAC secret used to sign outbound Brief webhook payloads
+  // (Stage 4). Recipients verify the X-Curf-Signature header against this
+  // value to confirm authenticity. Auto-generated on tenant creation; the
+  // Stage 4 dispatcher falls back to CURF_WEBHOOK_SECRET when this column
+  // is null (older tenants pre-migration).
+  webhookSigningSecret     String?
+  // Workspace branding (Business plan via gov.custom_branding). JSON shape:
+  //   { logoUrl?: string,
+  //     accentColor?: string,            // hex CSS color for chrome accents
+  //     defaultTheme?: Theme,            // theme used when a report has none set
+  //     customPalette?: string[]         // optional 10-color custom palette
+  //                                      // overriding the resolved theme palette
+  //   }
+  // Read at render time by the ThemeProvider via the tenantDefault prop.
+  brandJson                String?       @default("{}")
+  // PDPA (Thailand Personal Data Protection Act) Record of Processing —
+  // a single tenant-wide summary, not a multi-activity register. Shape:
+  //   { controllerName?: string, dpoContact?: string,
+  //     dataCategories: string[], purposeOfProcessing: string,
+  //     legalBasis: "consent"|"contract"|"legal_obligation"
+  //                 |"vital_interest"|"public_task"|"legitimate_interest",
+  //     retentionPeriod: string, thirdPartySharing?: string,
+  //     lastReviewedAt?: string  // ISO date, set server-side on save
+  //   }
+  // Edited by admins via /admin/tenant (PdpaRecordPanel). Not tier-gated —
+  // record-keeping for a legal obligation isn't a paid feature.
+  pdpaRecordJson           String?       @default("{}")
+  // Public author profile (surfaced at /marketplace/by/<slug>). `bio`
+  // is freeform markdown rendered on the profile page; `coverUrl` is a
+  // public URL the tenant hosts for the hero banner. Both optional —
+  // a tenant with neither still gets a profile page (with default
+  // chrome) so links from template cards never 404.
+  bio                      String?       @default("")
+  coverUrl                 String?
+  // Lake storage engine for this tenant. 'sqlite' (default) routes
+  // through better-sqlite3 + lake/<tenantId>.db; 'duckdb' routes
+  // through @duckdb/node-api + lake/<tenantId>.duckdb. Switch via
+  // /admin/tenant — flipping triggers a one-shot migration job.
+  // 'duckdb' is gated `lake.engine.duckdb` (Team+).
+  lakeEngine               String?       @default("sqlite")
+  // Last lake-engine migration timestamp, for the admin UI to show
+  // "migrated 2 days ago to DuckDB" + the audit trail.
+  lakeEngineMigratedAt     DateTime?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  memberships              Membership[]
+  reports                  Report[]
+  forecastSnapshots        ForecastSnapshot[]
+  dataSources              DataSource[]
+  schedules                Schedule[]
+  roles                    Role[]
+  actionRuns               ActionRun[]
+  reportRuns               ReportRun[]
+  reportVersions           ReportVersion[]
+  comments                 Comment[]
+  publicShareTokens        PublicShareToken[]
+  apiKeys                  ApiKey[]
+  passwordResetTokens      PasswordResetToken[]
+  auditEvents              AuditEvent[]
+  dashboards               Dashboard[]
+  dashboardKioskTokens     DashboardKioskToken[]
+  onScreenDisplays         OnScreenDisplay[]
+  onScreenKioskTokens      OnScreenDisplayKioskToken[]
+  snippets                 Snippet[]
+  apps                     App[]
+  savedViews               SavedView[]
+  lakeTables               LakeTable[]
+  lakeIngestTokens         LakeIngestToken[]
+  lakePulls                LakePull[]
+  lakeBackups              LakeBackup[]
+  materializedViews        MaterializedView[]
+  llmTokenUsage            LlmTokenUsage[]
+  webhooks                 Webhook[]
+  webhookDeliveries        WebhookDelivery[]
+  marketplacePublishes     MarketplaceTemplate[]             @relation("TemplateAuthor")
+  lakeSnapshots            LakeSnapshot[]
+  lakeExternalTables       LakeExternalTable[]
+  // Dedicated-instance flag. When true, this tenant runs on isolated
+  // infra with guaranteed RAM headroom and custom retention policies.
+  // Pricing-dimension only — the orchestration that actually spawns
+  // the dedicated pod lives in ops, not the app.
+  dedicatedInstance        Boolean                           @default(false)
+
+  @@index([organizationId])
+}
+
+// ---------- Auth ----------
+
+// One global row per email — id, passwordHash, and preferences are shared
+// across every workspace this person belongs to. Which workspaces, and
+// their role/custom-roles in each, lives on Membership instead.
+model User {
+  id                String             @id @default(cuid())
+  email             String             @unique
+  name              String?
+  passwordHash      String?
+  // Per-user preferences. JSON shape:
+  //   { themeOverride?: Theme | null,    // forces this theme regardless of report.theme
+  //     mode?: "light" | "dark" | "auto",
+  //     density?: "comfortable" | "compact",
+  //     fontScale?: number,              // 0.875..1.25 (relative)
+  //     reducedMotion?: boolean
+  //   }
+  // Read at render time by the ThemeProvider's userOverride prop. Edited
+  // by the user themselves at /account.
+  preferencesJson   String             @default("{}")
+  createdAt         DateTime           @default(now())
+  reports           Report[]           @relation("ReportCreatedBy")
+  runs              ReportRun[]
+  schedules         Schedule[]         @relation("ScheduleCreatedBy")
+  versions          ReportVersion[]    @relation("ReportVersionCreatedBy")
+  comments          Comment[]          @relation("CommentAuthor")
+  memberships       Membership[]
+  orgMemberships    OrgMembership[]
+}
+
+// Which workspaces a User belongs to, and their role (+ custom roles) in
+// each — a person can be admin in one workspace and viewer in another.
+// `role` is one of "admin" | "developer" | "executive" | "viewer" — never
+// "platform_admin" (that's an OrgMembership-only concept; a Platform
+// Admin's session gets `role: "admin"` here the moment they switch into a
+// tenant, real or org-derived — see loadMembershipsForUserId() in
+// src/lib/auth.ts). "developer" was "editor" before the 2026-08 role
+// restructure — same permissions, renamed; SCIM still accepts "editor" as
+// a permanent alias since IdP group-mappings are outside our control.
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role      String   @default("developer")
+  rolesJson String   @default("[]")
+  createdAt DateTime @default(now())
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+// ---------- Reports ----------
+
+model Report {
+  id                String             @id @default(cuid())
+  tenantId          String
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name              String
+  description       String?
+  category          String?
+  definition        String
+  version           Int                @default(1)
+  published         Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  createdById       String
+  createdBy         User               @relation("ReportCreatedBy", fields: [createdById], references: [id])
+  runs              ReportRun[]
+  schedules         Schedule[]
+  versions          ReportVersion[]
+  forecastSnapshots ForecastSnapshot[]
+
+  // ---- Catalog metadata (round 7). domain is broader than category;
+  // category is a Marketplace concept (Banking / Insurance / etc), domain
+  // is a tenant-internal grouping (Finance team / Marketing ops). Tags
+  // are arbitrary slug strings.
+  domain    String?
+  tagsJson  String  @default("[]")
+  isCurated Boolean @default(false)
+
+  @@index([tenantId, category])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, domain])
+}
+
+model DataSource {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                 String
+  kind                 String   @default("sqlite")
+  connection           String
+  // Discovered (REST) or annotated schema, used by the AI report generator
+  // and the data inventory strip. Shape: { fields: [{name,type,sample}],
+  // sampleRow: {...}, jsonPath?: "$.data.items", probedAt: ISO,
+  // probedFrom?: "/v1/orders", source: "probe"|"manual"|"openapi" }.
+  // Populated for REST sources only - SQLite is introspected at request time
+  // via PRAGMA. Empty/null means "not yet discovered".
+  discoveredSchemaJson String?
+  // Visibility model. Three orthogonal modes resolved by lib/datasourceAcl.ts:
+  //   ownerUserId set         → only that user can see it ("Just me")
+  //   visibleToRolesJson set  → only users whose rolesJson intersects ("Roles")
+  //   both empty/null         → every tenant member with read access ("Tenant")
+  // ownerUserId takes precedence when set; the role list is otherwise the
+  // gate. We don't FK ownerUserId so removing a User doesn't cascade-delete
+  // their uploads — admins can reassign or take over via /admin/connections.
+  visibleToRolesJson   String   @default("[]")
+  ownerUserId          String?
+  // Read-only governance flag — only meaningful for kind "rest". When true,
+  // runOnRest() (lib/reporting/runner.ts) rejects any report query against
+  // this source whose method isn't GET. SQL-kind sources (sqlite, postgres,
+  // mysql, snowflake, bigquery) are already unconditionally SELECT-only via
+  // assertSelectOnly() (lib/reporting/sqlGuard.ts) regardless of this flag,
+  // so the UI only surfaces this toggle for REST connections.
+  readOnly             Boolean  @default(false)
+  createdAt            DateTime @default(now())
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([ownerUserId])
+}
+
+model ReportRun {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId   String
+  report     Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  format     String
+  params     String
+  status     String   @default("completed")
+  error      String?
+  durationMs Int?
+  dataset    String?
+  provenance String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([reportId, createdAt])
+}
+
+// Semantic Metric Layer — see docs/SEMANTIC_METRIC_LAYER.md.
+//
+// One governed definition per named business figure ("revenue",
+// "churn_rate"), so Ask/Brief/Watcher/Forecast all read the same number
+// instead of each re-deriving it from whichever report's SQL happens to be
+// in scope. Fully additive: reports and blocks that never reference a
+// Metric behave exactly as they do today.
+model ForecastSnapshot {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Nullable + SetNull, same reasoning as Decision.metricId: a snapshot is a
+  // historical accuracy record and must survive the source report being
+  // deleted later, so the accuracy rollup doesn't silently lose history.
+  reportId    String?
+  report      Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  // Denormalized so the entry still reads correctly once reportId goes null.
+  reportName  String
+  blockId     String
+  queryId     String
+  xField      String
+  yField      String
+  metricLabel String
+
+  method      String // "linear" | "ets" | "llm" — lib/reporting/schema.ts's ForecastConfig.method
+  targetLabel String // the forecast row's x-axis label (e.g. "2026-09-08")
+  targetDate  DateTime // targetLabel parsed to a real date — drives the sweep
+
+  predictedValue Float
+  upperBound     Float
+  lowerBound     Float
+
+  actualValue Float?
+  // pending = waiting for targetDate to arrive; resolved = actual value
+  // captured; unresolvable = targetDate passed but the query never produced
+  // a matching row (e.g. the series stopped reporting that dimension).
+  status      String    @default("pending")
+  predictedAt DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per predicted point per block — re-rendering the same forecast
+  // (e.g. on every page view) upserts the same row instead of duplicating.
+  @@unique([reportId, blockId, yField, targetLabel])
+  @@index([tenantId, status, targetDate])
+  @@index([tenantId, blockId])
+}
+
+model Schedule {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId           String
+  report             Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  name               String
+  cron               String
+  format             String    @default("pdf")
+  params             String    @default("{}")
+  recipients         String    @default("[]")
+  kind               String    @default("delivery")
+  watcherConfigJson  String?
+  deliveryConfigJson String?
+  enabled            Boolean   @default(true)
+  lastRunAt          DateTime?
+  lastStatus         String?
+  createdAt          DateTime  @default(now())
+  createdById        String
+  createdBy          User      @relation("ScheduleCreatedBy", fields: [createdById], references: [id])
+
+  @@index([tenantId, enabled])
+  @@index([reportId])
+}
+
+model ReportVersion {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId    String
+  report      Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  version     Int
+  definition  String
+  note        String?
+  createdAt   DateTime @default(now())
+  createdById String?
+  createdBy   User?    @relation("ReportVersionCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([reportId, version])
+  @@index([tenantId, createdAt])
+  @@index([reportId, createdAt])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slug        String
+  label       String
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+model ActionRun {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId   String
+  blockId    String
+  actionId   String
+  actionKind String
+  rowJson    String
+  status     String
+  response   String?
+  durationMs Int?
+  userId     String?
+  userEmail  String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([reportId, createdAt])
+  @@index([blockId, createdAt])
+}
+
+model Comment {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId     String
+  blockId      String
+  cellKey      String?
+  authorId     String
+  author       User      @relation("CommentAuthor", fields: [authorId], references: [id])
+  body         String
+  proofHash    String?
+  resolvedAt   DateTime?
+  // Parent comment id — when set, this comment is a reply within an existing
+  // thread. Top-level comments (the seed of a thread) leave this null. The
+  // reply tree is one level deep on purpose: it keeps the UI scannable + matches
+  // what Notion / Figma / Linear do. Nested-reply trees become unreadable at scale.
+  parentId     String?
+  // JSON array of user IDs @-mentioned in the body. Stored separately from the
+  // body string so the notification dispatcher doesn't have to re-parse markdown
+  // on every send. Set on create; updated when the body is edited.
+  mentionsJson String    @default("[]")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([tenantId, reportId, blockId])
+  @@index([tenantId, createdAt])
+  @@index([parentId])
+}
+
+model ApiKey {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name            String
+  prefix          String    @unique
+  hashedSecret    String
+  role            String    @default("viewer")
+  // Auth scope. "api" = the regular REST API key. "scim" = bound to
+  // /api/scim/v2/* endpoints only — auto-provisioning from Okta /
+  // Azure AD / Google Workspace. Separating scopes means revoking a
+  // SCIM token doesn't break the customer's REST integration and vice
+  // versa. Default keeps existing rows working.
+  scope           String    @default("api")
+  // Embedded-analytics productization (Roadmap Phase 3.2). Null = full
+  // tenant access at `role`'s level — existing keys keep working exactly
+  // as before. A JSON array of report ids restricts this key to only
+  // those reports, so a customer embedding Curf headlessly gets a key
+  // scoped to the one dashboard they're allowed to see, not the whole
+  // tenant.
+  scopedReportIds String?
+  // Usage metering — incremented on every successful API-key auth in
+  // requireUser(). Coarse (total lifetime calls, not per-endpoint or
+  // per-window), but enough to answer "is this key actually being used"
+  // and to back a future per-key billing/rate-limit tier.
+  requestCount    Int       @default(0)
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdById     String?
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, scope])
+}
+
+// ---------------------------------------------------------------------------
+// MCP OAuth (Phase 2) — lets a remote MCP client (claude.ai/ChatGPT
+// connectors) get access WITHOUT a human pre-minting a key in the admin UI.
+// Deliberately does NOT introduce a second credential type: the token
+// endpoint mints a real ApiKey row (see lib/apiKeys.ts's createApiKey(),
+// shared with POST /api/admin/api-keys) scoped to the CONSENTING USER's
+// own tenant + role — never admin-chosen — so revocation, the request
+// counter, and last-used timestamp are the same UI at /admin/api-keys an
+// admin already has, and /api/mcp's existing requireUser() needs zero
+// changes to accept the result. These two models exist only for the
+// hand-off BEFORE that point: a client identity (from Dynamic Client
+// Registration) and a short-lived, single-use authorization code.
+// ---------------------------------------------------------------------------
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tenantId  String
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, userId])
+}
+
+model PublicShareToken {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId    String
+  token       String    @unique
+  expiresAt   DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, reportId])
+}
+
+// ----------------------------------------------------------------------------
+// SavedView — a reusable filter/parameter combination on a report.
+//
+// Viewers iterate on parameters (date range, channel, country, search) and
+// then want to remember "this is how the EMEA team looks at Q4". A SavedView
+// captures the current `paramsJson` map under a name. The viewer URL accepts
+// `?view=<id>` to apply the saved params on first render.
+//
+// `isPublic` means workspace-shared — every member sees it in their picker.
+// `isPublic = false` is "personal" (only the creator sees it). We don't
+// model per-user share grants in v1; the binary public/private split covers
+// 90% of the real workflow.
+// ----------------------------------------------------------------------------
+model SavedView {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reportId    String
+  name        String
+  description String?
+  // JSON map of report parameter name → value. Same shape the viewer
+  // serializes from the URL (?p.channel=Search&p.from=2025-01-01).
+  paramsJson  String
+  // When true, every workspace member sees this view in their picker.
+  // When false, only the creator does.
+  isPublic    Boolean  @default(false)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, reportId, name])
+  @@index([tenantId, reportId])
+}
+
+// ----------------------------------------------------------------------------
+// Analytic App — branded, discoverable, potentially multi-view surface.
+//
+// Distinct from PublicShareToken (which is a one-off URL with an opaque
+// token). An App has:
+//   - a memorable slug (`/apps/<slug>`) instead of a 32-char token
+//   - tenant brand auto-applied (logo + accent + default theme), with an
+//     optional per-app accentColor override
+//   - view tracking (counter + lastViewedAt)
+//   - optional auto-refresh interval
+//   - optional password gate (Business)
+//   - "Made with Curf" footer (viral hook, not removable on Free/Team)
+//
+// Originally shipped as the single-report "PublicApp" (renamed in place —
+// same table, see migration `publicapp_to_app`). `reportId` is now the
+// legacy single-view path: a row with an empty `viewsJson` renders exactly
+// as it always did, keyed by `reportId`. A row with one or more `viewsJson`
+// entries renders as tabs instead — `reportId` is unused for those rows.
+//
+// Slugs are unique per tenant. Tenants on a custom domain (future slice)
+// will see /apps/<slug> served from their domain instead of the platform
+// host. For now, all apps live on the canonical platform host.
+// ----------------------------------------------------------------------------
+model App {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Legacy single-view target. Null once an app has real `viewsJson` entries;
+  // still populated (and still authoritative) on every row created before
+  // the multi-view rename.
+  reportId       String?
+  // URL slug. Lowercase letters, digits, dashes; max 60 chars.
+  // Auto-generated from the report name on create but the author can
+  // change it. The DB constraint below is per-tenant (@@unique), but
+  // /apps/[slug]/page.tsx resolves a public link by slug ALONE across
+  // every tenant — so /api/apps and /api/apps/[id] additionally check
+  // GLOBAL uniqueness before writing one. A bare @unique here would be a
+  // breaking migration against any pre-existing cross-tenant duplicate
+  // (there were two as of 2026-09-12 — see the page's own header comment).
+  slug           String
+  // Display title in the app's <title> + the public page header. Defaults
+  // to the report's name; authors can override (often punchier copy than
+  // the internal report name).
+  title          String?
+  // Description shown under the title and in social previews (og:description).
+  description    String?
+  // Locale-keyed overrides for title/description, e.g. {"th": "...", "zh": "..."}.
+  // Same shape as Report.nameI18n/descriptionI18n (lib/reporting/schema.ts).
+  // Missing locale falls back to the plain title/description above.
+  titleI18n       String?  @default("{}")
+  descriptionI18n String?  @default("{}")
+  // Per-app Executive Brief config — same shape as Tenant.briefConfigJson
+  // ({ pinnedKpis, pinnedReportIds, comparison, greeting }). Empty falls
+  // back to the tenant's. Read by a `brief`-kind view; edited today only
+  // through the API, since /admin/brief still edits the tenant singleton.
+  briefConfigJson String? @default("{}")
+  // Ordered array of view definitions once this app is multi-view:
+  //   { id, kind: "report" | "dashboard" | "brief", label, labelI18n?, reportId?, dashboardId? }
+  // Validated against AppViewSchema (src/lib/apps/schema.ts) at the API
+  // layer, same convention as Dashboard.slotLayoutJson. Empty = legacy
+  // single-view app (see `reportId` above).
+  viewsJson      String    @default("[]")
+  // "simulated" | "pilot" | "real" — whether the app's data is Master
+  // Builder synthetic rows, a pilot mid-binding, or fully real. Drives the
+  // badge in the app bar; the bind flow that transitions it lands with E2.
+  //
+  // NULL means "no claim made", and that is the default on purpose. This
+  // used to default to "simulated", which would have stamped SIMULATED DATA
+  // across every app predating the column — all of them pointing at real
+  // warehouse reports. Only a writer that actually knows (Master Builder,
+  // or a PUT) sets it; everything else stays silent rather than lying about
+  // whose numbers these are.
+  dataMode       String?
+  // "public" | "password" | "viewers" | "member" | "kiosk". Enforced by
+  // apps/[slug]/page.tsx: "public" (anyone), "password" (see passwordHash
+  // below), "viewers" (tenant members + external viewers holding an
+  // AppViewerGrant — the executive-portal case). "member"/"kiosk" are
+  // stored (Master Builder stamps "member") but still NOT enforced —
+  // enforcing "member" would silently gate every generated app admins
+  // have been sharing by URL, so that stays a separate, deliberate change.
+  // Writes go through AppAuthModeSchema (src/lib/apps/schema.ts), which
+  // only accepts the three enforced values.
+  authMode       String    @default("public")
+  // "draft" | "discovery" | "pilot" | "scale" — Master Builder / Analytic
+  // Apps lifecycle stage. Column only; the Discovery -> Pilot -> Scale UI
+  // and Decision Log wiring are a separate change.
+  stage          String    @default("draft")
+  // App-wide filter declarations (A4) — AppFilterParamSchema[] in
+  // lib/apps/schema.ts. Empty = no shared filter; the app renders exactly
+  // as it did before this column existed.
+  paramsJson     String    @default("[]")
+  // Per-app brand override. Falls back to the tenant's brandJson.accentColor
+  // when unset.
+  accentColor    String?
+  // Optional bcrypt password hash. When set, viewers must enter the
+  // password before the report renders; a signed cookie remembers them
+  // for 7 days. Gated `apps.password_gate` (Business).
+  passwordHash   String?
+  // 0 = no auto-refresh (default). Any positive value = browser polls
+  // every N seconds and re-runs the report. Capped at 86400 (1 day) in
+  // the API.
+  autoRefreshSec Int       @default(0)
+  // Whether the app is live. Unpublished apps still resolve via /apps/<slug>
+  // for the author (preview), but return 404 for everyone else.
+  published      Boolean   @default(false)
+  // Cumulative view counter. Incremented per render (not per asset).
+  viewCount      Int       @default(0)
+  lastViewedAt   DateTime?
+  // Author who created this app — kept for audit, not used for permissions.
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  // Copilot threads scoped to this app (view kind "copilot").
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, reportId])
+  @@index([slug])
+  // Renamed in place from PublicApp — keep the physical table name so
+  // `prisma db push` treats this as an ALTER on the existing table
+  // (add/drop columns) instead of dropping PublicApp and creating an
+  // empty App table. There was never a migration file for this rename;
+  // db push is schema-diff-only and has no rename detection.
+  @@map("PublicApp")
+}
+
+// ---------- External viewer accounts (executive portal) ----------
+//
+// A lightweight account type for people OUTSIDE a workspace who should only
+// ever see the apps they've been granted — deliberately not a User +
+// Membership, so no existing tenant/role check can ever be satisfied by
+// one. Identity is global (email-unique, like User); access is the
+// tenant-scoped AppViewerGrant row per app. Session is its own opaque
+// cookie (curf_viewer_session) backed by AppViewerSession, never NextAuth —
+// see src/lib/appViewers/session.ts.
+model AuditEvent {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId         String?
+  userEmail      String?
+  // Dotted action namespace: signin, signout, report.create, report.delete,
+  // schedule.create, schedule.delete, schedule.update, share.mint, share.revoke,
+  // export.pdf, export.xlsx, export.docx, export.csv, role.assign, etc.
+  kind           String
+  target         String?
+  ip             String?
+  userAgent      String?
+  metaJson       String   @default("{}")
+  createdAt      DateTime @default(now())
+  // Set alongside `tenantId` (still required — pick the tenant active in
+  // the actor's session) for an org-level action that isn't naturally
+  // scoped to one tenant (granting/revoking Platform Admin, changing a
+  // role in a DIFFERENT tenant than the actor's own). Lets an org-wide
+  // audit view surface these even though `tenantId` alone can't.
+  organizationId String?
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, kind])
+  @@index([tenantId, userId])
+  @@index([organizationId, createdAt])
+}
+
+// Brief Stage 2 story cache, promoted from in-memory to durable storage.
+// Each row is one Claude-narrated stories[] generated for a particular
+// signal hash (KPIs + anomalies + changes). Lookup order on Brief load:
+//   1. find row matching (tenantId, signalHash) where expiresAt > now
+//   2. if hit, deserialize storiesJson and skip the LLM call entirely
+//   3. else generate, store, return
+//
+// Why this is its own table not a Tenant column: a brief's stories
+// rotate as signals change (a new anomaly fires, a KPI moves), and
+// keeping a few rows of history is useful — the "delivery history"
+// view can render the actual stories that went out yesterday morning.
+// A tenant column would lose every prior snapshot on overwrite.
+model Dashboard {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  // URL-friendly slug; unique per tenant. Used in /dashboards/[slug] paths.
+  slug               String
+  // JSON array of Report IDs in display order. Stored as JSON because Prisma
+  // SQLite doesn't support real arrays. Length capped to 12 in the API.
+  reportIdsJson      String   @default("[]")
+  // Seconds each report stays visible before fading to the next. 5..3600.
+  rotationSeconds    Int      @default(30)
+  // 'light' or 'dark'. Dark inverts the background and chart palettes for
+  // wall display where black bezels look better than white pages.
+  theme              String   @default("light")
+  layout             String   @default("carousel")
+  // Visibility ACL — same shape and semantics as DataSource. See lib/datasourceAcl.ts.
+  visibleToRolesJson String   @default("[]")
+  ownerUserId        String?
+  // JSON array of TopKpiDef objects. Used to render a row of Sparklines/KPIs
+  // at the top of the dashboard by querying the Data Lake directly.
+  topKpisJson        String   @default("[]")
+  // JSON map of reportId -> {x,y,w,h} (12-col grid, same units as
+  // components/designer/Canvas.tsx). Only read when layout === "custom".
+  // Reports without an entry fall back to an auto-flow default position.
+  slotLayoutJson     String   @default("{}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String
+
+  kioskTokens DashboardKioskToken[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([ownerUserId])
+}
+
+// Unauthenticated-access tokens for kiosk/wall-display use. A long random
+// token in the URL grants read-only viewing of one Dashboard's rotation
+// without any login. Tokens are revocable individually and can carry an
+// expiry. Kept in a separate table from Dashboard so revocation doesn't
+// require touching the dashboard row, and so we can audit tokens
+// independently.
+model DashboardKioskToken {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dashboardId String
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  // The actual URL token (long random string). Indexed unique for O(1) lookup
+  // on the kiosk landing page.
+  token       String    @unique
+  // Optional human label so admins can tell tokens apart in the manage UI.
+  label       String?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, dashboardId])
+}
+
+// A separate, always-passive sibling of Dashboard — same rotate-through-
+// reports mechanism, but there is no per-row toggle: every OnScreenDisplay
+// is rendered non-interactive (drill-through, "Why?", Comment/Ask/Embed, and
+// forecast-overlay controls are always suppressed via ReportDocument's
+// existing `print` mechanism). Playback controls (pause/next/prev/
+// fullscreen) still work. Kept as its own model rather than a Dashboard
+// flag because the menu/UX is intentionally a separate, simpler surface —
+// not a variant of Dashboard a tenant admin has to configure correctly.
+model OnScreenDisplay {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  // URL-friendly slug; unique per tenant. Used in /on-screen/[slug] paths.
+  slug               String
+  // JSON array of Report IDs in display order. Stored as JSON because Prisma
+  // SQLite doesn't support real arrays. Length capped to 12 in the API.
+  reportIdsJson      String   @default("[]")
+  // Seconds each report stays visible before fading to the next. 5..3600.
+  rotationSeconds    Int      @default(30)
+  theme              String   @default("light")
+  layout             String   @default("carousel")
+  // Visibility ACL — same shape and semantics as DataSource. See lib/datasourceAcl.ts.
+  visibleToRolesJson String   @default("[]")
+  ownerUserId        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String
+
+  kioskTokens OnScreenDisplayKioskToken[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([ownerUserId])
+}
+
+// Unauthenticated-access tokens for kiosk/wall-display use — same shape and
+// semantics as DashboardKioskToken, kept as a separate table for the same
+// reason (revocation independent of the display row, independent audit).
+model OnScreenDisplayKioskToken {
+  id            String          @id @default(cuid())
+  tenantId      String
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  onScreenId    String
+  onScreen      OnScreenDisplay @relation(fields: [onScreenId], references: [id], onDelete: Cascade)
+  token         String          @unique
+  label         String?
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  lastUsedAt    DateTime?
+  createdById   String?
+  createdAt     DateTime        @default(now())
+
+  @@index([tenantId, onScreenId])
+}
+
+// ---------- Email digest (recurring activity summary) ----------
+
+// ---------- Saved snippets (reusable SQL / REST fragments) ----------
+
+// A Snippet is a named, reusable chunk of body content — a SQL query, a
+// REST path with :name parameters, or a REST body template. The Designer's
+// query editor offers them through an "Insert snippet" picker so power
+// users don't have to retype "SELECT … FROM orders WHERE placed_at > :since"
+// for every new report.
+//
+// Snippets are tenant-scoped (no cross-tenant sharing), edit-gated to
+// admin+editor, and intentionally lightweight: no parameter schema, no
+// type-checking, no "expand-into-this-report" semantics. They're literally
+// just text the editor pastes at the cursor — the runner sees the resulting
+// SQL/path the same as if the user had typed it.
+//
+// `tags` is a JSON array of short labels for filtering ("orders",
+// "marketing", "v2") — keeps the manage UI navigable as the library grows.
+model Snippet {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  // 'sql' (paste into a query.sql field), 'rest_path' (paste into a
+  // query.path field — typically with :name params), 'rest_body' (paste
+  // into a query.body field for POST requests). Kind decides which fields
+  // in the Designer offer this snippet in the picker.
+  kind        String
+  body        String
+  description String?
+  tagsJson    String   @default("[]")
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Snippet names are unique per tenant + kind so users can have a "monthly
+  // sales" sql AND a "monthly sales" rest_path without collision.
+  @@unique([tenantId, kind, name])
+  @@index([tenantId, kind])
+  @@index([tenantId, createdAt])
+}
+
+// One row per digest cron fire. Audit + visibility into "what went out
+// yesterday morning" — the schedule itself lives in the existing Schedule
+// model with kind='digest', and the actual content snapshot is captured here
+// for the admin "delivery history" view.
+model LakeTable {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // User-facing name (might contain spaces / capitals); the on-disk
+  // table name is computed via toSafeTableName() in lib/lake/storage.ts.
+  name               String
+  // Source kind: 'upload' | 'webhook' | 'rest_pull' | 'manual'.
+  sourceKind         String
+  // Free-form JSON for source-specific config — for upload, the original
+  // filename + sheet name; for webhook, the token id; for rest_pull, the
+  // upstream connection id + endpoint path.
+  sourceConfigJson   String?
+  // Mirrors lib/lake/tables.ts LakeColumn[] — inferred at create time,
+  // refreshed whenever the schema evolves via ALTER TABLE ADD COLUMN.
+  schemaJson         String   @default("[]")
+  rowCount           Int      @default(0)
+  sizeBytes          Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String?
+  // ---- Row-level access control (Phase 2). Mirrors the DataSource ACL
+  // pattern in lib/datasourceAcl.ts so admins don't have to learn two
+  // visibility models. Resolved by lib/lake/acl.ts:
+  //   ownerUserId set         → only that user can see it ("Just me")
+  //   visibleToRolesJson set  → only users with at least one matching role
+  //   both empty/null         → every tenant member with read access ("Tenant")
+  // ownerUserId takes precedence when set; the role list is otherwise
+  // the gate. Tables created via webhook/rest_pull/auto-curf default to
+  // tenant-wide visibility; the user can lock down per-table from the
+  // detail page.
+  ownerUserId        String?
+  visibleToRolesJson String   @default("[]")
+
+  // ---- Catalog / discoverability (round 7). Free-form metadata that
+  // shows up in /catalog search results. None of these affect runtime
+  // semantics — they're for humans navigating a tenant with hundreds
+  // of tables. domain is a coarse grouping ("Finance", "Marketing");
+  // tags are arbitrary slug strings. description supports Markdown.
+  description String?
+  domain      String?
+  tagsJson    String  @default("[]") // JSON array of slug strings
+  isCurated   Boolean @default(false) // promoted in catalog list
+
+  @@unique([tenantId, name])
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, sourceKind])
+  @@index([tenantId, domain])
+}
+
+// Tenant-scoped HMAC token used by the inbound webhook ingest endpoint
+// (POST /api/lake/append). Each token is bound to a specific table; that
+// way a leaked token can be revoked without rotating credentials for
+// every other producer.
+//
+// `hashedSecret` stores SHA-256 of the secret — the plaintext is shown
+// to the user once at mint time, then never recoverable.
+model LakeIngestToken {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // The lake table name this token is allowed to append to. Free-form
+  // text; the ingest endpoint normalises via toSafeTableName().
+  tableName    String
+  // Friendly label so the user remembers which producer owns this.
+  label        String
+  // Bare prefix shown in the UI ("lk_xxx…") + hashed full secret.
+  // Same pattern as the existing ApiKey model.
+  prefix       String    @unique
+  hashedSecret String
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  createdById  String?
+  revokedAt    DateTime?
+
+  @@index([tenantId, tableName])
+  @@index([tenantId, revokedAt])
+}
+
+// Materialized view (Phase 3 — pre-computed query cache).
+//
+// Models a query whose result rows are persisted to a virtual lake table
+// (named "mv_<name>") on a cron cadence. Subsequent reads of the same
+// query hit the materialized rows instead of re-running the underlying
+// SQL. Massive for slow joins / large aggregations / external connector
+// queries that are too expensive to run on every dashboard load.
+//
+// On-disk shape: same as any other lake table — the materialized rows
+// live in the per-tenant lake SQLite under the toSafeTableName(mvName)
+// path. That means materialized output gets backed up + ACL'd + lineage-
+// tracked just like real tables. Free.
+//
+// Pull semantics: `replace` only (we don't append-mode a materialized
+// view; every refresh is a full recompute). The runner can fall back to
+// the live source if the materialized table doesn't exist yet (refresh
+// hasn't run) — surfaced as `lastStatus="never_run"`.
+model MaterializedView {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // User-facing name. The on-disk lake table is "mv_<safeName>" — we
+  // namespace materialized output so it doesn't collide with regular
+  // tables in the catalog list.
+  name           String
+  // The SQL to recompute. May reference any DataSource the user has
+  // access to — same engine as a regular query. Plaintext stored here;
+  // when this is sensitive we'll encrypt-at-rest in Phase 4.
+  sql            String
+  // The DataSource the SQL runs against. Most common case is the per-
+  // tenant Curf Tables (kind=lake), but cross-source materialised views
+  // (warehouse → cached lake) are supported.
+  dataSourceId   String
+  // Cron schedule. 5-field standard. Leave blank for "manual refresh
+  // only" — useful for one-shot snapshots of a stable dataset.
+  cron           String?
+  enabled        Boolean   @default(true)
+  // Storage shape for the materialised result. 'table' (default) writes
+  // a regular lake table; 'parquet' writes a Parquet file + registers
+  // a DuckDB view over it. 'parquet' only honoured when the tenant's
+  // lakeEngine is 'duckdb' — SQLite tenants always get 'table' even
+  // when this is set, with a friendly note in the runner output.
+  storageKind    String    @default("table")
+  lastRunAt      DateTime?
+  lastStatus     String? // 'ok' | 'failed' | 'never_run'
+  lastRowCount   Int?
+  lastDurationMs Int?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  createdById    String?
+
+  // ---- Catalog metadata (round 7). Same shape as LakeTable.
+  description String?
+  domain      String?
+  tagsJson    String  @default("[]")
+  isCurated   Boolean @default(false)
+
+  @@unique([tenantId, name])
+  @@index([tenantId, enabled])
+  @@index([tenantId, domain])
+}
+
+// Catalog row for each on-disk lake snapshot. The actual file lives at
+// lake/backups/<tenantId>/<id>.db.gz (gzipped sqlite for ~50% size win).
+//
+// Lifecycle:
+//   - cron tick creates one per tenant per day (skipped if no lake file
+//     yet, or if the previous backup was <23h ago)
+//   - retention sweep on each tick deletes anything older than the
+//     tier's window (Community 30d / Growth 90d / Business 365d)
+//   - manual restore reads the file back into the live lake atomically
+//
+// We don't FK to LakeTable rows because backups are at the file level
+// (the whole tenant's lake), not per-table — restoring is whole-lake.
+model LakeBackup {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Bytes of the gzipped file on disk. Cached for the UI so we don't
+  // stat() every row on the admin list view.
+  sizeBytes            Int
+  // Number of LakeTable rows in the catalog at backup time. Cosmetic —
+  // tells the user "this snapshot has 7 tables" without opening it.
+  tableCountAtSnapshot Int      @default(0)
+  // 'auto' (cron-driven nightly) or 'manual' (user clicked "Snapshot now")
+  // — drives the icon + the retention rule (manual snapshots get a 1-yr
+  // floor regardless of tier so a one-shot point-in-time grab survives).
+  kind                 String   @default("auto")
+  // Optional restore note set when this snapshot was created in
+  // response to a restore — links back to the snapshot id we restored
+  // from. Lets the audit tab tell a coherent story.
+  restoredFromId       String?
+  createdAt            DateTime @default(now())
+  createdById          String?
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, kind])
+}
+
+// Scheduled REST pull → Curf Tables. Each row defines:
+//   - which existing REST DataSource to query
+//   - the request shape (method/path/body/headers/jsonPath)
+//   - the target lake table name
+//   - the merge strategy (append vs replace)
+//   - a cron schedule
+//
+// On each tick the cron handler runs the query via the existing REST
+// runner, materialises the result rows into the lake table, and updates
+// lastRunAt/lastStatus. Distinct from the report-attached scheduling
+// flow (Schedule + Watcher) — those are about delivering reports; this
+// is about feeding data INTO the lake.
+model LakePull {
+  id               String    @id @default(cuid())
+  tenantId         String
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Friendly name shown in the admin list ("Daily Stripe charges sync").
+  name             String
+  // Which DataSource to pull from. Restricted to kind="rest" at create-
+  // time but stored as a free FK so future pull kinds (Postgres CDC,
+  // S3 manifest) can land here too.
+  dataSourceId     String
+  // Target lake table. toSafeTableName() applied at write time.
+  tableName        String
+  // 'append' (extend the table with new rows on each pull) or
+  // 'replace' (drop+recreate from latest pull). Choose by data semantics:
+  //   - feeds where every pull is a complete snapshot → replace
+  //   - feeds where each pull is a delta / new events → append
+  strategy         String    @default("replace")
+  // Request shape — mirrors DataSourceDef REST fields. Stored as one
+  // JSON blob to keep the column count down.
+  //   { method, path, body?, jsonPath?, headers? }
+  requestJson      String
+  // Cron schedule in standard 5-field format. Same parser the watchers
+  // use; runs through the cron tick handler.
+  cron             String
+  enabled          Boolean   @default(true)
+  lastRunAt        DateTime?
+  lastStatus       String? // 'ok' | 'failed' | 'skipped'
+  lastRowsAppended Int?
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  createdById      String?
+
+  @@index([tenantId, enabled])
+  @@index([tenantId, tableName])
+}
+
+// Off-site backup destinations — push lake snapshots to a customer-owned
+// store (HTTPS PUT today; S3/GCS/B2 drivers slot into the registry next).
+//
+// Why not a cloud bucket out of the box: customers want their compliance
+// auditor to see backups landing in *their* infrastructure, not Curf's.
+// HTTPS PUT covers presigned-S3, Azure Blob SAS URLs, R2, Backblaze, and
+// any custom WebDAV/Nextcloud/onprem endpoint without us having to ship
+// per-vendor SDKs. The driver layer (lib/lake/destinations/) is what
+// makes adding a real S3 client a focused change later.
+//
+// Each destination can be wired to one or more snapshot kinds (auto +
+// manual). Failures are stored on the BackupShipment row so the admin
+// UI can surface "destination X has been failing for 3 days".
+model LlmTokenUsage {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Which user triggered the call. Null for cron / system paths.
+  userId            String?
+  // Feature discriminator: 'ask' | 'caption' | 'autoCurf' | 'suggest' |
+  // 'why' | 'generate' | 'regenerate' | 'brief' | 'watcherSuggest' |
+  // 'storyMode' | 'forecast'. Free-form string so new features don't
+  // need a migration.
+  kind              String
+  // Provider id: 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'.
+  // Lets the dashboard split spend by provider when a tenant migrates.
+  provider          String   @default("anthropic")
+  // Model name as the provider returned it (claude-sonnet-4-6, gpt-4o,
+  // gemini-2.5-pro, kimi-k2, etc.). Used both for cost lookup and the
+  // "which model answered" debug surface.
+  model             String
+  inputTokens       Int      @default(0)
+  outputTokens      Int      @default(0)
+  // Cache reads + creations from prompt-caching. Tracked separately so we
+  // can show "you saved $X via cache hits" in the dashboard. Most
+  // OpenAI-compatible providers don't expose this — they stay 0.
+  cacheReadTokens   Int      @default(0)
+  cacheCreateTokens Int      @default(0)
+  // Computed cost in micro-USD (1_000_000 = $1). Null when pricing for
+  // the (provider, model) tuple isn't in our table — surfaced as
+  // "unknown cost" in the UI.
+  microCostUsd      Int?
+  // Optional pointer to the report this call was scoped to (so the
+  // usage page can link "$0.32 spent on report X this month").
+  reportId          String?
+  // Wall-clock duration of the API call in ms. Useful for spotting
+  // misconfigured timeouts and provider latency regressions.
+  durationMs        Int?
+  // 'ok' | 'failed' — failed calls still cost input tokens sometimes.
+  status            String   @default("ok")
+  errorKind         String? // 'timeout' | 'rate_limit' | 'invalid_key' | etc.
+  createdAt         DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, kind, createdAt])
+  @@index([tenantId, provider, createdAt])
+  @@index([reportId])
+}
+
+// ---------- Outbound webhooks ----------
+
+// Per-tenant outbound webhook subscription. When an event fires inside
+// Curf (a watcher trips, a snapshot ships off-site, a comment lands, a
+// public app gets published, an MV refresh fails, etc.) the dispatcher
+// looks up every Webhook whose `events` set includes that event id and
+// POSTs the JSON payload + an HMAC signature to `url`.
+//
+// Why HMAC instead of mTLS or JWT: the recipient just needs to verify
+// "this came from Curf and wasn't replayed", which `X-Curf-Signature` +
+// `X-Curf-Timestamp` cover with a 4-line verification snippet customers
+// can paste into any language. Same pattern Stripe + GitHub use.
+//
+// Each row holds its own signing secret (32-byte random hex) so rotating
+// one webhook's secret doesn't invalidate the others.
+model Webhook {
+  id            String            @id @default(cuid())
+  tenantId      String
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Friendly label shown in the admin list ("PagerDuty incident bridge").
+  name          String
+  // Endpoint URL that will receive the POST. https:// in prod; http://
+  // tolerated for localhost dev paths so admins can iterate without ngrok.
+  url           String
+  // Comma-separated event ids the customer wants ('watcher.fired,lake.backup.shipped').
+  // SQLite-friendly storage of a string[] — split at runtime. Empty
+  // string means "subscribe to nothing" (paused-but-configured state).
+  events        String            @default("")
+  // 32-byte hex secret used for HMAC-SHA256(payload + timestamp). Rotated
+  // by re-generating from the admin UI.
+  signingSecret String
+  // Wire-format selection. 'auto' detects from URL pattern (Slack
+  // hooks.slack.com → Block Kit, *.webhook.office.com → MessageCard,
+  // discord.com/api/webhooks → embed). 'raw' always sends the JSON
+  // envelope. Specific values force a chat shape regardless of host.
+  payloadFormat String            @default("auto")
+  enabled       Boolean           @default(true)
+  // Liveness summary cached on the row so the admin list doesn't have to
+  // join WebhookDelivery for every render.
+  lastFiredAt   DateTime?
+  lastStatus    String? // 'ok' | 'failed' | 'pending'
+  lastError     String?
+  createdAt     DateTime          @default(now())
+  createdById   String?
+  deliveries    WebhookDelivery[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, enabled])
+}
+
+// One row per delivery attempt. Lets the admin "Recent deliveries"
+// expander show the audit trail (when, what event, response code, body
+// snippet, ms) and surface a one-click Retry on failures.
+//
+// We DON'T cascade-delete on Webhook delete — keeping the trail post-
+// removal is the right call for an audit surface. The dispatcher
+// tolerates a missing webhook id by skipping the row.
+model WebhookDelivery {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  webhookId    String
+  webhook      Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  // Event id that triggered this delivery ('watcher.fired').
+  event        String
+  // Full payload posted, JSON-encoded. Capped at 4KB at write time so a
+  // chatty payload doesn't blow up disk over time.
+  payloadJson  String
+  status       String // 'ok' | 'failed' | 'pending'
+  // HTTP status from the recipient. Null on transport errors.
+  responseCode Int?
+  // Truncated response body (for failures) so the admin can read the
+  // recipient's error without server logs.
+  responseBody String?
+  errorMessage String?
+  // Wall-clock latency in ms. Useful for spotting flapping endpoints.
+  durationMs   Int      @default(0)
+  // 0 = first attempt; 1, 2, 3 are exponential-backoff retries.
+  attempt      Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([webhookId, createdAt])
+  @@index([status])
+}
+
+// ---------- Public marketplace ----------
+
+// One published-publicly report template. The `definitionJson` is a
+// SANITIZED ReportSchema instance — every tenant-specific id has been
+// replaced with placeholders (see lib/marketplace/sanitize.ts), every
+// embedded credential has been stripped, and every dataSource in the
+// definition is annotated with the credential `kind` so the importer
+// can wire it up against their own connections.
+//
+// Why a separate table from PublicApp: PublicApp is "expose this
+// rendered report at a URL". MarketplaceTemplate is "let other
+// workspaces clone the *definition* into their own data". Different
+// product, different access pattern (PublicApp serves rendered HTML;
+// MarketplaceTemplate serves JSON for cloning).
+//
+// Status flow: draft → published → removed. Only `published` rows
+// surface on /marketplace + are importable. Removal is soft (`status`
+// flip + `removedAt`) so import audit trails remain meaningful.
+model MarketplaceTemplate {
+  id               String                            @id @default(cuid())
+  // URL-safe slug used in /marketplace/<slug> + /reports/import?slug=…
+  // Unique across the whole platform — collision retry on publish.
+  slug             String                            @unique
+  // Author tenant — used for the "By Acme Inc." attribution and so the
+  // author can unpublish their own template later.
+  authorTenantId   String
+  authorTenant     Tenant                            @relation("TemplateAuthor", fields: [authorTenantId], references: [id], onDelete: Cascade)
+  // Display attribution — workspace name at publish time. Captured
+  // because tenant rename shouldn't retroactively re-attribute.
+  authorName       String
+  // Optional pointer back to the source Report so the author UI can
+  // show "Already published" + "Update" affordances. Null when the
+  // source was deleted or the template was imported and re-published.
+  sourceReportId   String?
+  // User-facing fields. `description` supports markdown; rendered with
+  // the same renderer the report viewer uses (no script execution).
+  name             String
+  description      String                            @default("")
+  // Free-form category bucket for the picker. Loose taxonomy — we
+  // don't enforce a closed enum so new domains (HR, ops, finance)
+  // self-organise. Indexed for the category landing page.
+  category         String                            @default("general")
+  // Comma-separated tag list for fuzzy search. SQLite-friendly.
+  tags             String                            @default("")
+  // Sanitized ReportSchema JSON. See lib/marketplace/sanitize.ts.
+  definitionJson   String
+  // Optional preview image URL. We don't host uploads here yet; if set
+  // it's expected to be a public URL the author already has.
+  thumbnailUrl     String?
+  // What kind of template this is. "report" = a Curf ReportSchema (the
+  // historical default; back-compat for every existing row). "operate"
+  // = an ActionTemplate definition for the workflow engine. The two
+  // share the slug namespace + review/follow/version surface but
+  // import to different destinations (/reports/import vs.
+  // /operate/templates/import).
+  kind             String                            @default("report")
+  // Catalog stats for sorting / showcase.
+  downloads        Int                               @default(0)
+  // Per-template version pointer. Bumped on every republish (UI or
+  // v1 API upsert). Subscribers fire a webhook when this changes.
+  currentVersion   Int                               @default(1)
+  // Pre-extracted searchable tokens — all block titles, KPI labels,
+  // query names, and SQL keywords. JSON-array string. Built at publish
+  // time so search queries are a single SQL `contains` against this
+  // column instead of a JSON walk per row.
+  searchTokensJson String                            @default("[]")
+  // Cached aggregate of MarketplaceReview rows for fast card render
+  // without a per-card joins. Updated by a setImmediate hook on
+  // review create/delete (best-effort; eventually-consistent).
+  ratingAvg        Float                             @default(0)
+  ratingCount      Int                               @default(0)
+  // Lifecycle.
+  status           String                            @default("published") // draft | published | removed
+  publishedAt      DateTime                          @default(now())
+  removedAt        DateTime?
+  createdAt        DateTime                          @default(now())
+  updatedAt        DateTime                          @updatedAt
+
+  @@index([status, category, publishedAt])
+  @@index([authorTenantId])
+  @@index([downloads])
+  @@index([ratingAvg])
+}
+
+// One row per published version of a template. Lets subscribers see what
+// changed (changelog), and lets the importer pin to a specific version
+// if they want stability over latest.
+//
+// `definitionJson` snapshot is required because the live MarketplaceTemplate
+// row only stores the latest. Without this, subscribers couldn't roll
+// back if the new version regressed something.
+model LakeSnapshot {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tableName String
+  // Reference into LakeBackup — we re-use the gzipped tenant snapshot
+  // file rather than per-table copies. Read path: gunzip → ATTACH →
+  // SELECT.
+  backupId  String
+  rowCount  Int      @default(0)
+  status    String   @default("auto") // auto | pinned
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, tableName, createdAt])
+  @@index([backupId])
+}
+
+// ---------- Lake pipelines ----------
+
+// A pipeline is an ordered list of SQL steps that transform one or more
+// source lake tables into output lake tables. Each step runs through
+// the existing report runner against the per-tenant lake DataSource.
+// The cron tick walks the pipeline graph: a step runs only after every
+// step in `dependsOn` has succeeded this tick. A failure halts the
+// downstream subgraph — the rest of the graph is left at the prior
+// run's outputs (consumers see stale-but-coherent rows).
+//
+// Steps are stored as a JSON array on the parent row (no separate
+// LakeStep table) because they're always loaded together and step-
+// level metrics live on the per-run audit row.
+//
+// Schedule: standard 5-field cron. The whole pipeline runs as one DAG
+// per tick — we don't allow per-step schedules (that's a different
+// product).
+model LakeExternalTable {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                 String
+  format               String // 'parquet' | 'iceberg' | 'csv_url' | 'json_url'
+  uri                  String
+  // Encrypted JSON blob for cloud creds (S3 / GCS / Azure). Null when
+  // the URI is anonymous-readable (HTTPS public Parquet, etc).
+  credentialsEnc       String?
+  // Cached schema from the first scan. Same shape as LakeTable.schemaJson.
+  schemaJson           String    @default("[]")
+  // Round-7 catalog metadata, mirrors LakeTable.
+  description          String?
+  domain               String?
+  tagsJson             String    @default("[]")
+  isCurated            Boolean   @default(false)
+  // Round 13 — dbt provenance. JSON blob with model_id, package_name,
+  // depends_on (upstream model unique_ids), last_sync_at. Null when
+  // the row was registered manually rather than via dbt sync.
+  dbtMetaJson          String?
+  // Stats from last successful query. Cosmetic — used by /catalog.
+  lastQueriedAt        DateTime?
+  lastRowCountEstimate Int?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  createdById          String?
+
+  @@unique([tenantId, name])
+  @@index([tenantId, format])
+  @@index([tenantId, domain])
+}
+
+// ----------------------------------------------------------------------------
+// Curf Operate — declarative business-action workflow engine.
+//
+// An ActionTemplate is a reusable "Send Order to Warehouse"-style recipe:
+// - inputSchemaJson: Zod-shape JSON describing the form the requester fills.
+// - approvalChainJson: ordered list of approver steps (role / userId / email)
+//   with optional condition ("amount > 100000") and timeout/escalation.
+// - destinationKind + destinationConfigJson: where the action fires once
+//   approved (http_webhook is the round 1 adapter; slack/email/sf land later).
+// - payloadTemplateJson: handlebars-ish template that maps form inputs → the
+//   destination payload.
+// - dryRun: if true, executions only LOG the would-be call, no side effects.
+//
+// An ActionRequest is one running instance of a template. It carries a
+// snapshot of the chain at create-time (so editing the template later doesn't
+// reshuffle in-flight requests) and a status: pending | approved | rejected |
+// executing | succeeded | failed | cancelled.
+//
+// ActionApproval rows record each approver's decision; ActionExecution logs
+// the actual destination call (HTTP code, body, retries) once approved.
+//
+// All four models live tenant-scoped. No FK back-relations on Tenant to keep
+// the schema diff small — tenantId filtering happens in the API layer.
+// ----------------------------------------------------------------------------
+
+model WaitlistRequest {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  workspaceName   String?
+  reason          String?
+  source          String // "public_form" | "admin_invite"
+  status          String    @default("pending") // pending | approved | denied | spam
+  decidedById     String?
+  decidedByEmail  String?
+  decidedAt       DateTime?
+  decisionNote    String?
+  inviteTokenHash String?
+  inviteExpiresAt DateTime?
+  inviteUsedAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Vector embeddings (Vector DB Week 1).
+//
+// Per-tenant semantic memory for the AI surfaces. One row per (tenantId,
+// kind, refId) — the content embedded is whatever uniquely identifies the
+// underlying record (report title + description, block title + caption,
+// MB prompt text, watcher narrative, schema column descriptions).
+//
+// The `vector` is a packed Float32Array stored as bytea. For Postgres
+// scale-out we can later run a raw-SQL migration to convert it to a
+// real pgvector `vector(1024)` column and add HNSW indexing. For the
+// pilot stage (< 50K vectors/tenant) cosine similarity computed in-app
+// is fast enough and dependency-free.
+//
+// `textHash` is the SHA-256 of the embedded text — used to skip
+// re-embedding when the source content hasn't changed.
+// ----------------------------------------------------------------------------
+model SyncConnection {
+  id         String   @id @default(cuid())
+  tenantId   String
+  kind       String // 'postgres' | 'salesforce' | 'stripe' | 'line'
+  name       String
+  configJson String // encrypted blob — decrypted at sync-fire time only
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([tenantId, kind])
+}
+
+// A scheduled sync run. One SyncJob → many SyncRun rows. scheduleCron is the
+// canonical schedule expression; the simplified UI chooser ("every 6 hours",
+// "daily at 6am") renders down to cron. Tier-gated minimum interval is
+// enforced by the scheduler, not by this row.
+//
+// leasedBy / leasedUntil are the row-level lock — a worker only picks up the
+// job if these are null or expired. TTL is 5 min by default; if a worker
+// crashes the lease auto-releases on the next tick after leasedUntil.
+model SyncJob {
+  id           String    @id @default(cuid())
+  connectionId String
+  scheduleCron String // e.g. "0 6 * * *"  (6am daily)
+  objects      String // JSON array of source-object names: ["Opportunity","Account"]
+  enabled      Boolean   @default(true)
+  nextRunAt    DateTime
+  leasedBy     String? // worker id holding the lock
+  leasedUntil  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([nextRunAt, enabled])
+  @@index([connectionId])
+}
+
+// One row per (connection, sourceObject). The cursor stores "where we left
+// off." Only advances after a successful pull — partial-failed runs keep
+// the previous value so the next tick re-pulls from the same point.
+model SyncCursor {
+  id           String    @id @default(cuid())
+  connectionId String
+  objectName   String // 'salesforce.Opportunity', 'postgres.public.users', etc.
+  cursorKind   String // 'timestamp' | 'xmin' | 'id'
+  cursorValue  String // ISO timestamp / xmin bigint / row id (all as string for portability)
+  rowsLastRun  Int       @default(0)
+  lastRunAt    DateTime?
+  lastError    String?
+
+  @@unique([connectionId, objectName])
+}
+
+// One row per actual run attempt. Used for the /admin/connections/[id]/syncs
+// status page and for error replay. `status=running` means the lease is
+// still held; transitions to ok/partial/failed when the worker finishes.
+model SyncRun {
+  id           String    @id @default(cuid())
+  // D3 — nullable: LINE (push-only) records runs against the connection
+  // directly, with no SyncJob to point at (there's nothing to cron-poll).
+  jobId        String?
+  connectionId String
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  status       String // 'running' | 'ok' | 'partial' | 'failed'
+  rowsRead     Int       @default(0)
+  rowsWritten  Int       @default(0)
+  errorMessage String?
+
+  @@index([jobId, startedAt])
+  @@index([connectionId, startedAt])
+}
+
+// Mapping from source-object → tenant-lake table. columnMapJson is the
+// authoritative source-column → lake-column map plus per-column type hints.
+// Lets users rename Salesforce.Opportunity.Owner_c → opp_owner without
+// touching their report SQL.

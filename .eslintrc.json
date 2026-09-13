@@ -1,0 +1,16 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    "@next/next/no-img-element": "off",
+    "react/no-unescaped-entities": "off"
+  },
+  "ignorePatterns": [
+    ".next/",
+    "node_modules/",
+    "out/",
+    "dist/",
+    "tests/e2e/**",
+    "playwright-report/",
+    "docs-site/"
+  ]
+}

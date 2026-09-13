@@ -1,0 +1,88 @@
+# CI — Curf Community edition
+#
+# Runs on every pull request and on pushes to main:
+#   1. lint      — eslint via next lint
+#   2. typecheck — tsc --noEmit
+#   3. unit      — vitest (pure-function suite, no database)
+#   4. build     — next build against the Prisma client
+#   5. semgrep   — tenant-isolation rules in .semgrep.yml
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Prisma validates the connection string's protocol at generate time; no
+  # job below connects to it. The unit suite must not touch a database.
+  DATABASE_URL: "postgres://ci:ci@127.0.0.1:1/curf"
+  NEXTAUTH_URL: "http://localhost:3100"
+  NEXTAUTH_SECRET: "ci-only-not-a-secret"
+  CRON_SECRET: "ci-only-not-a-secret"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx next build
+
+  semgrep:
+    name: Tenant-isolation lint (Semgrep)
+    runs-on: ubuntu-latest
+    container: returntocorp/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: semgrep ci --config=.semgrep.yml

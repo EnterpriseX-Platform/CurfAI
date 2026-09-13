@@ -1,0 +1,126 @@
+# Semgrep rules — Curf-specific lint that catches tenant-isolation
+# violations and other security/correctness invariants the type system
+# can't enforce.
+#
+# Run locally:  semgrep --config=.semgrep.yml
+# Run in CI:    semgrep ci --config=.semgrep.yml  (see .github/workflows/ci.yml)
+#
+# Why these rules exist (the bugs they would have caught):
+#   - Any prisma.<Model>.findMany / findFirst / update / delete that
+#     forgets to scope by tenantId is a silent data-leak. Round 19
+#     verified isolation; this rule keeps it that way as the surface
+#     grows. Allowlist below covers the few intentional cross-tenant
+#     reads (Tenant lookup by slug, MarketplaceTemplate browse, etc.).
+#
+#   - Direct API access without requireUser() is the second-most-common
+#     auth bypass. Catches new routes that forgot to call it.
+#
+#   - Hardcoded secrets are the third class — a stray API key or
+#     webhook secret in source is a 24h vendor-rotation incident.
+
+rules:
+  - id: prisma-must-include-tenant
+    languages: [typescript]
+    severity: ERROR
+    message: |
+      Prisma write/list query is missing a tenantId filter. This is a
+      multi-tenant isolation risk — Tenant A could read or modify Tenant B's
+      rows. Use `tenantWhere(user)` from `@/lib/rls` or include
+      `tenantId: user.tenantId` in the where clause.
+
+      If this query is intentionally cross-tenant (e.g. browsing the
+      public marketplace), add an inline `// nosemgrep: prisma-must-include-tenant`
+      with a one-line justification.
+    paths:
+      include:
+        - "src/**/*.ts"
+        - "src/**/*.tsx"
+      exclude:
+        - "src/**/*.test.ts"
+        - "src/**/migrations/**"
+    pattern-either:
+      # findMany without tenantId in where
+      - patterns:
+          - pattern: prisma.$MODEL.findMany($X)
+          - pattern-not: prisma.$MODEL.findMany({ ..., where: { ..., tenantId: ... }, ... })
+          - pattern-not: prisma.$MODEL.findMany({ ..., where: { ..., AND: [..., { tenantId: ... }, ...] }, ... })
+          - pattern-not: prisma.$MODEL.findMany()
+          # Allowlist intentional cross-tenant reads:
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: "^(?!tenant$|marketplaceTemplate$|marketplaceCollection$|user$|userIdentity$|account$|session$|auditEvent$|webhookSubscription$|tenantInvite$|publicAppView$).*"
+      # findFirst without tenantId in where
+      - patterns:
+          - pattern: prisma.$MODEL.findFirst($X)
+          - pattern-not: prisma.$MODEL.findFirst({ ..., where: { ..., tenantId: ... }, ... })
+          - pattern-not: prisma.$MODEL.findFirst({ ..., where: { ..., AND: [..., { tenantId: ... }, ...] }, ... })
+          - pattern-not: prisma.$MODEL.findFirst()
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: "^(?!tenant$|marketplaceTemplate$|marketplaceCollection$|user$|userIdentity$|account$|session$|auditEvent$|webhookSubscription$|tenantInvite$|publicAppView$).*"
+      # update without tenantId in where
+      - patterns:
+          - pattern: prisma.$MODEL.update($X)
+          - pattern-not: prisma.$MODEL.update({ ..., where: { ..., tenantId: ... } })
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: "^(?!tenant$|user$|userIdentity$|session$).*"
+      # delete without tenantId in where
+      - patterns:
+          - pattern: prisma.$MODEL.delete($X)
+          - pattern-not: prisma.$MODEL.delete({ where: { ..., tenantId: ... } })
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: "^(?!tenant$|user$|userIdentity$|session$).*"
+
+  - id: api-route-must-call-requireUser
+    languages: [typescript]
+    severity: WARNING
+    message: |
+      API route handler missing requireUser() call. Every authenticated
+      route should call requireUser(req) early and 401 if it returns null.
+      If this route is intentionally public (marketplace browse, /api/health,
+      cron tick with shared secret), suppress with `// nosemgrep`.
+    paths:
+      include:
+        - "src/app/api/**/route.ts"
+      exclude:
+        - "src/app/api/health/**"
+        - "src/app/api/auth/**"
+        - "src/app/api/signup/**"
+        - "src/app/api/marketplace/templates/**"
+        - "src/app/api/marketplace/collections/**"
+        - "src/app/api/cron/**"
+        - "src/app/api/share/**"
+        - "src/app/api/embed/**"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              export async function GET(...) { ... }
+          - pattern: |
+              export async function POST(...) { ... }
+          - pattern: |
+              export async function PUT(...) { ... }
+          - pattern: |
+              export async function DELETE(...) { ... }
+          - pattern: |
+              export async function PATCH(...) { ... }
+      - pattern-not-regex: |
+          requireUser
+      - pattern-not-regex: |
+          requireApiKey
+
+  - id: no-hardcoded-secrets
+    languages: [typescript, yaml, json]
+    severity: ERROR
+    message: |
+      Possible hardcoded secret. Move to env vars or the secrets store.
+      Stripe live keys, Anthropic keys, Slack tokens, AWS keys — all rotate-on-leak.
+    paths:
+      exclude:
+        - "**/*.test.ts"
+        - "tests/**"
+        - "node_modules/**"
+        - ".next/**"
+    pattern-regex: |
+      (sk_live_[A-Za-z0-9]{24,}|sk-ant-api[0-9]{2}_[A-Za-z0-9_-]{40,}|xoxb-[0-9]{10,}-[0-9]{10,}-[A-Za-z0-9]{24,}|AKIA[0-9A-Z]{16})

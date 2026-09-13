@@ -1,0 +1,170 @@
+# Security scanning — Curf
+#
+# Five parallel jobs cover the procurement / compliance gate (Harness 10):
+#   1. npm-audit   — dependency vulns (HIGH+). Informational for the first
+#                    month while we burn down the 26 known transitive vulns.
+#   2. gitleaks    — committed-secrets scanner. Always blocking.
+#   3. snyk        — second-source SCA. Skipped when SNYK_TOKEN unset.
+#   4. trivy-fs    — Aqua's filesystem scan; free, no creds. Always runs.
+#   5. zap-baseline— OWASP ZAP against staging. Skipped when STAGING_URL
+#                    unset; wires up automatically once staging deploy is live.
+#
+# Triggered on every PR + nightly so drift in transitive deps surfaces
+# even when no PR is open.
+
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 4 * * *'
+
+# Least-privilege default — only the gitleaks job overrides this (it posts
+# a PR comment on a detected leak, everything else here only scans).
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npm-audit:
+    name: npm audit (HIGH+)
+    runs-on: ubuntu-latest
+    # NOTE: continue-on-error is temporary — there are 26 transitive vulns
+    # at install time we have to triage before flipping this to blocking.
+    # Remove this line once the count is in single digits. Tracked in the
+    # Harness 10 follow-up task.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  npm-signatures:
+    name: npm registry signature verification
+    runs-on: ubuntu-latest
+    # OWASP A03:2025 (Software Supply Chain Failures) — confirms every
+    # installed package still matches what the registry signed at publish
+    # time (catches tampering/MITM on the registry, not name-typosquatting
+    # — a typosquat package is validly signed as itself, just named to
+    # look like something else). Deliberately its own job, not folded into
+    # npm-audit above, so it isn't covered by that job's temporary
+    # continue-on-error — a failed signature is a much rarer, more
+    # actionable signal than the known-transitive-vuln count being triaged
+    # there.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm audit signatures
+
+  sbom:
+    name: Generate SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    # OWASP A03:2025 (Software Supply Chain Failures) — a machine-readable
+    # inventory of every dependency actually shipped, for fast "are we
+    # affected?" lookups when a new CVE lands and for compliance asks.
+    # Doesn't block anything by itself; contents:read (workflow default)
+    # is enough — checkout + generate + upload, no repo writes.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json --output-format JSON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          retention-days: 90
+
+  gitleaks:
+    name: Gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    # Job-level permissions REPLACE the workflow default above, not merge
+    # with it — pull-requests:write is what gitleaks-action actually needs
+    # to comment on a PR when it finds a leak.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs full history to scan past commits, not just the
+          # PR diff — a leaked key two commits ago is still a leaked key.
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  snyk:
+    name: Snyk SCA
+    runs-on: ubuntu-latest
+    # Snyk is a paid second-source SCA; until we wire SNYK_TOKEN into repo
+    # secrets the job is a no-op so the matrix still goes green. The
+    # job-level `env:` promotes the secret so step-level `if:` can read
+    # it via the env context (GH Actions does not allow `secrets.*` in `if:`).
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - name: Skip if no SNYK_TOKEN
+        if: ${{ env.SNYK_TOKEN == '' }}
+        run: echo "SNYK_TOKEN not set in repo secrets — skipping Snyk SCA. Set the secret to activate this gate."
+      - uses: actions/checkout@v4
+        if: ${{ env.SNYK_TOKEN != '' }}
+      - uses: actions/setup-node@v4
+        if: ${{ env.SNYK_TOKEN != '' }}
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        if: ${{ env.SNYK_TOKEN != '' }}
+        run: npm ci
+      - uses: snyk/actions/node@master
+        if: ${{ env.SNYK_TOKEN != '' }}
+        with:
+          args: --severity-threshold=high
+
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+
+  zap-baseline:
+    name: OWASP ZAP baseline
+    runs-on: ubuntu-latest
+    # Wires up automatically once a staging deploy is live and STAGING_URL
+    # is set as a repo secret. Until then this is a documented placeholder.
+    env:
+      STAGING_URL: ${{ secrets.STAGING_URL }}
+    steps:
+      - name: Skip if no STAGING_URL
+        if: ${{ env.STAGING_URL == '' }}
+        run: echo "STAGING_URL not set in repo secrets — skipping ZAP baseline. Set the secret to activate this gate."
+      - uses: actions/checkout@v4
+        if: ${{ env.STAGING_URL != '' }}
+      - uses: zaproxy/action-baseline@v0.10.0
+        if: ${{ env.STAGING_URL != '' }}
+        with:
+          target: ${{ env.STAGING_URL }}
+          fail_action: true

@@ -1,0 +1,19 @@
+<!--
+  Storybook runs under plain webpack, not Next, so next/font never defines
+  the --font-* variables that tailwind.config.ts puts first in every font
+  stack. An undefined custom property invalidates the whole `font-family`
+  declaration (the fallbacks after it are never consulted), which is why
+  stories used to render in the browser's default serif. Storybook has no
+  CSP, so the same three families are pulled from Google Fonts here and the
+  variables are pointed at them.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400..700&family=IBM+Plex+Mono:wght@400;500;600&family=Prompt:wght@300;400;500;600;700&display=swap">
+<style>
+  :root {
+    --font-sans: "Instrument Sans";
+    --font-mono: "IBM Plex Mono";
+    --font-prompt: "Prompt";
+  }
+</style>

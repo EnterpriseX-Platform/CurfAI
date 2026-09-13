@@ -1,0 +1,28 @@
+# Local Postgres for Curf Community.
+#
+#   docker compose up -d
+#   cp .env.example .env      # DATABASE_URL already points here
+#   npm run db:push && npm run db:seed && npm run dev
+#
+# For production, point DATABASE_URL at a managed Postgres instead
+# (Railway, Fly Postgres, Supabase, RDS) — see DEPLOY.md.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: curf
+      POSTGRES_PASSWORD: curf
+      POSTGRES_DB: curf
+    volumes:
+      - curf-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curf -d curf"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  curf-pgdata:

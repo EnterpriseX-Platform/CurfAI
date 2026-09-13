@@ -1,0 +1,32 @@
+{
+  "name": "Curf",
+  "short_name": "Curf",
+  "description": "Living reports — design beautiful reports, trust every number, and act on insight.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F6F7FB",
+  "theme_color": "#F6F7FB",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-icon.svg",
+      "sizes": "180x180",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["business", "productivity", "utilities"],
+  "shortcuts": [
+    { "name": "Reports",   "url": "/reports",   "description": "Browse all reports" },
+    { "name": "Tables",    "url": "/tables",    "description": "Manage lake tables" },
+    { "name": "Agent",     "url": "/agent",     "description": "Ask the AI agent" },
+    { "name": "Notebooks", "url": "/notebooks", "description": "Open a scratchpad" }
+  ]
+}
