@@ -2,7 +2,7 @@
 
 The open-source edition of [Curf](https://curf.ai) — a living-reports platform. Build block-based reports over Postgres, MySQL, SQLite or any REST API, export them pixel-identical to PDF, Excel, Word and CSV, and schedule them by email. Every number carries a SHA-256 proof of the query and rows that produced it.
 
-Community is the same product as Curf Cloud with the paid layers absent, not disabled. There is nothing to migrate if you move to Cloud later.
+Community is the same product as Curf Cloud with the paid layers absent, not disabled. Reports are JSON definitions, so a report built here imports into a Cloud workspace unchanged (**Reports → Import**); lake tables move as CSV.
 
 ## What's in the box
 

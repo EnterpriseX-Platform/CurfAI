@@ -24,36 +24,24 @@ const TIPS = [
     icon: ShieldCheck,
     title: "Every number, provable",
     body: "Hover any KPI, chart, or table to see the SHA-256 fingerprint of the underlying query and result. Time-travel snapshots let you replay any past run byte-for-byte.",
-    accent: "emerald",
   },
   {
     icon: MousePointerClick,
     title: "Click anything to drill",
     body: "Charts and maps with a CLICK TO DRILL chip open a slide-out panel showing the underlying rows behind the aggregate. CSV export included.",
-    accent: "primary",
   },
   {
     icon: SlidersHorizontal,
     title: "Filter narrows everything",
     body: "Use the date range, channel, and search filters at the top. Every block re-flows in lockstep — and the URL updates so you can share the filtered view.",
-    accent: "amber",
   },
   {
     icon: Sparkles,
     title: "Generate from a prompt",
     body: "New report? Click the Generate button on the catalog page. Describe what you want in plain English, click a starter card to skip typing, and get a working dashboard in ~25 seconds.",
-    accent: "violet",
   },
 ] as const;
 
-type Accent = (typeof TIPS)[number]["accent"];
-
-const ACCENT_BG: Record<Accent, string> = {
-  emerald: "bg-success/10 text-success",
-  primary: "bg-primary/10 text-primary",
-  amber: "bg-warning/10 text-warning",
-  violet: "bg-primary/10 text-primary-ink",
-};
 
 export function WhatIsThisBadge() {
   // Three-state local model:
@@ -142,7 +130,7 @@ export function WhatIsThisBadge() {
                 const Icon = tip.icon;
                 return (
                   <li key={tip.title} className="flex items-start gap-2.5">
-                    <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${ACCENT_BG[tip.accent]}`}>
+                    <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground`}>
                       <Icon className="h-3.5 w-3.5" />
                     </span>
                     <div className="min-w-0">

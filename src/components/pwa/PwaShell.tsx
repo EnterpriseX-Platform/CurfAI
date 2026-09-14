@@ -130,7 +130,7 @@ export function PwaShell() {
 
       {installEvent && !installDismissed && !onPublicApp && (
         <div className="fixed bottom-4 right-4 z-[60] flex max-w-sm items-start gap-3 rounded-lg border bg-card p-3 shadow-lg sm:bottom-6 sm:right-6">
-          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
             <Download className="h-5 w-5" />
           </span>
           <div className="flex-1">

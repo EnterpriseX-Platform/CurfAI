@@ -235,7 +235,6 @@ export function NewConnectionWizard() {
             icon={Database}
             label={t("admin.newConnectionWizard.kind.postgres")}
             blurb={t("admin.newConnectionWizard.kind.postgres.blurb")}
-            tone="from-primary-soft to-primary-soft border-primary/30 text-primary-ink"
           />
           <KindCard
             active={kind === "stripe"}
@@ -243,7 +242,6 @@ export function NewConnectionWizard() {
             icon={CreditCard}
             label={t("admin.newConnectionWizard.kind.stripe")}
             blurb={t("admin.newConnectionWizard.kind.stripe.blurb")}
-            tone="from-primary-soft to-primary-soft border-primary/30 text-primary-ink"
           />
           <KindCard
             active={kind === "salesforce"}
@@ -251,7 +249,6 @@ export function NewConnectionWizard() {
             icon={Cloud}
             label={t("admin.newConnectionWizard.kind.salesforce")}
             blurb={t("admin.newConnectionWizard.kind.salesforce.blurb")}
-            tone="from-primary-soft to-primary-soft border-primary/30 text-primary-ink"
           />
           <KindCard
             active={kind === "line"}
@@ -259,7 +256,6 @@ export function NewConnectionWizard() {
             icon={MessageCircle}
             label={t("admin.newConnectionWizard.kind.line")}
             blurb={t("admin.newConnectionWizard.kind.line.blurb")}
-            tone="from-success/10 to-success/10 border-success/30 text-success"
           />
         </div>
       </Section>
@@ -322,7 +318,7 @@ export function NewConnectionWizard() {
 
           {kind === "salesforce" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-primary/30 bg-primary-soft px-3 py-2 text-[11px] text-primary-ink">
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">
                 <p>
                   {(() => {
                     const s = t("admin.newConnectionWizard.sfTokenModeBody");
@@ -628,7 +624,7 @@ function Field({ label, hint, small, children }: { label: string; hint?: string;
 }
 
 function KindCard({
-  active, disabled, onClick, icon: Icon, label, blurb, tone,
+  active, disabled, onClick, icon: Icon, label, blurb,
 }: {
   active: boolean;
   disabled?: boolean;
@@ -636,7 +632,6 @@ function KindCard({
   icon: typeof Database;
   label: string;
   blurb: string;
-  tone: string;
 }) {
   return (
     <button
@@ -644,16 +639,15 @@ function KindCard({
       onClick={onClick}
       disabled={disabled}
       className={
-        "rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 bg-gradient-to-br " +
-        tone +
-        (active ? " ring-2 ring-primary" : "")
+        "rounded-lg border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
+        (active ? "border-primary bg-primary/5 ring-2 ring-primary/40" : "border-border bg-card hover:border-primary/40 hover:bg-accent/30")
       }
     >
       <div className="flex items-center gap-2">
-        <Icon className="h-4 w-4" />
-        <span className="text-sm font-semibold">{label}</span>
+        <Icon className="h-4 w-4 text-muted-foreground" />
+        <span className="text-sm font-semibold text-foreground">{label}</span>
       </div>
-      <p className="mt-1.5 text-[11px] opacity-80">{blurb}</p>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">{blurb}</p>
     </button>
   );
 }

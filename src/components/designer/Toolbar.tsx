@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   Undo2, Redo2, Save, Eye, Download, ChevronRight, ArrowLeft,
   Loader2, Check, FileSpreadsheet, FileText, FileCode, History, Clock, Palette, Sparkles,
+  LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,11 +18,12 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { THEME_PRESETS } from "@/lib/reporting/themes";
-import type { Theme } from "@/lib/reporting/schema";
-import { SuggestChartButton } from "./SuggestChartButton";
+import { reportDisplay, type Theme, type ReportDisplay } from "@/lib/reporting/schema";
 import { eeClient } from "@/ee/client";
 
 const PublishButton = eeClient.designer?.PublishButton ?? null;
+const SuggestChartButton = eeClient.designer?.SuggestChartButton ?? null;
+const STORY_MODE = !!eeClient.designer?.storyMode;
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -112,7 +114,8 @@ export function Toolbar({ reportId }: { reportId: string }) {
           </Button>
         </div>
         <DataDrawer />
-        <SuggestChartButton reportId={reportId} />
+        {SuggestChartButton && <SuggestChartButton reportId={reportId} />}
+        <DisplayPicker />
         <ThemePicker />
         <Button size="sm" variant="ghost" onClick={() => setScheduleOpen(true)} title="Schedule deliveries">
           <Clock className="mr-1.5 h-4 w-4" /> Schedule
@@ -128,14 +131,16 @@ export function Toolbar({ reportId }: { reportId: string }) {
           </Link>
         </Button>
         {PublishButton && <PublishButton reportId={reportId} />}
-        {/* Story Mode — Business plan. The page itself enforces the tier
-            gate (renders an upgrade card on Free/Team) so the button stays
-            visible to everyone as a discovery affordance. */}
-        <Button size="sm" variant="ghost" asChild title="Auto-narrated walkthrough">
-          <Link href={"/reports/" + reportId + "/story"} target="_blank">
-            <Sparkles className="mr-1.5 h-4 w-4" /> Story
-          </Link>
-        </Button>
+        {/* Story Mode — Business plan. On Cloud the page enforces the tier
+            gate (renders an upgrade card below Business) so the button stays
+            visible as a discovery affordance; Community has no story page. */}
+        {STORY_MODE && (
+          <Button size="sm" variant="ghost" asChild title="Auto-narrated walkthrough">
+            <Link href={"/reports/" + reportId + "/story"} target="_blank">
+              <Sparkles className="mr-1.5 h-4 w-4" /> Story
+            </Link>
+          </Button>
+        )}
         <ExportMenu reportId={reportId} />
         <Button size="sm" onClick={save} disabled={saveState === "saving"}>
           {saveState === "saving" ? (
@@ -178,6 +183,44 @@ function SaveIndicator({ state }: { state: SaveState }) {
  * deliberately keep the picker visible to everyone so Free users see what
  * they could unlock; the click→save→toast flow is the upgrade nudge.
  */
+/**
+ * DisplayPicker — how the viewer lays the report out: full-width dashboard
+ * grid, or the A4 / Letter sheets it prints as. Exports and the designer
+ * canvas always use the sheets; this only changes the interactive viewer.
+ */
+const DISPLAY_OPTIONS: Array<{ value: ReportDisplay; label: string; description: string; Icon: typeof LayoutDashboard }> = [
+  { value: "dashboard", label: "Dashboard", description: "Full-width grid on the app background. KPIs, charts, tables.", Icon: LayoutDashboard },
+  { value: "page", label: "Page", description: "The A4 / Letter sheets it prints as. Invoices, receipts, memos.", Icon: FileText },
+];
+
+function DisplayPicker() {
+  const report = useDesignerStore((s) => s.report);
+  const setMeta = useDesignerStore((s) => s.updateReportMeta);
+  const current = DISPLAY_OPTIONS.find((o) => o.value === reportDisplay(report)) ?? DISPLAY_OPTIONS[0];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost" title="How the viewer lays this report out: a full-width dashboard grid, or the A4 / Letter page it prints as">
+          <current.Icon className="mr-1.5 h-4 w-4" />
+          <span className="text-muted-foreground">Display:</span>&nbsp;{current.label}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {DISPLAY_OPTIONS.map((o) => (
+          <DropdownMenuItem key={o.value} onClick={() => setMeta({ display: o.value })} className="flex items-start gap-2">
+            <o.Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="flex-1">
+              <span className="block text-sm font-medium">{o.label}</span>
+              <span className="block text-[10px] leading-tight text-muted-foreground">{o.description}</span>
+            </span>
+            {current.value === o.value && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ThemePicker() {
   const theme = useDesignerStore((s) => (s.report as any).theme as Theme | undefined);
   const setMeta = useDesignerStore((s) => s.updateReportMeta);

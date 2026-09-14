@@ -101,7 +101,7 @@ function DrawerImpl({ open, onClose, request }: { open: boolean; onClose: () => 
     })
       .then(async (r) => {
         if (aborted) return;
-        if (r.status === 402) throw new Error("Why? requires the Team plan.");
+        if (r.status === 402) throw new Error("Why? requires the Growth plan.");
         if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? `Server returned ${r.status}`);
         const j = await r.json();
         setData(j);

@@ -17,23 +17,10 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   FileText: FileTextIcon,
 };
 
-const ACCENT: Record<string, string> = {
-  emerald: "from-success/15 to-success/5 text-success",
-  blue:    "from-primary/15 to-primary/5 text-primary",
-  amber:   "from-warning/15 to-warning/5 text-warning",
-  violet:  "from-primary/15 to-primary/5 text-primary",
-  rose:    "from-destructive/15 to-destructive/5 text-destructive",
-  orange:  "from-warning/15 to-warning/5 text-warning",
-  teal:    "from-success/15 to-success/5 text-success",
-  sky:     "from-primary/15 to-primary/5 text-primary",
-  indigo:  "from-primary/15 to-primary/5 text-primary",
-};
-
 type GalleryTemplate = {
   slug: string;
   industry: string;
   icon: string;
-  accent: string;
   title: Record<TemplateLocale, string>;
   description: Record<TemplateLocale, string>;
   blocks: Block[];
@@ -70,7 +57,6 @@ export function TemplateGallery({ templates }: { templates: GalleryTemplate[] })
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map((tpl) => {
           const Icon = ICONS[tpl.icon] ?? BarChart3;
-          const accent = ACCENT[tpl.accent] ?? ACCENT.blue;
           return (
             <form
               key={tpl.slug}
@@ -79,13 +65,13 @@ export function TemplateGallery({ templates }: { templates: GalleryTemplate[] })
               className="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-xs transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
             >
               <input type="hidden" name="slug" value={tpl.slug} />
-              <div className={`overflow-hidden rounded-lg border border-border bg-gradient-to-br ${accent.replace("text-", "from-").split(" ")[0]} p-1.5 shadow-xs`} style={{ aspectRatio: "16 / 10" }}>
+              <div className="overflow-hidden rounded-lg border border-border bg-muted p-1.5" style={{ aspectRatio: "16 / 10" }}>
                 <div className="flex h-full items-center justify-center rounded-md bg-card p-1">
                   <TemplateThumbnail blocks={tpl.blocks} />
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <div className={`flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br ${accent}`}>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

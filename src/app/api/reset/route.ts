@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { recordAudit } from "@/lib/audit";
 import { ensureLimit } from "@/lib/rateLimit";
+import { clientIp } from "@/lib/security/clientIp";
 
 export const dynamic = "force-dynamic";
 
@@ -18,9 +19,7 @@ function hashToken(t: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? req.headers.get("x-real-ip")
-    ?? "unknown";
+  const ip = clientIp(req);
   const limited = ensureLimit("reset", `ip:${ip}`, 10, 5 * 60_000);
   if (limited) return limited;
 

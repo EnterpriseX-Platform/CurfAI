@@ -36,6 +36,14 @@ export function humanizeLlmError(rawError: string | undefined): {
         "This prompt doesn't match a built-in preset, and no AI provider is connected. Connect a key in Tenant Settings → LLM.\n(คำสั่งนี้ไม่ตรงกับรูปแบบมาตรฐาน และยังไม่ได้เชื่อมต่อ AI โปรดตั้งค่าใน Tenant Settings → LLM)",
     };
   }
+  if (raw.includes("AI_CREDITS_EXHAUSTED")) {
+    return {
+      notConfigured: false,
+      canSwitchModel: false,
+      message:
+        "This workspace has used its AI credits for the month. They reset on the 1st; an admin can add editor seats, upgrade the plan, or connect the workspace's own key in Tenant Settings → LLM, which is never metered.\n(เวิร์กสเปซนี้ใช้เครดิต AI ของเดือนนี้หมดแล้ว เครดิตจะรีเซ็ตวันที่ 1 ผู้ดูแลสามารถเพิ่มที่นั่ง Editor อัปเกรดแพ็กเกจ หรือเชื่อมต่อคีย์ของเวิร์กสเปซเองใน Tenant Settings → LLM ซึ่งไม่มีการนับเครดิต)",
+    };
+  }
   if (raw.includes("REASONING_BUDGET_EXHAUSTED")) {
     return {
       notConfigured: false,

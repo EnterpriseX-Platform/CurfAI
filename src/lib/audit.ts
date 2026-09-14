@@ -8,6 +8,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import type { CurfSessionUser } from "@/lib/auth";
+import { clientIp } from "@/lib/security/clientIp";
 
 export type AuditKind =
   | "signin" | "signout" | "signin.failed"
@@ -96,8 +97,8 @@ export function recordAudit(opts: AuditOptions): void {
 
 export function captureRequest(req?: NextRequest): { ip?: string; userAgent?: string } {
   if (!req) return {};
-  const fwd = req.headers.get("x-forwarded-for") ?? "";
-  const ip = fwd.split(",")[0]?.trim() || req.headers.get("x-real-ip") || undefined;
+  const resolved = clientIp(req);
+  const ip = resolved === "unknown" ? undefined : resolved;
   const userAgent = req.headers.get("user-agent") ?? undefined;
   return { ip: ip || undefined, userAgent };
 }

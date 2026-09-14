@@ -85,7 +85,7 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
             aria-modal="true"
           >
             <header className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4 pr-12">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-border">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                 <Key className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">

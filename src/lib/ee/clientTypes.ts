@@ -20,6 +20,8 @@ export type EeClientRegistry = {
   reports?: {
     /** "Curf noticed an anomaly — add a watcher?" banner on the report viewer. */
     WatcherSuggestionsBanner?: ComponentType<any>;
+    /** The Ask Curf chat panel on the report viewer (ai.talks_back). */
+    AskCurfPanel?: ComponentType<{ reportId: string; currentParams: Record<string, unknown> }>;
     /** "Why?" on a KPI card — grounded explanation of what moved (ai.why_everywhere). */
     AskWhyButton?: ComponentType<any>;
     /** Overflow-menu entry: Claude proposes chart-click Operate templates for this report. */
@@ -31,6 +33,10 @@ export type EeClientRegistry = {
   designer?: {
     /** Toolbar "Publish" — turns the report into an Analytic App. */
     PublishButton?: ComponentType<{ reportId: string }>;
+    /** Toolbar "Suggest" — Claude proposes the next chart (ai.suggest_charts). */
+    SuggestChartButton?: ComponentType<{ reportId: string }>;
+    /** Toolbar "Story" — the auto-narrated walkthrough page (ai.story_mode). */
+    storyMode?: boolean;
     /** Governed metrics are offered in the KPI query picker (the /api/metrics route is paid). */
     metricsPicker?: boolean;
   };

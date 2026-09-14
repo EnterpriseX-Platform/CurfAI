@@ -68,6 +68,19 @@ export type CurfSessionUser = {
    * listed report ids — see reportWhere() below.
    */
   scopedReportIds?: string[];
+  /**
+   * True for a Curf operator (see lib/platformAdmin.ts), computed
+   * server-side from CURF_PLATFORM_ADMIN_EMAILS and baked into the JWT.
+   * Client code must read THIS, never call isPlatformAdmin(email) itself
+   * — that function reads a server-only env var, so calling it directly
+   * in a "use client" component sees the real value during Next's SSR
+   * pass and undefined once the same code runs in the browser bundle,
+   * which is a guaranteed hydration mismatch on every page (the sidebar
+   * gains/loses nav items between the two passes). Baking the boolean
+   * into the session — fetched identically on server and client, exactly
+   * like `role` — is what actually keeps it hydration-safe.
+   */
+  isPlatformAdmin?: boolean;
 };
 
 /**
@@ -204,6 +217,8 @@ export const authOptions: NextAuthOptions = {
         (token as any).roleCheckedAt = Date.now();
         if ((user as any).email) {
           (token as any).memberships = await loadMembershipsForEmail((user as any).email);
+          const { isPlatformAdmin } = await import("@/lib/platformAdmin");
+          (token as any).isPlatformAdmin = isPlatformAdmin((user as any).email);
         }
       }
       // Client-driven updates from `useSession().update(...)`.
@@ -228,7 +243,11 @@ export const authOptions: NextAuthOptions = {
           where: { id: (token as any).id },
           select: { email: true },
         });
-        if (u?.email) (token as any).email = u.email;
+        if (u?.email) {
+          (token as any).email = u.email;
+          const { isPlatformAdmin } = await import("@/lib/platformAdmin");
+          (token as any).isPlatformAdmin = isPlatformAdmin(u.email);
+        }
       }
 
       // Periodic re-validation, every ROLE_CHECK_INTERVAL_MS: confirm the
@@ -312,6 +331,7 @@ export const authOptions: NextAuthOptions = {
       (session.user as any).tenantId = (token as any).tenantId;
       (session.user as any).memberships = (token as any).memberships ?? [];
       (session.user as any).activeTenantId = (token as any).activeTenantId ?? (token as any).tenantId;
+      (session.user as any).isPlatformAdmin = !!(token as any).isPlatformAdmin;
       return session;
     },
   },

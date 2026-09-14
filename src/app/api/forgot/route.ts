@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ensureLimit } from "@/lib/rateLimit";
+import { clientIp } from "@/lib/security/clientIp";
 
 /**
  * POST /api/forgot — start a password reset.
@@ -26,9 +27,7 @@ function hashToken(t: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? req.headers.get("x-real-ip")
-    ?? "unknown";
+  const ip = clientIp(req);
   const limited = ensureLimit("forgot", `ip:${ip}`, 10, 5 * 60_000);
   if (limited) return limited;
 

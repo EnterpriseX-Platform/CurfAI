@@ -115,8 +115,8 @@ export async function SuggestedTemplates({ tenantId }: { tenantId: string }) {
                   <img src={t.thumbnailUrl} alt="" className="h-full w-full object-cover transition group-hover:scale-105" />
                 </div>
               ) : (
-                <div className="grid aspect-[16/9] place-items-center bg-gradient-to-br from-primary/10 to-primary/5">
-                  <Layers className="h-8 w-8 text-primary/60" />
+                <div className="grid aspect-[16/9] place-items-center bg-muted">
+                  <Layers className="h-8 w-8 text-muted-foreground/60" />
                 </div>
               )}
               <div className="p-3">

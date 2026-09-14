@@ -2,7 +2,11 @@
  * /api/admin/tenant/llm — provider-agnostic LLM settings.
  *
  *   GET    — read masked status (provider, masked key preview, model, base URL)
- *   PUT    — set / update provider + key + model (+ fast model) + base URL
+ *            and whether this plan may bring its own key. Without one the
+ *            workspace runs on Curf's AI, which is included and metered in
+ *            AI credits; which model that is stays Curf's business.
+ *   PUT    — bring your own key: provider + key + model (+ fast model) + base
+ *            URL. Business and above (gov.tenant_anthropic_key)
  *   DELETE — remove credentials (LLM features fall back to platform env / disabled)
  *
  * Admin-only. Stores the key encrypted at rest. Never returns the cleartext —
@@ -19,6 +23,9 @@ import { requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { encryptSecret, decryptSecret, maskKey } from "@/lib/secrets";
 import { listDrivers } from "@/lib/llm";
+import { featureGate } from "@/lib/featureGate";
+import { tierAtLeast } from "@/lib/billing";
+import { EDITION } from "@/lib/ee/edition";
 
 const VALID_PROVIDERS = ["anthropic", "openai", "gemini", "openai-compatible"] as const;
 
@@ -37,6 +44,7 @@ export async function GET(req: NextRequest) {
   if (u instanceof NextResponse) return u;
 
   let provider = "anthropic";
+  let tier = "community";
   let masked: string | null = null;
   let model: string | null = null;
   let fastModel: string | null = null;
@@ -47,6 +55,7 @@ export async function GET(req: NextRequest) {
     const t = await prisma.tenant.findUnique({
       where: { id: u.tenantId },
       select: {
+        tier: true,
         llmProvider: true,
         llmKeyEnc: true,
         llmModel: true,
@@ -55,6 +64,7 @@ export async function GET(req: NextRequest) {
         anthropicKeyEnc: true,
       },
     });
+    tier = t?.tier ?? "community";
     provider = t?.llmProvider ?? "anthropic";
     model = t?.llmModel ?? null;
     fastModel = t?.llmFastModel ?? null;
@@ -72,6 +82,8 @@ export async function GET(req: NextRequest) {
     migrationNeeded = true;
   }
 
+  // Cloud: own key is Business and above. Community edition: the self-hoster's key is the only key there is.
+  const ownKeyAllowed = EDITION === "community" || tierAtLeast(tier, "business");
   return NextResponse.json({
     provider,
     configured: !!masked,
@@ -81,6 +93,8 @@ export async function GET(req: NextRequest) {
     baseUrl,
     migrationNeeded,
     legacyKeyPresent,
+    tier,
+    ownKeyAllowed,
     fallbackEnv: !!(
       process.env.ANTHROPIC_API_KEY ||
       process.env.OPENAI_API_KEY ||
@@ -102,7 +116,12 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
-
+  // Bringing your own key is Business and above; the 402 carries the
+  // upgrade path.
+  if (EDITION !== "community") {
+    const gate = await featureGate(u, "gov.tenant_anthropic_key");
+    if (gate) return gate;
+  }
   const body = await req.json().catch(() => null);
   const parsed = PutSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });

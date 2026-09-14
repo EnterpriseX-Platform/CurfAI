@@ -498,24 +498,10 @@ export function ConnectionForm({
                   show an UpgradeLock card below where the form would normally
                   render, so users can see what they'd be unlocking. */}
               {kinds.includes("postgres") && (
-                <SelectItem value="postgres">
-                  <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                    Postgres database
-                    {!isFeatureAvailable(currentTier, "connector.postgres") && (
-                      <UpgradeLock feature="connector.postgres" currentTier={currentTier} variant="inline" />
-                    )}
-                  </span>
-                </SelectItem>
+                <SelectItem value="postgres">Postgres database</SelectItem>
               )}
               {kinds.includes("mysql") && (
-                <SelectItem value="mysql">
-                  <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                    MySQL database
-                    {!isFeatureAvailable(currentTier, "connector.mysql") && (
-                      <UpgradeLock feature="connector.mysql" currentTier={currentTier} variant="inline" />
-                    )}
-                  </span>
-                </SelectItem>
+                <SelectItem value="mysql">MySQL database</SelectItem>
               )}
               {kinds.includes("snowflake") && (
                 <SelectItem value="snowflake">

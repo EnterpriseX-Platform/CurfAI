@@ -1,7 +1,7 @@
 /**
  * Which calls get the tenant's fast model. The split is the whole point:
  * Q&A-shaped kinds must route fast, Master Builder's design kinds must
- * not — a tenant who sets kimi-k3 for builds and kimi-k2 for Ask should
+ * not — a tenant who sets kimi-k3 for builds and kimi-k2.6 for Ask should
  * never see a build silently downgraded.
  */
 import { describe, it, expect } from "vitest";

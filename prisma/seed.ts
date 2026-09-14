@@ -10,6 +10,19 @@
  *   3. "Inventory Status" — SKU/low-stock/inventory-value KPIs, store-level
  *                           stock table, and reorder candidates list.
  */
+/**
+ * Community edition's seed.ts — replaces the private repo's version wholesale
+ * (see scripts/community-export/manifest.json rootOverrides). The private
+ * seed.ts also calls seedDemoWorkspace() (prisma/seed-demo.ts) to fill the
+ * Demo Workspace for docs screenshots and live testing; that file populates
+ * paid-only surfaces (Master Builder, Operate, Metrics, Decisions,
+ * Notebooks, Data Quality, Marketplace) that don't exist in a Community
+ * install's schema and imports @/lib/dq/runner, which the export strips.
+ * prisma/seed-demo.ts itself is excluded from the export (manifest.json).
+ * This file is a snapshot of seed.ts as it stood before seed-demo.ts existed
+ * — sample warehouse + one report per template + a second tenant for
+ * isolation testing. Update it by hand if that base behaviour changes.
+ */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import Database from "better-sqlite3";

@@ -13,6 +13,7 @@
 import ExcelJS from "exceljs";
 import { currencySymbol } from "@/lib/reporting/currency";
 import puppeteer from "puppeteer";
+import { internalBase } from "@/lib/http/appBase";
 import { runReport } from "@/lib/reporting/runner";
 import { aggregate, uncappedTableTitle } from "@/lib/reporting/format";
 import { interpolate } from "@/lib/reporting/interpolate";
@@ -384,7 +385,7 @@ async function captureBlockImages(
   authCookie: string | null,
   out: Record<string, BlockImage>
 ) {
-  const baseUrl = process.env.INTERNAL_BASE_URL ?? "http://localhost:3100";
+  const baseUrl = internalBase();
   const url = new URL(`/reports/${reportId}`, baseUrl);
   url.searchParams.set("print", "1");
   for (const [k, v] of Object.entries(params)) {

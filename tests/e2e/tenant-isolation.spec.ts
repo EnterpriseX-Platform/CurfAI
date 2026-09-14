@@ -51,8 +51,12 @@ test.describe("Tenant isolation (Round 19)", () => {
     // Operate templates, dashboards, builds: 0
     const dashes = await page.request.get("/api/dashboards").then((r) => r.json());
     expect((dashes.items ?? dashes).length).toBe(0);
-    const builds = await page.request.get("/api/master-builder").then((r) => r.json());
-    expect((builds.items ?? builds).length).toBe(0);
+    // Master Builder is a paid route — absent (404) in the Community edition.
+    const buildsRes = await page.request.get("/api/master-builder");
+    if (buildsRes.status() !== 404) {
+      const builds = await buildsRes.json();
+      expect((builds.items ?? builds).length).toBe(0);
+    }
   });
 
   test("Cross-tenant resource probes all return 404", async ({ page }) => {
@@ -72,6 +76,8 @@ test.describe("Tenant isolation (Round 19)", () => {
 
   test("body-supplied tenantId is ignored (server uses session)", async ({ page }) => {
     await signIn(page, tenantBEmail, tenantBPassword);
+    // Master Builder is paid — the route is absent in the Community edition.
+    test.skip((await page.request.get("/api/master-builder")).status() === 404, "Master Builder is not in this edition");
     const fakeTenantA = "cm00000_pretend_im_tenant_A";
     const apply = await page.request.post("/api/master-builder/apply", {
       data: {
@@ -101,6 +107,8 @@ test.describe("Tenant isolation (Round 19)", () => {
   test("marketplace browse is intentionally cross-tenant (public)", async ({ page }) => {
     await signIn(page, tenantBEmail, tenantBPassword);
     const r = await page.request.get("/api/marketplace/templates");
+    // The marketplace is paid — absent in the Community edition.
+    test.skip(r.status() === 404, "Marketplace is not in this edition");
     expect(r.ok()).toBeTruthy();
     const j = await r.json();
     // Marketplace should expose published templates from any tenant.

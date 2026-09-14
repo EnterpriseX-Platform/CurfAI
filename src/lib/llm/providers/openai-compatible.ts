@@ -21,22 +21,31 @@ import { openaiCompatibleCall } from "./openai";
 export const openaiCompatibleDriver: LlmDriver = {
   id: "openai-compatible",
   label: "Custom (OpenAI-compatible)",
-  // Verified live against api.moonshot.ai: the bare "kimi-k2" id 404s
-  // ("Not found the model kimi-k2 or Permission denied") — it isn't a
-  // real Moonshot model id, just a stale placeholder. A tenant that left
-  // Model blank (as the settings UI explicitly invites: "Leave blank to
-  // use the provider's default") got a guaranteed failure on every call,
-  // not just the occasional reasoning-budget flakiness. This matches the
-  // Kimi (Moonshot, Global) quick-pick's own defaultModel below, which
-  // was already correct — this top-level fallback had just drifted from
-  // it. Moonshot's China endpoint (.cn) is on a different model
-  // namespace where "kimi-k2" may still be valid; see its quick-pick.
-  defaultModel: "kimi-k2-0711-preview",
+  // Confirmed live 2026-09-13 against a real Moonshot account: the
+  // previous default here ("kimi-k2-0711-preview", and the K2/K2-Turbo/
+  // K2-Thinking family generally) 404s — Moonshot sunset the whole
+  // moonshot-v1 line and kimi-k2.5 on 2026-08-31, and the account's
+  // available-model list no longer includes any of the pre-sunset ids
+  // at all. kimi-k3 is the current flagship and is in the account's
+  // model list on both regional endpoints — platform.kimi.ai (.ai) and
+  // platform.kimi.com (.cn) publish the SAME model ids now (kimi-k3,
+  // kimi-k2.6, kimi-k2.7-code, kimi-k2.7-code-highspeed), just priced in
+  // USD vs RMB respectively. A tenant that left Model blank (as the
+  // settings UI invites: "Leave blank to use the provider's default")
+  // got a guaranteed failure on every call, not just the occasional
+  // reasoning-budget flakiness — this is the fallback every such call
+  // used, so it had to be a real, live model id.
+  defaultModel: "kimi-k3",
   needsBaseUrl: true,
   credentialHint: "Any provider that speaks the OpenAI Chat Completions protocol — Kimi, DeepSeek, Mistral, xAI, Fireworks, Perplexity, Together, OpenRouter, Groq, vLLM, Ollama, LM Studio.",
   baseUrlSuggestions: [
-    { label: "Kimi (Moonshot, Global)", url: "https://api.moonshot.ai/v1", defaultModel: "kimi-k2-0711-preview" },
-    { label: "Kimi (Moonshot, China)",  url: "https://api.moonshot.cn/v1", defaultModel: "kimi-k2" },
+    // Same model catalog on both endpoints as of 2026-09-13 (kimi-k3,
+    // kimi-k2.6, kimi-k2.7-code, kimi-k2.7-code-highspeed) — only the
+    // billing currency differs (USD vs RMB). lib/llm/pricing.ts only
+    // holds USD rates, so a tenant on the China endpoint sees an
+    // approximate USD-equivalent cost, not their real RMB bill.
+    { label: "Kimi (Moonshot, Global)", url: "https://api.moonshot.ai/v1", defaultModel: "kimi-k3" },
+    { label: "Kimi (Moonshot, China)",  url: "https://api.moonshot.cn/v1", defaultModel: "kimi-k3" },
     { label: "DeepSeek",        url: "https://api.deepseek.com/v1", defaultModel: "deepseek-chat" },
     { label: "Mistral",         url: "https://api.mistral.ai/v1", defaultModel: "mistral-large-latest" },
     { label: "xAI (Grok)",      url: "https://api.x.ai/v1", defaultModel: "grok-4" },

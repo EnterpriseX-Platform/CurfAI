@@ -5,28 +5,14 @@
  *
  * Avoids shipping static PNGs: the preview stays in sync as templates evolve.
  *
- * Two palettes:
- *   - default: vivid, used inside the signed-in product (Template Gallery)
- *     so each block type pops visually.
- *   - muted:   restrained greyscale + single primary accent. Used on the
- *     marketing landing where the surrounding design language is calm.
+ * One restrained palette everywhere — greyscale blocks with a single primary
+ * accent for chart bars and KPI numbers — so a thumbnail reads as a small
+ * document, not a colour swatch. The product gallery and the marketing
+ * teaser share it; a block's type shows in its shape, not its hue.
  */
 import type { Block } from "@/lib/reporting/schema";
 
-const VIVID: Record<string, { fill: string; stroke: string; accent?: string }> = {
-  title:     { fill: "#1f2937", stroke: "#111827" },
-  text:      { fill: "#e5e7eb", stroke: "#d1d5db" },
-  kpi:       { fill: "#dbeafe", stroke: "#93c5fd", accent: "#1d4ed8" },
-  chart:     { fill: "#dcfce7", stroke: "#86efac", accent: "#15803d" },
-  table:     { fill: "#fef3c7", stroke: "#fcd34d", accent: "#b45309" },
-  image:     { fill: "#ede9fe", stroke: "#c4b5fd", accent: "#6d28d9" },
-  divider:   { fill: "#f3f4f6", stroke: "#d1d5db" },
-  pageBreak: { fill: "#fee2e2", stroke: "#fca5a5" },
-};
-
-// Muted palette — all blocks live in greyscale with a single subtle primary
-// accent for chart bars / KPI numbers. Pure neutral typography ratio.
-const MUTED: Record<string, { fill: string; stroke: string; accent?: string }> = {
+const COLORS: Record<string, { fill: string; stroke: string; accent?: string }> = {
   title:     { fill: "#1f2937", stroke: "#111827" },
   text:      { fill: "#f3f4f6", stroke: "#e5e7eb" },
   kpi:       { fill: "#f9fafb", stroke: "#e5e7eb", accent: "#4f46e5" },
@@ -37,8 +23,7 @@ const MUTED: Record<string, { fill: string; stroke: string; accent?: string }> =
   pageBreak: { fill: "#f9fafb", stroke: "#e5e7eb" },
 };
 
-export function TemplateThumbnail({ blocks, muted = false }: { blocks: Block[]; muted?: boolean }) {
-  const COLORS = muted ? MUTED : VIVID;
+export function TemplateThumbnail({ blocks }: { blocks: Block[] }) {
   // 12 column × 24 row logical space. Pick tallest block to set viewBox height.
   const cols = 12;
   const rows = Math.max(20, blocks.reduce((m, b) => Math.max(m, b.y + b.h), 0) + 1);

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/lib/toast";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { eeClient } from "@/ee/client";
 
 type Status = {
   configured: boolean;
@@ -135,7 +136,7 @@ export function SmtpPanel() {
         )}
       </div>
       <p className="mb-4 text-xs text-muted-foreground">
-        {t("admin.smtp.description")}
+        {t(eeClient.edition === "community" ? "admin.smtp.descriptionCommunity" : "admin.smtp.description")}
       </p>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

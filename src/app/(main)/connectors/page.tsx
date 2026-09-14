@@ -52,7 +52,7 @@ export default function ConnectorsPage() {
               return (
                 <div key={r.id} className="group flex flex-col justify-between rounded-lg border border-border bg-card p-4 shadow-xs transition-shadow hover:shadow-md">
                   <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary ring-1 ring-border">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
                       <Icon className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">

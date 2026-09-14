@@ -65,7 +65,6 @@ export const CONNECTOR_KINDS: ConnectorKindMeta[] = [
     blurb: "Production-grade Postgres. Read-only role + SSL recommended.",
     iconName: "Database",
     capabilities: ["sql", "schemaProbe", "incremental"],
-    feature: "connector.postgres",
   },
   {
     kind: "mysql",
@@ -73,7 +72,6 @@ export const CONNECTOR_KINDS: ConnectorKindMeta[] = [
     blurb: "MySQL or MariaDB. Same workflow as Postgres.",
     iconName: "Database",
     capabilities: ["sql", "schemaProbe", "incremental"],
-    feature: "connector.mysql",
   },
   {
     kind: "snowflake",

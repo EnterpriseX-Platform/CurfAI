@@ -4,8 +4,11 @@
  * Verifies the full first-touch journey for a brand-new user:
  *   1. /api/signup creates tenant + admin + auto-provisioned data sources
  *   2. Sign-in lands on a sensible page
- *   3. Empty states on /reports, /tables, /build, /brief render with CTAs
- *   4. The B2B SaaS workspace template applies in <2s and seeds the workspace
+ *   3. /reports and /tables render for the new admin with create affordances
+ *
+ * The paid surfaces of the same journey (/build, /brief, workspace templates)
+ * live in signup-onboarding-paid.spec.ts — that file is not part of the
+ * Community edition export.
  *
  * If this fails, the new-user demo collapses. First impression = retention.
  */
@@ -62,33 +65,6 @@ test.describe("New-user onboarding (Round 32)", () => {
     // The Upload affordance renders unconditionally above the list — its
     // primary "Upload" button is a dependable anchor for "page rendered".
     await expect(page.getByRole("button", { name: /^Upload$/i }).first()).toBeVisible();
-  });
-
-  test("/build (Master Builder) shows preset cards + prompt input", async ({ page }) => {
-    await signIn(page, email, password);
-    await page.goto("/build");
-    await expect(page.getByText(/Master Builder/i).first()).toBeVisible();
-    await expect(page.getByPlaceholder(/e.g. Track customer support ticket volume/i)).toBeVisible();
-    await expect(page.getByText(/Sales Analytics/i)).toBeVisible();
-    await expect(page.getByText(/Marketing Analytics/i)).toBeVisible();
-    await expect(page.getByText(/Finance Command Center/i)).toBeVisible();
-  });
-
-  test("/brief shows a personalized empty headline", async ({ page }) => {
-    await signIn(page, email, password);
-    await page.goto("/brief");
-    await expect(page.getByText(/All quiet on the watch/i)).toBeVisible();
-  });
-
-  test("Apply B2B SaaS workspace template seeds the workspace in under 5s", async ({ page }) => {
-    await signIn(page, email, password);
-    const start = Date.now();
-    const r = await page.request.post("/api/workspace-templates/apply", {
-      data: { templateId: "b2b-saas" },
-    });
-    expect(r.ok()).toBeTruthy();
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeLessThan(5_000);
   });
 
   test("session contains tenantId + admin role for newly-signed-up user", async ({ page }) => {

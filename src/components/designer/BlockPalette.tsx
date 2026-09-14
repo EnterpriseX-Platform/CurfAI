@@ -4,7 +4,7 @@ import {
   DollarSign, TrendingUp, Table, PieChart, MessageSquareWarning,
   LayoutDashboard, FileText, Award,
 } from "lucide-react";
-import { BlockRegistry, BlockOrder } from "@/components/blocks";
+import { BLOCK_META as BlockRegistry, BLOCK_ORDER as BlockOrder } from "@/components/blocks/registryMeta";
 import { useDesignerStore } from "@/lib/reporting/store";
 import type { BlockType } from "@/lib/reporting/schema";
 import { BLOCK_TEMPLATES, type BlockTemplate } from "@/lib/reporting/blockTemplates";

@@ -178,10 +178,8 @@ export function GenerateReportButton() {
             step progress strip + a contextual footer note that the standard
             primitive isn't shaped for. The shared primitives (overlay blur,
             mount animations, close button) still apply via DialogContent. */}
-        {/* Hero header — gradient strip with the AI affordance front-and-centre */}
-        <div className="relative overflow-hidden border-b border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent px-6 py-5">
-          <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-primary/10 blur-3xl" />
-          <div className="absolute right-12 top-4 h-20 w-20 rounded-full bg-primary/5 blur-2xl" />
+        {/* Header — a plain surface; the accent is spent on the Generate button, not the frame */}
+        <div className="relative border-b border-border bg-card px-6 py-5">
           <DialogHeader className="relative">
             <div className="mb-2 inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
               <Sparkles className="h-3 w-3" /> AI-powered
@@ -263,7 +261,7 @@ export function GenerateReportButton() {
                   onClick={() => setPrompt(ex.prompt)}
                   className="group flex items-start gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"
                 >
-                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary group-hover:bg-primary/15">
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground transition-colors group-hover:bg-primary-soft group-hover:text-primary-ink">
                     <ex.icon className="h-3.5 w-3.5" />
                   </span>
                   <span className="min-w-0">
@@ -357,23 +355,23 @@ function DataInventoryStrip({
     );
   }
   return (
-    <div className="rounded-md border border-success/30 bg-success/5">
+    <div className="rounded-md border border-border bg-card">
       <button
         type="button"
         onClick={onToggle}
         className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
       >
         <div className="flex items-center gap-2 text-xs">
-          <Database className="h-3.5 w-3.5 text-success" />
-          <span className="font-medium text-success">
+          <Database className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="font-medium text-foreground">
             Curf can see {inventory.totalTables} table{inventory.totalTables === 1 ? "" : "s"} across{" "}
             {inventory.totalConnections} connection{inventory.totalConnections === 1 ? "" : "s"}
           </span>
         </div>
-        <ChevronDown className={"h-3.5 w-3.5 text-success transition-transform " + (expanded ? "rotate-180" : "")} />
+        <ChevronDown className={"h-3.5 w-3.5 text-muted-foreground transition-transform " + (expanded ? "rotate-180" : "")} />
       </button>
       {expanded && (
-        <div className="border-t border-success/20 px-3 py-2.5">
+        <div className="border-t border-border px-3 py-2.5">
           {inventory.connections.map((c) => (
             <ConnectionEntry key={c.id} c={c} />
           ))}
@@ -421,9 +419,9 @@ function ConnectionEntry({
 
   return (
     <div className="mb-3 last:mb-0">
-      <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold text-success">
+      <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold text-foreground">
         <Layers className="h-3 w-3" /> {c.name}
-        <span className="rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-success">
+        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
           {c.kind}
         </span>
         {c.kind === "rest" && (
@@ -431,7 +429,7 @@ function ConnectionEntry({
             type="button"
             onClick={() => setShowProbeForm((v) => !v)}
             disabled={probing}
-            className="ml-auto inline-flex items-center gap-1 rounded-md border border-success/40 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success hover:bg-success/20 disabled:opacity-50"
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
           >
             {probing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
             {localProbed ? "Re-probe" : "Probe schema"}
@@ -441,7 +439,7 @@ function ConnectionEntry({
 
       {/* Inline probe form for REST */}
       {c.kind === "rest" && showProbeForm && (
-        <div className="ml-5 mt-1 grid gap-1.5 rounded-md border border-success/30 bg-background/60 p-2">
+        <div className="ml-5 mt-1 grid gap-1.5 rounded-md border border-border bg-background p-2">
           <label className="grid gap-0.5 text-[10px] text-muted-foreground">
             Sample path
             <input
@@ -467,7 +465,7 @@ function ConnectionEntry({
               type="button"
               onClick={runProbe}
               disabled={probing}
-              className="inline-flex items-center gap-1 rounded-md border border-success/40 bg-success/10 px-2 py-1 text-[10px] font-medium text-success hover:bg-success/20 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               {probing ? <><Loader2 className="h-3 w-3 animate-spin" /> Probing&hellip;</> : "Run probe"}
             </button>
@@ -479,7 +477,7 @@ function ConnectionEntry({
       {c.kind === "sqlite" && c.tables.length > 0 && (
         <div className="flex flex-wrap gap-1 pl-5">
           {c.tables.map((t) => (
-            <code key={t} className="rounded bg-background/80 px-1.5 py-0.5 font-mono text-[10px] text-success">
+            <code key={t} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground">
               {t}
             </code>
           ))}
@@ -490,9 +488,9 @@ function ConnectionEntry({
       {c.kind === "rest" && localProbed && localFields.length > 0 && (
         <div className="flex flex-wrap gap-1 pl-5">
           {localFields.map((f) => (
-            <code key={f.name} className="rounded bg-background/80 px-1.5 py-0.5 font-mono text-[10px] text-success" title={f.type}>
+            <code key={f.name} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground" title={f.type}>
               {f.name}
-              <span className="ml-1 text-success/70">({f.type})</span>
+              <span className="ml-1 text-muted-foreground">({f.type})</span>
             </code>
           ))}
         </div>

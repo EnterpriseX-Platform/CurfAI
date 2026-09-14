@@ -28,12 +28,10 @@ describe("featureAvailable", () => {
     expect(featureAvailable(null, "connector.sftp")).toBe(false);
   });
 
-  it("Community-edition decisions (2026-09-13): Postgres, MySQL and email schedules are Community", () => {
-    expect(featureAvailable("community", "connector.postgres")).toBe(true);
-    expect(featureAvailable("community", "connector.mysql")).toBe(true);
-    expect(featureAvailable("community", "delivery.schedules")).toBe(true);
-    expect(featureAvailable("community", "delivery.email_digest")).toBe(true);
+  it("Community-edition decisions (2026-09-13): Postgres, MySQL and email schedules have no gate key at all", () => {
     // ...while the warehouse connectors and chat delivery stay paid.
+    expect("connector.postgres" in FEATURE_TIERS).toBe(false);
+    expect("delivery.schedules" in FEATURE_TIERS).toBe(false);
     expect(featureAvailable("community", "connector.snowflake")).toBe(false);
     expect(featureAvailable("community", "intelligence.brief_delivery")).toBe(false);
   });
@@ -54,7 +52,7 @@ describe("featureAvailable", () => {
 
 describe("humanizeFeatureKey", () => {
   it("strips the connector prefix and appends 'connector'", () => {
-    expect(humanizeFeatureKey("connector.postgres")).toBe("Postgres connector");
+    expect(humanizeFeatureKey("connector.snowflake")).toBe("Snowflake connector");
   });
 
   it("handles nested viz.chart.* keys", () => {

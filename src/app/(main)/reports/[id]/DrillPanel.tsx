@@ -125,8 +125,8 @@ export function DrillPanel({ state, onClose }: { state: DrillState; onClose: () 
            the user can fire a workflow from the same row they're staring
            at. Hidden when no chart_click templates exist for this tenant. */}
         {actions && actions.length > 0 && (
-          <section className="border-b border-border bg-gradient-to-b from-warning/10 to-transparent px-5 py-3">
-            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-warning">
+          <section className="border-b border-border bg-muted/40 px-5 py-3">
+            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               <Workflow className="h-3 w-3" /> {t("drillPanel.runActionHeading")}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -135,10 +135,10 @@ export function DrillPanel({ state, onClose }: { state: DrillState; onClose: () 
                   key={a.id}
                   type="button"
                   onClick={() => setPickedTemplateId(a.id)}
-                  className="group inline-flex items-center gap-1.5 rounded-full border border-warning/30 bg-card px-2.5 py-1 text-xs font-medium text-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-warning hover:bg-warning/10 hover:shadow"
+                  className="group inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-accent/30"
                   title={a.description ?? a.name}
                 >
-                  <Zap className="h-3 w-3 text-warning" />
+                  <Zap className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-primary" />
                   {a.name}
                   {a.dryRun && <span className="rounded-full bg-warning/10 px-1 py-0 text-[9px] font-semibold uppercase text-warning">{t("drillPanel.dryBadge")}</span>}
                   <ChevronRight className="h-3 w-3 text-muted-foreground/60 transition group-hover:translate-x-0.5 group-hover:text-foreground" />

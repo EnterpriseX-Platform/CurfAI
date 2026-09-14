@@ -1,0 +1,67 @@
+# E2E — Curf Community edition
+#
+# Builds the app, migrates and seeds a throwaway Postgres, starts the
+# production server and runs the Playwright journeys in tests/e2e.
+
+name: E2E
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: curf
+          POSTGRES_PASSWORD: curf
+          POSTGRES_DB: curf
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U curf -d curf"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://curf:curf@localhost:5432/curf
+      NEXTAUTH_URL: http://localhost:3100
+      NEXTAUTH_SECRET: ci-test-secret-do-not-use-in-prod
+      CRON_SECRET: ci-test-cron-secret
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx prisma migrate deploy
+      - run: npm run db:seed
+      - run: npx next build
+      - name: Start the server
+        run: |
+          npx next start -p 3100 > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3100/api/health && break
+            sleep 2
+          done
+      - run: npx playwright test
+      - if: failure()
+        run: tail -n 200 server.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

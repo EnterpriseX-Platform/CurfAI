@@ -7,7 +7,8 @@ import { canSeeDataSource } from "@/lib/datasourceAcl";
 import { withTenantContext } from "@/lib/rls";
 import { recordAudit } from "@/lib/audit";
 import { ensureLimit } from "@/lib/rateLimit";
-import { requireReportQuota, requireGenerateQuota } from "@/lib/billing";
+import { requireReportQuota } from "@/lib/billing";
+import { requireAiCreditsFor } from "@/lib/llm";
 import { callLLM } from "@/lib/llm";
 import { ee } from "@/ee";
 import Database from "better-sqlite3";
@@ -59,13 +60,12 @@ export async function POST(req: NextRequest) {
   const block = await requireReportQuota(user);
   if (block) return block;
 
-  // Per-plan AI Generate quota: Free=10/mo, Team=100/mo, Business=∞.
-  // The window is rolling 30 days from AuditEvent rows tagged
-  // kind="report.generate" — see lib/billing.ts. We gate AFTER the report
-  // quota check so a Free user at the report cap learns the more salient
-  // limit first, but BEFORE we hit the schema parser so a 402 is cheap.
-  const generateBlock = await requireGenerateQuota(user);
-  if (generateBlock) return generateBlock;
+  // AI credits (lib/billing.ts). callLLM meters every call on Curf's key
+  // anyway; checking here too keeps the 402 cheap and ahead of the schema
+  // parser. Gated AFTER the report quota so a Free user at the report cap
+  // learns the more salient limit first.
+  const creditsBlock = await requireAiCreditsFor(user.tenantId);
+  if (creditsBlock) return creditsBlock;
 
   const body = await req.json().catch(() => null);
   const parsed = Schema.safeParse(body);

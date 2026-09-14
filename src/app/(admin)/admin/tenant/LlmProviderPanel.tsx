@@ -19,6 +19,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/lib/toast";
+import { useT } from "@/lib/i18n/LocaleContext";
+import { eeClient } from "@/ee/client";
+import { UpgradeLock } from "@/components/common/UpgradeLock";
 
 type Driver = {
   id: "anthropic" | "openai" | "gemini" | "openai-compatible";
@@ -32,6 +35,10 @@ type Driver = {
 
 type Status = {
   provider: Driver["id"];
+  /** This workspace's plan — drives the upgrade locks below. */
+  tier: string;
+  /** Bringing your own key is Business and above on Cloud. */
+  ownKeyAllowed: boolean;
   configured: boolean;
   masked: string | null;
   model: string | null;
@@ -45,6 +52,7 @@ type Status = {
 
 export function LlmProviderPanel() {
   const { push } = useToast();
+  const { t } = useT();
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -234,8 +242,8 @@ export function LlmProviderPanel() {
     }
     if (status.fallbackEnv && viewingActiveProvider) {
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning">
-          <AlertCircle className="h-3.5 w-3.5" /> Using platform-wide key (env)
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Curf AI — included with your plan, metered in AI credits
         </span>
       );
     }
@@ -263,13 +271,22 @@ export function LlmProviderPanel() {
             LLM provider
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Used for Generate-from-prompt, Talks-back grounded Q&amp;A, watcher narratives, the executive
-            Brief headline, Auto-Curf, and Ask Curf chat. Your key, your usage charges.
+            {t(eeClient.edition === "community" ? "admin.llm.descriptionCommunity" : "admin.llm.description")}
           </p>
         </div>
         <StatusPill />
       </div>
 
+      {/* Bring your own key — Business and above on Cloud. */}
+      {!status.ownKeyAllowed && !status.configured ? (
+        <UpgradeLock
+          feature="gov.tenant_anthropic_key"
+          currentTier={status.tier}
+          title="Bring your own key"
+          description="Curf AI is included with your plan and metered in AI credits. On Business and above you can connect your own Anthropic, OpenAI, Gemini or compatible key instead: any model your provider offers, and no metering."
+        />
+      ) : (
+      <>
       {/* Provider picker */}
       <div className="mb-3">
         <Label className="text-xs">Provider</Label>
@@ -429,7 +446,7 @@ export function LlmProviderPanel() {
           className="font-mono text-xs"
         />
         <p className="text-[11px] text-muted-foreground">
-          Leave blank to use the Model above for everything. Set a non-reasoning model here when the Model above is a reasoning model (e.g. <span className="font-mono">kimi-k3</span> for Master Builder, <span className="font-mono">kimi-k2-0711-preview</span> here) — grounded answers don't need chain-of-thought, and a reasoning model spends its whole token budget thinking before it answers.
+          Leave blank to use the Model above for everything. Set a non-reasoning model here when the Model above is a reasoning model (e.g. <span className="font-mono">kimi-k3</span> for Master Builder, <span className="font-mono">kimi-k2.6</span> here) — grounded answers don't need chain-of-thought, and a reasoning model spends its whole token budget thinking before it answers.
         </p>
       </div>
 
@@ -481,6 +498,8 @@ export function LlmProviderPanel() {
           {saving ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Saving</> : "Save"}
         </Button>
       </div>
+      </>
+      )}
     </section>
   );
 }

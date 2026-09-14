@@ -19,7 +19,7 @@
  * (Canvas.tsx:165-166), so the handlers here were duplicates of the real
  * ones a level up.
  */
-import { BlockRegistry } from "@/components/blocks";
+import { BLOCK_META as BlockRegistry } from "./registryMeta";
 import { BlockType } from "@/lib/reporting/schema";
 import { EmptyState } from "@/components/common/EmptyState";
 import { DICT } from "@/lib/i18n/dict";

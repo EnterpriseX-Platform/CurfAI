@@ -14,7 +14,6 @@ export type Template = {
   slug: string;
   industry: "finance" | "sales" | "operations" | "hr" | "marketing" | "it" | "retail" | "banking" | "insurance" | "government" | "form" | "general";
   icon: string;
-  accent: string;
   title: Record<TemplateLocale, string>;
   description: Record<TemplateLocale, string>;
   bundled?: boolean;
@@ -33,7 +32,6 @@ export const TEMPLATES: Template[] = [
     slug: "sales-dashboard",
     industry: "sales",
     icon: "TrendingUp",
-    accent: "blue",
     bundled: true,
     title: {
       en: "Sales Dashboard",
@@ -82,7 +80,6 @@ export const TEMPLATES: Template[] = [
     slug: "financial-pnl",
     industry: "finance",
     icon: "LineChart",
-    accent: "emerald",
     bundled: true,
     title: {
       en: "Financial P&L",
@@ -134,7 +131,6 @@ export const TEMPLATES: Template[] = [
     slug: "inventory-status",
     industry: "operations",
     icon: "Boxes",
-    accent: "amber",
     bundled: true,
     title: {
       en: "Inventory Status",
@@ -189,7 +185,6 @@ export const TEMPLATES: Template[] = [
     slug: "hr-headcount",
     industry: "hr",
     icon: "Users",
-    accent: "violet",
     bundled: true,
     title: {
       en: "Headcount & Attrition",
@@ -233,7 +228,6 @@ export const TEMPLATES: Template[] = [
     slug: "marketing-campaigns",
     industry: "marketing",
     icon: "Megaphone",
-    accent: "rose",
     bundled: true,
     title: {
       en: "Marketing Campaign Review",
@@ -281,7 +275,6 @@ export const TEMPLATES: Template[] = [
     slug: "retail-store-performance",
     industry: "retail",
     icon: "Store",
-    accent: "orange",
     bundled: true,
     title: {
       en: "Store Performance",
@@ -328,7 +321,6 @@ export const TEMPLATES: Template[] = [
     slug: "banking-portfolio",
     industry: "banking",
     icon: "Landmark",
-    accent: "teal",
     bundled: true,
     title: {
       en: "Banking Portfolio Overview",
@@ -380,7 +372,6 @@ export const TEMPLATES: Template[] = [
     slug: "insurance-claims",
     industry: "insurance",
     icon: "ShieldCheck",
-    accent: "sky",
     bundled: true,
     title: {
       en: "Insurance Claims & Loss Ratio",
@@ -429,7 +420,6 @@ export const TEMPLATES: Template[] = [
     slug: "government-budget",
     industry: "government",
     icon: "Building2",
-    accent: "indigo",
     bundled: true,
     title: {
       en: "Public Budget Execution",
@@ -476,7 +466,6 @@ export const TEMPLATES: Template[] = [
     slug: "form-invoice",
     industry: "form",
     icon: "ReceiptText",
-    accent: "emerald",
     bundled: true,
     title: {
       en: "Invoice",
@@ -494,6 +483,7 @@ export const TEMPLATES: Template[] = [
         version: 1,
         name: "Invoice",
         category: "Form",
+      display: "page",
         parameters: [
           { name: "invoiceNumber", label: "Invoice #",   type: "string", default: "INV-2026-00042", required: true },
           { name: "issueDate",     label: "Issue date",  type: "date",   default: "2026-04-23",     required: true },
@@ -535,7 +525,6 @@ export const TEMPLATES: Template[] = [
     slug: "form-billing-statement",
     industry: "form",
     icon: "FileText",
-    accent: "sky",
     bundled: true,
     title: {
       en: "Billing Statement",
@@ -553,6 +542,7 @@ export const TEMPLATES: Template[] = [
         version: 1,
         name: "Billing Statement",
         category: "Form",
+      display: "page",
         parameters: [
           { name: "customerId", label: "Customer #", type: "number", default: 1,            required: true },
           { name: "from",       label: "From",       type: "date",   default: "2026-01-01", required: true },
@@ -593,7 +583,6 @@ export const TEMPLATES: Template[] = [
     slug: "form-memo",
     industry: "form",
     icon: "Notebook",
-    accent: "violet",
     bundled: false,
     title: {
       en: "Memo",
@@ -609,6 +598,7 @@ export const TEMPLATES: Template[] = [
       version: 1,
       name: "Memo",
       category: "Form",
+      display: "page",
       parameters: [
         { name: "to",      label: "To",      type: "string", default: "All staff",               required: true },
         { name: "from",    label: "From",    type: "string", default: "Management",              required: true },
@@ -629,7 +619,6 @@ export const TEMPLATES: Template[] = [
     slug: "form-purchase-order",
     industry: "form",
     icon: "ClipboardList",
-    accent: "amber",
     bundled: true,
     title: {
       en: "Purchase Order",
@@ -647,6 +636,7 @@ export const TEMPLATES: Template[] = [
         version: 1,
         name: "Purchase Order",
         category: "Form",
+      display: "page",
         parameters: [
           { name: "poNumber",   label: "PO #",       type: "string", default: "PO-2026-00123", required: true },
           { name: "issueDate",  label: "Issue date", type: "date",   default: "2026-04-23",    required: true },
@@ -682,7 +672,6 @@ export const TEMPLATES: Template[] = [
     slug: "form-receipt",
     industry: "form",
     icon: "Receipt",
-    accent: "rose",
     bundled: true,
     title: {
       en: "Receipt",
@@ -700,6 +689,7 @@ export const TEMPLATES: Template[] = [
         version: 1,
         name: "Receipt",
         category: "Form",
+      display: "page",
         parameters: [
           { name: "receiptNumber", label: "Receipt #", type: "string", default: "R-2026-0098", required: true },
           { name: "issueDate",     label: "Date",      type: "date",   default: "2026-04-23",  required: true },

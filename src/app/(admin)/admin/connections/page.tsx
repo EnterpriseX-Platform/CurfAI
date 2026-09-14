@@ -24,10 +24,10 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-const KIND_META: Record<string, { label: string; icon: typeof Database; tone: string }> = {
-  postgres:   { label: "Postgres",   icon: Database,   tone: "from-primary-soft to-primary-soft text-primary-ink border-primary/30" },
-  salesforce: { label: "Salesforce", icon: Cloud,      tone: "from-primary-soft to-primary-soft text-primary-ink border-primary/30" },
-  stripe:     { label: "Stripe",     icon: CreditCard, tone: "from-primary-soft to-primary-soft text-primary-ink border-primary/30" },
+const KIND_META: Record<string, { label: string; icon: typeof Database }> = {
+  postgres:   { label: "Postgres",   icon: Database },
+  salesforce: { label: "Salesforce", icon: Cloud },
+  stripe:     { label: "Stripe",     icon: CreditCard },
 };
 
 export default async function ConnectionsPage() {
@@ -103,14 +103,14 @@ export default async function ConnectionsPage() {
         ) : (
           <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
             {connections.map((c) => {
-              const meta = KIND_META[c.kind] ?? { label: c.kind, icon: Database, tone: "from-muted to-muted/40 text-foreground border-border" };
+              const meta = KIND_META[c.kind] ?? { label: c.kind, icon: Database };
               const Icon = meta.icon;
               const run = latestRuns[c.id];
               const count = jobCounts[c.id] ?? 0;
               return (
                 <li key={c.id} className="group">
                   <Link href={`/admin/connections/${c.id}/syncs`} className="flex items-center gap-4 px-5 py-4 transition hover:bg-accent/30">
-                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border bg-gradient-to-br ${meta.tone}`}>
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
                       <Icon className="h-5 w-5" />
                     </span>
                     <div className="min-w-0 flex-1">

@@ -72,7 +72,7 @@ export default async function ReleaseLogPage() {
             href="/admin/roadmap-status"
             className="mb-8 flex items-center gap-3 rounded-lg border border-border p-4 hover:bg-muted/50"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <ClipboardCheck className="h-4 w-4" />
             </span>
             <div className="min-w-0 flex-1">

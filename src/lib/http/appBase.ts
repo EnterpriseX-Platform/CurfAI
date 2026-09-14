@@ -29,6 +29,17 @@ export function appBase(req: NextRequest): string {
  * next/headers — no NextRequest to read req.url from, so the last resort is
  * NEXTAUTH_URL's own default rather than a request URL.
  */
+/**
+ * Origin the server uses to call ITSELF — the PDF and XLSX renderers open
+ * the viewer in headless Chromium. INTERNAL_BASE_URL wins (a cluster-local
+ * address that skips the ingress), then the public NEXTAUTH_URL, then the
+ * dev default. Without this, an instance on any port but 3100 could not
+ * export a PDF.
+ */
+export function internalBase(): string {
+  return process.env.INTERNAL_BASE_URL ?? process.env.NEXTAUTH_URL ?? "http://localhost:3100";
+}
+
 export function appBaseFromHeaders(): string {
   const h = headers();
   const proto = h.get("x-forwarded-proto");

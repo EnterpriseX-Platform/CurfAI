@@ -550,7 +550,7 @@ function DashboardForm({
 
         {/* Chart Only — sub-layout picker */}
         {layout === "chart_only" && (
-          <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+          <div className="mt-3 rounded-md border border-border bg-muted/30 p-3">
             <p className="mb-2 text-xs font-medium text-foreground">{t("dashboardsMgr.chartMode")}</p>
             <div className="grid grid-cols-3 gap-2">
               <label className={`cursor-pointer rounded-md border-2 p-2 text-center transition-colors ${chartSubLayout === "carousel" ? "border-primary bg-primary/10" : "border-transparent bg-muted/30 hover:bg-accent/50"}`}>

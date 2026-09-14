@@ -4,6 +4,7 @@
  * same <ReportDocument>: what you see is exactly what's printed.
  */
 import puppeteer from "puppeteer";
+import { internalBase } from "@/lib/http/appBase";
 
 const PAGE_SIZE_MAP: Record<string, string> = {
   A4: "A4",
@@ -27,7 +28,7 @@ export type PdfOptions = {
 };
 
 export async function renderPdf(opts: PdfOptions): Promise<Buffer> {
-  const baseUrl = process.env.INTERNAL_BASE_URL ?? "http://localhost:3100";
+  const baseUrl = internalBase();
   const url = new URL(`/reports/${opts.reportId}`, baseUrl);
   url.searchParams.set("print", "1");
   for (const [k, v] of Object.entries(opts.params ?? {})) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { ee } from "@/ee";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const u = await requireAdmin(req);
@@ -71,6 +72,9 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     where: { userId: target.user.id, tenantId: u.tenantId },
   });
   await prisma.membership.delete({ where: { userId_tenantId: { userId: target.user.id, tenantId: u.tenantId } } });
+  // Seat billing follows the membership change; best-effort, the hourly
+  // reconcile in the paid cron covers a missed call.
+  void ee.billing?.syncSeats(u.tenantId).catch(() => null);
 
   const remaining = await prisma.membership.count({ where: { userId: target.user.id } });
   if (remaining === 0) {

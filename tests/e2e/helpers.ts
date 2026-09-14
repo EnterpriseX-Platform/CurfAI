@@ -41,7 +41,13 @@ export async function signupTenant(req: APIRequestContext, args: {
   password: string;
   name?: string;
 }): Promise<{ tenantId: string; userId: string; slug: string }> {
+  // /api/signup allows five sign-ups per client IP per five minutes. The
+  // suite creates one tenant per spec from one machine, so present each
+  // sign-up as its own client — the limiter keys on the first hop of
+  // X-Forwarded-For, exactly as it would behind an ingress.
+  const octet = () => 1 + Math.floor(Math.random() * 250);
   const r = await req.post("/api/signup", {
+    headers: { "x-forwarded-for": `10.${octet()}.${octet()}.${octet()}` },
     data: {
       workspace: args.workspace,
       email: args.email,

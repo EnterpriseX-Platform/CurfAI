@@ -20,8 +20,6 @@ export type PickerKind = DataSourceKind | "hubspot" | "zendesk";
 // to show the form fields or an UpgradeLock card. Free kinds aren't in the
 // map — the helpers below treat "no entry" as "always available".
 export const KIND_FEATURE: Partial<Record<DataSourceKind, FeatureKey>> = {
-  postgres:  "connector.postgres",
-  mysql:     "connector.mysql",
   snowflake: "connector.snowflake",
   bigquery:  "connector.bigquery",
   sftp:      "connector.sftp",

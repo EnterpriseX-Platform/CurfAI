@@ -888,6 +888,15 @@ export const ReportSchema = z.object({
    */
   theme: ThemeSchema.optional(),
   /**
+   * How the interactive viewer lays the report out. "dashboard" puts the
+   * grid straight on the app's ground at full width — right for KPI and
+   * chart reports. "page" draws the A4 / Letter sheets the report was
+   * designed on — right for documents: invoices, receipts, memos,
+   * statements. Exports, the designer and share links always use the
+   * sheets. Unset: see reportDisplay() below.
+   */
+  display: z.enum(["dashboard", "page"]).optional(),
+  /**
    * Optional report-level chart style. When unset, renderers fall back to the
    * tenant default and then "classic" — so a report saved before this field
    * existed keeps rendering exactly as it did.
@@ -930,4 +939,17 @@ export function emptyReport(name = "Untitled Report"): Report {
 
 export function parseReport(raw: unknown): Report {
   return ReportSchema.parse(raw);
+}
+
+export type ReportDisplay = "dashboard" | "page";
+
+/**
+ * The viewer layout for a report. An explicit `display` wins; a report
+ * saved before the field existed is a page when it is a Form (the
+ * document templates: invoice, receipt, memo, statement, purchase order)
+ * and a dashboard otherwise — which is exactly how the viewer drew them.
+ */
+export function reportDisplay(report: Pick<Report, "display" | "category">): ReportDisplay {
+  if (report.display) return report.display;
+  return report.category === "Form" ? "page" : "dashboard";
 }

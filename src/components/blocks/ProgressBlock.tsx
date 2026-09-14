@@ -15,6 +15,23 @@ function toPct(raw: unknown, fallback: number): number {
   return Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
 }
 
+/**
+ * Per-row bar width for list mode — a ranked leaderboard ("Deposits by
+ * branch", "Top accounts"), not a progress-toward-100 indicator. valueField
+ * is almost never already a 0-100 percentage (it's money, counts, …), so
+ * naively clamping it the way single-bar mode does made every row with a
+ * value over 100 draw a full bar — e.g. every branch showing "100%"
+ * regardless of its actual deposit balance. Normalize against the largest
+ * value in the visible rows instead, so the top row is full and the rest
+ * are proportional, matching the standard leaderboard-bar convention.
+ */
+export function computeListPct(rows: Array<Record<string, unknown>>, valueField: string | undefined): number[] {
+  if (!valueField) return rows.map(() => 0);
+  const values = rows.map((row) => Number(row[valueField]));
+  const maxVal = values.reduce((m, n) => (Number.isFinite(n) && n > m ? n : m), 0);
+  return values.map((n) => (maxVal > 0 && Number.isFinite(n) ? toPct((n / maxVal) * 100, 0) : 0));
+}
+
 function Bar({ pct, c }: { pct: number; c: (typeof COLORS)[string] }) {
   return (
     <div className={`h-2.5 w-full overflow-hidden rounded-full ${c.track}`}>
@@ -40,11 +57,12 @@ export function ProgressBlock({ block, dataset, bare }: BlockRenderContext) {
   // to title each row with; otherwise there is nothing to distinguish them.
   if (queryId && labelField) {
     const rows = (dataset[queryId] ?? []).slice(0, maxRows ?? 10);
+    const pcts = computeListPct(rows, valueField);
     return (
       <div className="flex h-full flex-col gap-3 overflow-auto rounded-lg border border-border bg-card p-4">
         {label && <div className="text-xs font-medium text-muted-foreground">{label}</div>}
         {rows.map((row, i) => {
-          const pct = toPct(valueField ? row[valueField] : undefined, 0);
+          const pct = pcts[i];
           const description = descriptionField ? row[descriptionField] : null;
           return (
             <div key={i} className="flex flex-col gap-1.5">

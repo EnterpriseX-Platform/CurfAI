@@ -5,6 +5,7 @@ import { signOut, useSession } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  Cpu,
   FileText, Database, LogOut, ChevronDown, Plus, Search, LayoutTemplate, Clock,
   Shield, ShieldCheck, Users, Radio, KeyRound, History, Building2, Check, CreditCard, Sparkles,
   Monitor, Mail, Layers, Activity, Webhook, Globe, Zap, Bot, NotebookText,
@@ -29,7 +30,6 @@ import { eeClient } from "@/ee/client";
 /** Community edition: paid nav, palette and count badges are absent. */
 const IS_COMMUNITY = eeClient.edition === "community";
 import { CurfLogo } from "@/components/common/CurfLogo";
-import { isPlatformAdmin } from "@/lib/platformAdmin";
 import { onNavCountsRefresh } from "@/lib/navCounts";
 import { useResilientSession } from "@/lib/useResilientSession";
 import { RELEASE_LOG } from "@/lib/releaseLog";
@@ -162,13 +162,20 @@ function Sidebar() {
   // See useResilientSession() for why this isn't a plain useSession() call:
   // it self-heals next-auth's client from a stuck-null-session state (the
   // "sidebar menu disappeared" bug) instead of requiring a hard refresh.
-  const { role, email: sessionEmail } = useResilientSession();
-  // Platform-admin (NOT tenant-admin) — only Anthropic ops staff. Email-based
-  // check via @/lib/platformAdmin so the same predicate guards the route + the
-  // sidebar entry. Session email now comes from the server-seeded session
-  // (see useResilientSession.ts), so it's already correct on first paint —
-  // no hydration gate needed to avoid an SSR/CSR mismatch.
-  const isPlatAdmin = sessionEmail ? isPlatformAdmin(sessionEmail) : false;
+  const { role, session } = useResilientSession();
+  // Platform-admin (NOT tenant-admin) — only Curf ops staff. Read straight
+  // off the session's own `isPlatformAdmin` (baked in server-side by
+  // auth.ts's jwt callback, same computation @/lib/platformAdmin does for
+  // the route guards) rather than calling isPlatformAdmin(email) here.
+  // That function reads CURF_PLATFORM_ADMIN_EMAILS, a server-only env var:
+  // Next still server-renders this "use client" component once for the
+  // initial HTML, where that env var IS set, but the same code then runs
+  // again in the browser bundle where it's stripped — so the two passes
+  // disagreed on whether these nav items exist at all, a guaranteed
+  // hydration mismatch on every page for any platform-admin session. The
+  // session itself doesn't have this problem: it's fetched the same way
+  // on both passes (see useResilientSession.ts), exactly like `role`.
+  const isPlatAdmin = !!(session?.user as any)?.isPlatformAdmin;
   const [counts, setCounts] = useState<{
     reports?: number; sources?: number; dashboards?: number; onScreen?: number;
     notebooks?: number; templates?: number; decisions?: number; metrics?: number;
@@ -386,6 +393,8 @@ function Sidebar() {
         ...(isPlatAdmin ? [
           { href: "/admin/waitlist", label: t("nav.waitlist"), icon: Mail,
             match: (p: string) => p.startsWith("/admin/waitlist") } as NavItemExt,
+          { href: "/admin/platform/ai-costs", label: t("nav.aiCosts"), icon: Cpu,
+            match: (p: string) => p.startsWith("/admin/platform/ai-costs") } as NavItemExt,
         ] : []),
         // Tenant settings — rolls in old "Brief settings" + "Digest" as
         // tabs on the same page (settings, branding, brief config, digest).

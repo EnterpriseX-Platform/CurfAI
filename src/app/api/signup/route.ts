@@ -7,6 +7,7 @@ import { recordAudit } from "@/lib/audit";
 import { provisionStarterPack } from "@/lib/tenant/provision";
 import { ee } from "@/ee";
 import { ensureLimit } from "@/lib/rateLimit";
+import { clientIp } from "@/lib/security/clientIp";
 
 export const dynamic = "force-dynamic";
 
@@ -64,9 +65,7 @@ export async function POST(req: NextRequest) {
   // Rate-limit by IP — signup creates a new tenant + admin user per call,
   // so an unbounded loop is both an abuse vector and a resource-exhaustion
   // risk, not just an inconvenience.
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? req.headers.get("x-real-ip")
-    ?? "unknown";
+  const ip = clientIp(req);
   const limited = ensureLimit("signup", `ip:${ip}`, 5, 5 * 60_000);
   if (limited) return limited;
 

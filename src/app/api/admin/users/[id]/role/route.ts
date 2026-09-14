@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireAdmin, MEMBERSHIP_ROLES } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { ee } from "@/ee";
 
 /**
  * PATCH /api/admin/users/:id/role
@@ -46,6 +47,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     where: { userId_tenantId: { userId: params.id, tenantId: user.tenantId } },
     data: { role: parsed.data.authRole },
   });
+  // Seat billing follows the role change (editor <-> viewer); best-effort,
+  // the hourly reconcile in the paid cron covers a missed call.
+  void ee.billing?.syncSeats(user.tenantId).catch(() => null);
   if (parsed.data.resetPassword) {
     await prisma.user.update({
       where: { id: params.id },

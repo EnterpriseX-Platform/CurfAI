@@ -22,9 +22,11 @@ import { openaiDriver } from "./providers/openai";
 import { geminiDriver } from "./providers/gemini";
 import { openaiCompatibleDriver } from "./providers/openai-compatible";
 import { getLlmCredentials } from "./credentials";
-import { computeMicroCost } from "./pricing";
+import { computeMicroCost, computeMicroCostMetered } from "./pricing";
 import { hasEnvLlm } from "./credentials";
 import { llmTokens } from "@/lib/metrics";
+import { requireAiCredits } from "@/lib/billing";
+import type { NextResponse } from "next/server";
 import type { LlmDriver, LlmRequest, LlmResponse, ProviderId } from "./types";
 
 const DRIVERS: Record<ProviderId, LlmDriver> = {
@@ -97,9 +99,41 @@ export function isFastKind(kind: string): boolean {
   return FAST_KIND_PREFIXES.some((p) => kind === p || kind.startsWith(p + ".") || kind.startsWith(p + "_"));
 }
 
+/**
+ * The 402 an API route should return before it makes a model call on the
+ * workspace's behalf, or null when the call may proceed. Only calls on
+ * Curf's own key (env credentials) draw down the workspace's AI credits;
+ * a workspace on its own key is never metered.
+ */
+export async function requireAiCreditsFor(tenantId: string): Promise<NextResponse | null> {
+  const creds = await getLlmCredentials(tenantId);
+  if (!creds || creds.source !== "env") return null;
+  return requireAiCredits(tenantId);
+}
+
+export const AI_CREDITS_EXHAUSTED = "AI_CREDITS_EXHAUSTED";
+
 export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
   const creds = await getLlmCredentials(req.tenantId);
   if (!creds) return notConfiguredResponse(req);
+
+  // Every call on Curf's key is metered here, so a feature that forgets
+  // its route-level check still can't spend past the allowance.
+  if (creds.source === "env" && req.tenantId) {
+    const block = await requireAiCredits(req.tenantId);
+    if (block) {
+      const body = await block.json().catch(() => ({}));
+      return {
+        text: "",
+        provider: creds.provider,
+        model: "",
+        status: "failed",
+        error: `${AI_CREDITS_EXHAUSTED}: ${body?.error ?? "AI credits for this month are used up."}`,
+        usage: { inputTokens: 0, outputTokens: 0 },
+        durationMs: 0,
+      };
+    }
+  }
 
   const driver = DRIVERS[creds.provider];
   if (!driver) {
@@ -183,7 +217,9 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
       resp.usage.inputTokens + resp.usage.outputTokens,
     );
     setImmediate(() => {
-      const microCostUsd = computeMicroCost({
+      // A call on Curf's key draws down AI credits, so its cost must never
+      // be null; a workspace's own key is only reported, never metered.
+      const microCostUsd = (creds.source === "env" ? computeMicroCostMetered : computeMicroCost)({
         provider: resp.provider,
         model: resp.model,
         inputTokens: resp.usage.inputTokens,
@@ -203,6 +239,7 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
           cacheReadTokens: resp.usage.cacheReadTokens ?? 0,
           cacheCreateTokens: resp.usage.cacheCreateTokens ?? 0,
           microCostUsd,
+          keySource: creds.source === "env" ? "platform" : "tenant",
           reportId: req.reportId ?? null,
           durationMs: resp.durationMs,
           status: resp.status,

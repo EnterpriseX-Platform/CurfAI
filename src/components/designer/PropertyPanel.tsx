@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { BlockRegistry } from "@/components/blocks";
+import { BLOCK_META as BlockRegistry } from "@/components/blocks/registryMeta";
 import { ColumnsEditor } from "./ColumnsEditor";
 import { AnnotationsEditor } from "./AnnotationsEditor";
 import { GaugeZonesEditor } from "./GaugeZonesEditor";

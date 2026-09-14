@@ -108,6 +108,12 @@ export type EeRegistry = {
     verifyInviteToken: (token: string) => Promise<{ id: string; email: string; workspaceName: string | null } | null>;
   };
 
+  /** Seat billing (Stripe). Community routes call this after a membership
+   *  change; absent in the Community edition, where nothing is billed. */
+  billing?: {
+    syncSeats: (tenantId: string) => Promise<unknown>;
+  };
+
   /** Curf's own operators (roadmap page). */
   operator?: {
     roadmapMismatchCount: () => number;

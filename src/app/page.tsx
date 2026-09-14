@@ -26,7 +26,7 @@ export default async function Home() {
       teaserTemplates={TEMPLATES.slice(0, 3).map((t) => {
         const built = t.build();
         return {
-          slug: t.slug, icon: t.icon, accent: t.accent,
+          slug: t.slug, icon: t.icon,
           title: t.title, description: t.description, industry: t.industry,
           blocks: built.pages[0]?.blocks ?? [],
         };

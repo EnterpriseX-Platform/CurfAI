@@ -10,16 +10,37 @@ type Db = PrismaClient | Tx;
 
 /** Where a 402 sends the user: in-app billing on Cloud, the pricing page for Community. */
 export const UPGRADE_URL = EDITION === "community" ? "https://curf.ai/pricing/" : "/admin/billing";
+
+/**
+ * Self-serve paid plans start with a free trial of this many days. It is
+ * granted once per workspace — at checkout, only when the tenant has never
+ * held a Stripe subscription — so cancelling and re-subscribing does not
+ * restart the clock. Stripe reports the subscription as `trialing` until
+ * the trial ends, and tierFromSubscription() treats that like `active`.
+ * curf.ai's pricing page and Terms §3 quote this number; keep them in step.
+ */
+export const TRIAL_DAYS = 14;
+
+/** Whether a workspace still qualifies for the free trial at checkout. */
+export function trialEligible(tenant: { stripeSubscriptionId: string | null; stripeStatus: string | null }): boolean {
+  return !tenant.stripeSubscriptionId && !tenant.stripeStatus;
+}
 /** Count-based quotas are Cloud's free-tier ceilings; self-hosted Community has none. */
 const COUNT_QUOTAS_APPLY = EDITION !== "community";
 
 /**
  * Subscription tiers, feature gates, and the Stripe price catalog.
  *
- * Four plans (marketing-aligned slugs):
- *   community  - explore-mode. 1 workspace, 5 reports, no schedules, no API keys.
- *   growth     - $29/mo. Unlimited reports + schedules. Comments, share links, embeds.
- *   business   - $99/mo. Everything in Growth + watchers, API keys, SSO, audit log.
+ * Four plans (marketing-aligned slugs), priced per seat with two seat
+ * kinds — editors (admin, developer) build; viewers (executive, viewer)
+ * read — plus a pooled monthly AI-credit allowance (1 credit = 1 cent of
+ * model cost at list price, metered in lib/llm/index.ts):
+ *   community  - free. 5 reports, 1 dashboard, 100 AI credits.
+ *   growth     - $49 / editor, $9 / viewer (first 10 free). 500 credits per
+ *                editor + 50 per viewer, pooled.
+ *   business   - $99 / editor (minimum 5), $15 / viewer. 2,000 credits per
+ *                editor + 100 per viewer; unmetered with the workspace's
+ *                own key (gov.tenant_anthropic_key).
  *   enterprise - dedicated single-tenant infra + custom retention/SLA.
  *
  * The `tier` lives on Tenant.tier (string) and is updated by the Stripe
@@ -33,10 +54,8 @@ const COUNT_QUOTAS_APPLY = EDITION !== "community";
  * Adding a new tier or feature flag is a 4-step change:
  *   1. Add the slug to Tier below.
  *   2. Add a TIER_LEVEL entry.
- *   3. Add a row to PLANS with price + features.
- *   4. Add the price id to env (STRIPE_PRICE_TEAM, STRIPE_PRICE_BUSINESS, ...).
- *      Note: env-var names retain the historical TEAM suffix for deployment
- *      backward-compat — only the internal tier string changed (team→growth).
+ *   3. Add a row to PLANS with seats, credits + features.
+ *   4. Add the two price ids to env (STRIPE_PRICE_<TIER>_EDITOR / _VIEWER).
  */
 
 export type Tier = "community" | "growth" | "business" | "enterprise";
@@ -54,10 +73,11 @@ export type PlanFeatures = {
   apps: number;
   /** Hard cap on watcher schedules per tenant. 0 = watchers disabled. */
   watchersMax: number;
-  /** Hard cap on /api/reports/generate calls per tenant per rolling 30 days.
-   *  Each Generate call costs Anthropic dollars, so this is the most cost-
-   *  sensitive quota in the matrix. Infinity = unlimited. */
-  generateCallsPerMonth: number;
+  /** Monthly AI allowance on Curf's own key, in credits (1 credit = 1 cent
+   *  of model cost at list price), pooled per workspace: base + per seat.
+   *  Enforced in lib/llm/index.ts against LlmTokenUsage; a workspace on
+   *  its own key is not metered. Infinity = unmetered. */
+  aiCredits: { base: number; perEditor: number; perViewer: number };
   /** Hard cap on active (non-revoked, non-expired) public share tokens.
    *  Community is small to discourage redistribution; Growth and Business are open. */
   shareLinksMax: number;
@@ -80,25 +100,36 @@ export type Plan = {
   tier: Tier;
   name: string;
   tagline: string;
-  priceMonthlyUsd: number;
-  /** Stripe price id env var name. Set the actual price id in deployment env. */
-  priceEnvVar: string | null;
+  /** Seat pricing. Null for plans that aren't sold per seat (community, enterprise). */
+  seats: {
+    editorUsd: number;
+    viewerUsd: number;
+    /** Viewers included before the per-viewer price applies. */
+    freeViewers: number;
+    /** Billed editor seats never drop below this — the plan's floor. */
+    minEditors: number;
+  } | null;
+  /** Env var names holding the Stripe price ids for each seat kind. */
+  priceEnvVars: { editor: string; viewer: string } | null;
   features: PlanFeatures;
 };
+
+/** Which membership roles are billed as editors; every other role is a viewer. */
+export const EDITOR_ROLES: readonly string[] = ["admin", "developer"];
 
 export const PLANS: Plan[] = [
   {
     tier: "community",
     name: "Community",
     tagline: "Try the designer, ship 5 reports, schedule them by email.",
-    priceMonthlyUsd: 0,
-    priceEnvVar: null,
+    seats: null,
+    priceEnvVars: null,
     features: {
       reports: 5,
       dashboards: 1,
       apps: 0,
       watchersMax: 0,
-      generateCallsPerMonth: 10,
+      aiCredits: { base: 100, perEditor: 0, perViewer: 0 },
       shareLinksMax: 3,
       auditLogRetentionDays: 7,
       schedules: Infinity,
@@ -115,14 +146,14 @@ export const PLANS: Plan[] = [
     tier: "growth",
     name: "Growth",
     tagline: "Unlimited reports, the trust layer, Analytic Apps.",
-    priceMonthlyUsd: 29,
-    priceEnvVar: "STRIPE_PRICE_TEAM",
+    seats: { editorUsd: 49, viewerUsd: 9, freeViewers: 10, minEditors: 1 },
+    priceEnvVars: { editor: "STRIPE_PRICE_GROWTH_EDITOR", viewer: "STRIPE_PRICE_GROWTH_VIEWER" },
     features: {
       reports: 50,
       dashboards: 10,
       apps: 3,
       watchersMax: 10,
-      generateCallsPerMonth: 100,
+      aiCredits: { base: 0, perEditor: 500, perViewer: 50 },
       shareLinksMax: 50,
       auditLogRetentionDays: 30,
       schedules: Infinity,
@@ -139,14 +170,14 @@ export const PLANS: Plan[] = [
     tier: "business",
     name: "Business",
     tagline: "Everything in Growth + AI captions, watchers, audit log, custom OIDC.",
-    priceMonthlyUsd: 99,
-    priceEnvVar: "STRIPE_PRICE_BUSINESS",
+    seats: { editorUsd: 99, viewerUsd: 15, freeViewers: 0, minEditors: 5 },
+    priceEnvVars: { editor: "STRIPE_PRICE_BUSINESS_EDITOR", viewer: "STRIPE_PRICE_BUSINESS_VIEWER" },
     features: {
       reports: Infinity,
       dashboards: Infinity,
       apps: Infinity,
       watchersMax: Infinity,
-      generateCallsPerMonth: Infinity,
+      aiCredits: { base: 0, perEditor: 2000, perViewer: 100 },
       shareLinksMax: Infinity,
       auditLogRetentionDays: 365,
       schedules: Infinity,
@@ -163,15 +194,15 @@ export const PLANS: Plan[] = [
     tier: "enterprise",
     name: "Enterprise",
     tagline: "Everything in Business + dedicated single-tenant infra, custom retention/SLA.",
-    priceMonthlyUsd: 0,
     // No self-serve Stripe price — enterprise is sold + provisioned manually.
-    priceEnvVar: null,
+    seats: null,
+    priceEnvVars: null,
     features: {
       reports: Infinity,
       dashboards: Infinity,
       apps: Infinity,
       watchersMax: Infinity,
-      generateCallsPerMonth: Infinity,
+      aiCredits: { base: Infinity, perEditor: 0, perViewer: 0 },
       shareLinksMax: Infinity,
       auditLogRetentionDays: Infinity,
       schedules: Infinity,
@@ -195,11 +226,59 @@ export function planForTier(tier: string | null | undefined): Plan {
   return PLAN_BY_TIER[(tier as Tier) ?? "community"] ?? PLAN_BY_TIER.community;
 }
 
-/** Stripe price id for `tier`, read from env at request time. Empty when unset. */
-export function priceIdForTier(tier: Tier): string | null {
+/** Stripe price ids for a tier's two seat kinds, read from env at request
+ *  time. Null when the plan isn't sold per seat or either id is unset. */
+export function priceIdsForTier(tier: Tier): { editor: string; viewer: string } | null {
   const plan = PLAN_BY_TIER[tier];
-  if (!plan?.priceEnvVar) return null;
-  return process.env[plan.priceEnvVar] ?? null;
+  if (!plan?.priceEnvVars) return null;
+  const editor = process.env[plan.priceEnvVars.editor];
+  const viewer = process.env[plan.priceEnvVars.viewer];
+  return editor && viewer ? { editor, viewer } : null;
+}
+
+/** The tier a Stripe price id belongs to, or null if it isn't one of ours. */
+export function tierForPriceId(priceId: string): Tier | null {
+  for (const plan of PLANS) {
+    const ids = priceIdsForTier(plan.tier);
+    if (ids && (ids.editor === priceId || ids.viewer === priceId)) return plan.tier;
+  }
+  return null;
+}
+
+export type SeatCounts = { editors: number; viewers: number };
+
+/** Editors and viewers in a workspace, by membership role. */
+export async function countSeats(tenantId: string, db: Db = prisma): Promise<SeatCounts> {
+  const rows = await db.membership.groupBy({ by: ["role"], where: { tenantId }, _count: { _all: true } });
+  let editors = 0, viewers = 0;
+  for (const r of rows) {
+    if (EDITOR_ROLES.includes(r.role)) editors += r._count._all;
+    else viewers += r._count._all;
+  }
+  return { editors, viewers };
+}
+
+/** What Stripe bills for these seats on this plan: the editor floor
+ *  applies, and the plan's free viewers come off the viewer count. */
+export function billableSeats(plan: Plan, seats: SeatCounts): SeatCounts {
+  if (!plan.seats) return { editors: 0, viewers: 0 };
+  return {
+    editors: Math.max(seats.editors, plan.seats.minEditors),
+    viewers: Math.max(0, seats.viewers - plan.seats.freeViewers),
+  };
+}
+
+/** Monthly list price for these seats on this plan, in USD. */
+export function monthlyPriceUsd(plan: Plan, seats: SeatCounts): number {
+  if (!plan.seats) return 0;
+  const b = billableSeats(plan, seats);
+  return b.editors * plan.seats.editorUsd + b.viewers * plan.seats.viewerUsd;
+}
+
+/** The workspace's pooled monthly AI-credit allowance on this plan. */
+export function aiCreditsPerMonth(plan: Plan, seats: SeatCounts): number {
+  const c = plan.features.aiCredits;
+  return c.base + c.perEditor * seats.editors + c.perViewer * seats.viewers;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,42 +419,70 @@ export async function requireAppQuota(user: CurfSessionUser, db: Db = prisma): P
   );
 }
 
-/**
- * Block an `/api/reports/generate` call when the tenant is past its
- * monthly Generate quota. Community = 10/mo, Growth = 100/mo, Business = unlimited.
- *
- * "Month" here is a rolling 30-day window, computed from AuditEvent rows
- * with kind="report.generate". This is approximate (audit gaps could
- * undercount) but cheap — no extra usage table needed.
- */
-export async function requireGenerateQuota(user: CurfSessionUser): Promise<NextResponse | null> {
-  if (!COUNT_QUOTAS_APPLY) return null;
-  const tier = await loadTenantTier(user.tenantId);
+// ---------------------------------------------------------------------------
+// AI credits — the one AI quota. 1 credit = 1 cent of model cost at list
+// price (LlmTokenUsage.microCostUsd / 10_000), pooled per workspace, reset
+// on the first of each calendar month. Only calls made on Curf's own key
+// count: lib/llm/index.ts skips the check when the workspace supplies its
+// own key, and the Community edition never meters.
+// ---------------------------------------------------------------------------
+
+export const MICRO_USD_PER_CREDIT = 10_000;
+
+export type AiCreditStatus = {
+  tier: Tier;
+  /** Monthly allowance for this workspace's plan and seats. Infinity = unmetered. */
+  allowance: number;
+  /** Credits spent since the first of the month, rounded up. */
+  used: number;
+  remaining: number;
+  /** ISO date the allowance resets. */
+  resetsAt: string;
+};
+
+export function monthStart(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+/** Month-to-date AI spend and allowance for a workspace. */
+export async function aiCreditStatus(tenantId: string, db: Db = prisma): Promise<AiCreditStatus> {
+  const tier = await loadTenantTier(tenantId, db);
   const plan = planForTier(tier);
-  if (!Number.isFinite(plan.features.generateCallsPerMonth)) return null;
-  const since = new Date(Date.now() - 30 * 24 * 3600_000);
-  // Deliberately no try/catch — requireReportQuota/requireDashboardQuota/
-  // requireWatcherQuota above don't swallow their count() errors either,
-  // and this one guards a real LLM-cost call. AuditEvent has existed since
-  // the original baseline schema and the k8s initContainer runs
-  // `prisma db push` before the app container ever starts, so a query
-  // failure here means a real (transient) DB problem, not a missing
-  // table — and defaulting an unverifiable count to "0 used, allow" would
-  // silently uncap the quota on exactly that kind of error.
-  const count = await prisma.auditEvent.count({
-    where: {
-      tenantId: user.tenantId,
-      kind: "report.generate",
-      createdAt: { gte: since },
-    },
-  });
-  if (count < plan.features.generateCallsPerMonth) return null;
+  const since = monthStart();
+  const next = new Date(Date.UTC(since.getUTCFullYear(), since.getUTCMonth() + 1, 1));
+  const [seats, spent] = await Promise.all([
+    countSeats(tenantId, db),
+    db.llmTokenUsage.aggregate({
+      _sum: { microCostUsd: true },
+      // Only calls on Curf's key draw down credits.
+      where: { tenantId, keySource: "platform", createdAt: { gte: since } },
+    }),
+  ]);
+  const allowance = aiCreditsPerMonth(plan, seats);
+  const used = Math.ceil((spent._sum.microCostUsd ?? 0) / MICRO_USD_PER_CREDIT);
+  return { tier, allowance, used, remaining: Math.max(0, allowance - used), resetsAt: next.toISOString() };
+}
+
+/**
+ * Whether the workspace may make another call on Curf's key. Null when it
+ * may; otherwise the 402 body an API route should return. Deliberately no
+ * try/catch: this guards a real model-cost call, and treating an
+ * unverifiable count as "0 used" would uncap the allowance on exactly the
+ * kind of DB error that should stop it.
+ */
+export async function requireAiCredits(tenantId: string, db: Db = prisma): Promise<NextResponse | null> {
+  if (!COUNT_QUOTAS_APPLY) return null;
+  const status = await aiCreditStatus(tenantId, db);
+  if (!Number.isFinite(status.allowance) || status.used < status.allowance) return null;
+  const plan = planForTier(status.tier);
   return NextResponse.json(
     {
-      error: "AI Generate quota reached for the " + plan.name + " plan (" + plan.features.generateCallsPerMonth + " calls / 30 days).",
-      currentTier: tier,
-      requiredTier: tier === "community" ? "growth" : "business",
+      error: `AI credits for this month are used up (${status.allowance} on the ${plan.name} plan). They reset on ${status.resetsAt.slice(0, 10)}.`,
+      code: "ai_credits_exhausted",
+      currentTier: status.tier,
+      requiredTier: status.tier === "community" ? "growth" : "business",
       upgradeUrl: UPGRADE_URL,
+      credits: status,
     },
     { status: 402 },
   );

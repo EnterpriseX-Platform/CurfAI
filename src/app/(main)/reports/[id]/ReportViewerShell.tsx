@@ -23,10 +23,12 @@ import { WhatIsThisBadge } from "@/components/viewer/WhatIsThisBadge";
 import { OnboardingTour } from "@/components/viewer/OnboardingTour";
 import { PresenceChip } from "./PresenceChip";
 import { OperateActionsProvider } from "@/components/providers/OperateActionsProvider";
-import { AskCurfPanel } from "./AskCurfPanel";
 import { eeClient } from "@/ee/client";
+import { reportDisplay } from "@/lib/reporting/schema";
 
 const WatcherSuggestionsBanner = eeClient.reports?.WatcherSuggestionsBanner ?? null;
+const AskCurfPanel = eeClient.reports?.AskCurfPanel ?? null;
+const IS_COMMUNITY = eeClient.edition === "community";
 const SuggestOperateActionsButton = eeClient.reports?.SuggestOperateActionsButton ?? null;
 const PublishToMarketplaceButton = eeClient.reports?.PublishToMarketplaceButton ?? null;
 import { AutoCurfPublishedBanner } from "./AutoCurfPublishedBanner";
@@ -454,7 +456,7 @@ export function ReportViewerShell({
             {/* Ask Curf — conversational analysis over this report. Hidden
                 during snapshots since the chat would otherwise reason
                 against the frozen dataset. */}
-            {!replayedAt && <AskCurfPanel reportId={reportId} currentParams={params} />}
+            {!replayedAt && AskCurfPanel && <AskCurfPanel reportId={reportId} currentParams={params} />}
             <ShareButton reportId={reportId} />
             {exportMenu}
             {isEditor && (
@@ -529,7 +531,7 @@ export function ReportViewerShell({
               tenantBrand={tenantBrand}
               tenantCurrency={tenantCurrency}
               locale={locale}
-              surface="canvas"
+              surface={reportDisplay(report) === "page" ? "paper" : "canvas"}
             />
           </DrillThroughContext.Provider>
         </div>
@@ -537,7 +539,7 @@ export function ReportViewerShell({
       <DrillPanel state={drill} onClose={closeDrill} />
       {/* Self-serve onboarding pill. Shows once per browser; user dismisses
           with "Got it, hide" and it stays gone via localStorage flag. */}
-      <WhatIsThisBadge />
+      {!IS_COMMUNITY && <WhatIsThisBadge />}
       {/* First-time tour: pulses through proof badge, drill chip, filter
           bar, and the explainer pill in order. Different localStorage flag
           from the badge — they coexist (tour fires once per browser, badge

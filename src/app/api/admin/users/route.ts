@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireAdmin, MEMBERSHIP_ROLES } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { mintAndSendInvite } from "@/lib/invites";
+import { ee } from "@/ee";
 
 /**
  * Admin user list + invite endpoint.
@@ -73,6 +74,9 @@ export async function POST(req: NextRequest) {
     const membership = await prisma.membership.create({
       data: { userId: existingUser.id, tenantId: u.tenantId, role: parsed.data.role },
     });
+  // Seat billing follows the membership change; best-effort, the hourly
+  // reconcile in the paid cron covers a missed call.
+  void ee.billing?.syncSeats(u.tenantId).catch(() => null);
 
     let emailStatus: "sent" | "skipped" | "failed" = "skipped";
     try {
@@ -134,6 +138,9 @@ export async function POST(req: NextRequest) {
   const membership = await prisma.membership.create({
     data: { userId: user.id, tenantId: u.tenantId, role: parsed.data.role },
   });
+  // Seat billing follows the membership change; best-effort, the hourly
+  // reconcile in the paid cron covers a missed call.
+  void ee.billing?.syncSeats(u.tenantId).catch(() => null);
 
   const minted = await mintAndSendInvite({
     tenantId: u.tenantId,

@@ -5,7 +5,7 @@
  */
 import { create } from "zustand";
 import { temporal } from "zundo";
-import { BlockRegistry } from "@/components/blocks";
+import { BLOCK_META as BlockRegistry } from "@/components/blocks/registryMeta";
 import {
   BlockConfigSchemas, type Block, type BlockType, type Report,
 } from "@/lib/reporting/schema";
@@ -39,7 +39,7 @@ type State = {
   updateBlockMeta: (id: string, patch: Record<string, unknown>) => void;
   removeBlock: (id: string) => void;
   duplicateBlock: (id: string) => void;
-  updateReportMeta: (patch: Partial<Pick<Report, "name" | "description" | "category" | "theme">>) => void;
+  updateReportMeta: (patch: Partial<Pick<Report, "name" | "description" | "category" | "theme" | "display">>) => void;
   addPage: () => void;
   removePage: (pageId: string) => void;
   setActivePage: (pageId: string) => void;

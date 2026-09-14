@@ -1263,11 +1263,16 @@ model LlmTokenUsage {
   // 'ok' | 'failed' — failed calls still cost input tokens sometimes.
   status            String   @default("ok")
   errorKind         String? // 'timeout' | 'rate_limit' | 'invalid_key' | etc.
+  // 'platform' — Curf's own key, metered against the workspace's AI
+  // credits and Curf's cost to track; 'tenant' — the workspace's own key,
+  // reported only.
+  keySource         String   @default("platform")
   createdAt         DateTime @default(now())
 
   @@index([tenantId, createdAt])
   @@index([tenantId, kind, createdAt])
   @@index([tenantId, provider, createdAt])
+  @@index([keySource, createdAt])
   @@index([reportId])
 }
 
@@ -1653,4 +1658,4 @@ model SyncRun {
 // Mapping from source-object → tenant-lake table. columnMapJson is the
 // authoritative source-column → lake-column map plus per-column type hints.
 // Lets users rename Salesforce.Opportunity.Owner_c → opp_owner without
-// touching their report SQL.
+// touching their report SQL.

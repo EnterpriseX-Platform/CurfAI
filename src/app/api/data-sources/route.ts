@@ -28,12 +28,10 @@ function resolveRestPreset(preset: z.infer<typeof RestPresetInputSchema>): { bas
   return r ? { baseUrl: r.baseUrl, headers: r.headers, presetKind: r.presetKind as "hubspot" | "zendesk" } : null;
 }
 
-// Map a connector kind to its tier-gating FeatureKey. Free kinds (sqlite,
-// rest, excel) aren't in the map — `?? null` lets POST skip the gate for
-// them without a separate branch.
+// Map a connector kind to its tier-gating FeatureKey. Community kinds
+// (sqlite, postgres, mysql, rest, excel) aren't in the map — `?? null` lets
+// POST skip the gate for them without a separate branch.
 const CONNECTOR_FEATURE: Record<string, FeatureKey> = {
-  postgres:  "connector.postgres",
-  mysql:     "connector.mysql",
   snowflake: "connector.snowflake",
   bigquery:  "connector.bigquery",
   sftp:      "connector.sftp",

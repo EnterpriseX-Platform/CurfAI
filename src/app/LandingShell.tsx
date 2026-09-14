@@ -16,7 +16,7 @@ import type { TemplateLocale } from "@/lib/templates/registry";
 import type { Block } from "@/lib/reporting/schema";
 
 type TeaserTemplate = {
-  slug: string; icon: string; accent: string; industry: string;
+  slug: string; icon: string; industry: string;
   title: Record<TemplateLocale, string>;
   description: Record<TemplateLocale, string>;
   blocks: Block[];

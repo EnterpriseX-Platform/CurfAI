@@ -3,7 +3,6 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, tenantWhere, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
-import { featureGate } from "@/lib/featureGate";
 
 const CreateSchema = z.object({
   reportId: z.string().min(1),
@@ -52,12 +51,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  // Schedules are a Team-tier feature. Free plans get the designer + manual
-  // exports. Switched from requireTier() to featureGate() so the 402 body
-  // includes the human label ("Schedules delivery") and routes through the
-  // same FEATURE_TIERS map as every other gated surface.
-  const block = await featureGate(user, "delivery.schedules");
-  if (block) return block;
+  // Scheduled delivery is Community (2026-09-13 decision) — no tier gate.
+  // Chat channels stay paid via intelligence.brief_delivery in the dispatcher.
   const body = await req.json().catch(() => null);
   const parsed = CreateSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });

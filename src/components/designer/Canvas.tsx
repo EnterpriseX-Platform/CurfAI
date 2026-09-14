@@ -213,7 +213,7 @@ function BlockHeaderChip({ block, selected }: { block: Block; selected?: boolean
 function EmptyCanvasGuide() {
   return (
     <div className="mx-auto flex max-w-lg min-h-[400px] flex-col items-center justify-center p-8 text-center">
-      <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-8 ring-primary/5">
+      <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <LayoutTemplate className="h-7 w-7" />
       </div>
       <h3 className="text-xl font-bold tracking-tight text-foreground">Let's build your first report!</h3>
@@ -223,7 +223,7 @@ function EmptyCanvasGuide() {
 
       <div className="grid w-full gap-4 sm:grid-cols-3">
         <div className="flex flex-col items-center text-center p-4 rounded-xl border border-border bg-card">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <MousePointerClick className="h-5 w-5" />
           </div>
           <h4 className="text-sm font-semibold">1. Pick & Drop</h4>
@@ -233,7 +233,7 @@ function EmptyCanvasGuide() {
         </div>
 
         <div className="flex flex-col items-center text-center p-4 rounded-xl border border-border bg-card">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <Database className="h-5 w-5" />
           </div>
           <h4 className="text-sm font-semibold">2. Connect Data</h4>
@@ -243,7 +243,7 @@ function EmptyCanvasGuide() {
         </div>
 
         <div className="flex flex-col items-center text-center p-4 rounded-xl border border-border bg-card">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <PlayCircle className="h-5 w-5" />
           </div>
           <h4 className="text-sm font-semibold">3. Preview</h4>

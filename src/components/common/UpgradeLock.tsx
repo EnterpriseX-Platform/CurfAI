@@ -102,7 +102,7 @@ export function UpgradeLock({
     return (
       <span
         className={
-          "inline-flex items-center gap-1 rounded-full border border-warning/60 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning    " +
+          "inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground " +
           (className ?? "")
         }
         title={t("upgradeLock.inlineTitleTemplate").replace("{feature}", featureLabel).replace("{plan}", requiredPlan.name)}
@@ -129,8 +129,8 @@ export function UpgradeLock({
         {/* Center overlay with the upgrade CTA. Blur backdrop so it floats
             cleanly over busy background content (e.g. a chart preview). */}
         <div className="absolute inset-0 z-10 grid place-items-center p-4">
-          <div className="max-w-sm rounded-2xl border border-warning/60 bg-background/95 p-5 text-center shadow-xl backdrop-blur-md ">
-            <div className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-full bg-warning/10 text-warning  ">
+          <div className="max-w-sm rounded-2xl border border-border bg-background/95 p-5 text-center shadow-xl backdrop-blur-md">
+            <div className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-full bg-muted text-muted-foreground">
               <Sparkles className="h-5 w-5" />
             </div>
             <p className="text-sm font-semibold text-foreground">
@@ -156,11 +156,11 @@ export function UpgradeLock({
   return (
     <div
       className={
-        "flex items-start gap-3 rounded-xl border border-warning/60 bg-warning/10 p-4   " +
+        "flex items-start gap-3 rounded-xl border border-border bg-card p-4 " +
         (className ?? "")
       }
     >
-      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-warning/10 text-warning  ">
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
         <Lock className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
@@ -168,11 +168,11 @@ export function UpgradeLock({
           {title ?? t("upgradeLock.titleTemplate").replace("{feature}", featureLabel).replace("{plan}", requiredPlan.name)}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {description ?? t("upgradeLock.cardDescTemplate").replace("{plan}", requiredPlan.name).replace("{price}", String(requiredPlan.priceMonthlyUsd)).replace("{tagline}", translatedTagline)}
+          {description ?? t("upgradeLock.cardDescTemplate").replace("{plan}", requiredPlan.name).replace("{price}", String(requiredPlan.seats?.editorUsd ?? 0)).replace("{tagline}", translatedTagline)}
         </p>
         <Link
           href={upgradeUrl}
-          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-warning hover:underline "
+          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
         >
           {t("upgradeLock.upgradeToUnlock")}
           <ArrowRight className="h-3 w-3" />

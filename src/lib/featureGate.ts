@@ -31,8 +31,6 @@ export const FEATURE_TIERS = {
   // split): an open-source Jasper replacement has to talk to a real database.
   // Kept as keys so the connector registry and UpgradeLock still have a
   // feature to name; a "community" gate always passes.
-  "connector.postgres":   "community",
-  "connector.mysql":      "community",
   "connector.snowflake":  "business",
   "connector.bigquery":   "business",
   "connector.sftp":       "growth",
@@ -63,7 +61,6 @@ export const FEATURE_TIERS = {
   "ai.forecast_accuracy": "business",
   "ai.compare_mode":   "growth",
   "ai.talks_back":     "growth",
-  "ai.generate_unlimited": "business", // Community=10/mo, Growth=100/mo, Business=∞
   "ai.suggest_charts": "growth",         // Claude looks at your data, proposes the next viz
   "ai.why_everywhere": "growth",         // Click any number → narrative explanation of what's driving it
   "ai.cross_workspace_ask": "business",  // Ask without picking a report first — fans out to several, costs more per question
@@ -97,8 +94,6 @@ export const FEATURE_TIERS = {
   // Scheduled email delivery is Community (same decision) — Jasper users
   // expect a scheduled PDF in their inbox. Slack / Teams / Discord and signed
   // webhooks stay Business via intelligence.brief_delivery / signed_webhooks.
-  "delivery.schedules":     "community",
-  "delivery.email_digest":  "community",
   "delivery.embed_iframe":  "growth",
 
   // ---- Governance / Enterprise ----
@@ -173,7 +168,7 @@ export function featureAvailable(currentTier: string | null | undefined, key: Fe
  * Friendly name for the 402 error body and the UpgradeLock UI. Strips the
  * area prefix and humanizes the rest.
  *
- *   "connector.postgres"        → "Postgres connector"
+ *   "connector.snowflake"       → "Snowflake connector"
  *   "viz.chart.sankey"          → "Sankey chart"
  *   "dashboard.kpi_ticker"      → "Dashboard KPI ticker"
  */
@@ -184,6 +179,8 @@ export function humanizeFeatureKey(key: FeatureKey): string {
   const context = parts.slice(0, -1).map((p) => p === "ai" ? "AI" : p).join(" ");
   // Capitalize first letter, leave rest as-is.
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  // Keys whose segments don't read as a label.
+  if (key === "gov.tenant_anthropic_key") return "Bringing your own AI key";
   if (context === "viz chart") return `${cap(main)} chart`;
   if (context === "viz") return `${cap(main)} visualization`;
   if (context === "connector") return `${cap(main)} connector`;
@@ -199,7 +196,7 @@ export function humanizeFeatureKey(key: FeatureKey): string {
  * Server-side gate. Returns null when the tenant has access; otherwise a
  * 402 NextResponse the API handler should return immediately.
  *
- *   const block = await featureGate(user, "connector.postgres");
+ *   const block = await featureGate(user, "connector.snowflake");
  *   if (block) return block;
  *
  * The 402 body adds `feature` + a human label so the client can render a

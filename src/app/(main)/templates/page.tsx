@@ -17,7 +17,6 @@ export default async function TemplatesPage() {
           slug: t.slug,
           industry: t.industry,
           icon: t.icon,
-          accent: t.accent,
           title: t.title,
           description: t.description,
           blocks: built.pages[0]?.blocks ?? [],
