@@ -83,18 +83,44 @@ export function renderScatterChart(ctx: ChartRenderCtx): ReactElement {
   );
 }
 
+/**
+ * A funnel's rows are one progression, not unrelated series — cycling
+ * through the categorical `palette` (bar/pie's multi-series colors) read
+ * as an arbitrary rainbow with no meaning, the exact "decoration, not
+ * information" barRenderer.tsx's own color contract warns against. Two
+ * rules instead:
+ *   - A row whose name reads as a terminal win/loss outcome (Closed Won,
+ *     Deal Lost, ...) gets the theme's semantic success/danger token —
+ *     those two ARE meaningfully different outcomes, worth a real color.
+ *   - Every other row shades along the theme's own "faint to saturated"
+ *     primary ramp (the same one heatmap/map/table intensity fills use),
+ *     spread across however many stages there are — deeper as the funnel
+ *     narrows reads as "more qualified/concentrated," not just decoration.
+ */
+function funnelSegmentColor(name: unknown, index: number, total: number, ramp: string[], semantic?: Record<string, string>): string {
+  const label = String(name ?? "").toLowerCase();
+  if (semantic) {
+    if (/\bwon\b|\bsuccess/.test(label)) return semantic.success;
+    if (/\blost\b|\bfail/.test(label)) return semantic.danger;
+  }
+  const stops = ramp.length > 0 ? ramp : ["#94A3B8"];
+  const i = total > 1 ? Math.round((index / (total - 1)) * (stops.length - 1)) : 0;
+  return stops[Math.min(stops.length - 1, Math.max(0, i))];
+}
+
 export function renderFunnelChart(ctx: ChartRenderCtx): ReactElement {
-  const { data, xField, yFields, palette, fmt, currency, print, showDataLabels } = ctx;
+  const { data, xField, yFields, palette, fmt, currency, print, showDataLabels, ramp, semantic } = ctx;
   const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+  const rows = data as any[];
   // Funnel. yFields[0] is the stage size; rows render top-to-bottom
   // in the order they arrive (so the SQL author controls ordering).
   return (
     <FunnelChart>
       <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} />
       <Funnel
-        data={(data as any[]).map((d, i) => ({
+        data={rows.map((d, i) => ({
           ...d,
-          fill: palette[i % palette.length],
+          fill: funnelSegmentColor(d[xField], i, rows.length, ramp ?? palette, semantic),
         }))}
         dataKey={yFields[0]}
         nameKey={xField}

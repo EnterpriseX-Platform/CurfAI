@@ -956,6 +956,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
             renderFunnelChart({
               data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showDataLabels,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+              ramp: theme.ramps.primary, semantic: theme.semantic,
             })
           ) : chartType === "scatter" ? (
             renderScatterChart({

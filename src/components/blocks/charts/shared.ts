@@ -55,6 +55,10 @@ export type ChartRenderCtx = {
   forecast?: ForecastConfig;
   /** Theme semantic tokens — gauge/bullet zone tints derive from these, not a fixed pastel map. */
   semantic?: Record<string, string>;
+  /** Theme's 5-stop "faint to saturated" primary ramp — a funnel's segment
+   *  shading derives from this (progression, not a rainbow of unrelated
+   *  hues), the same ramp heatmap/map/table intensity fills already use. */
+  ramp?: string[];
   /**
    * Resolved chart *form* tokens (corner radius, gradient vs flat, whether
    * there's a value axis at all). Separate from `palette`, which is the colour

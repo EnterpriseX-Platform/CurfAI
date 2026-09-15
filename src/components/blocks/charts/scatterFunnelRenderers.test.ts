@@ -90,3 +90,54 @@ describe("renderFunnelChart", () => {
     expect(html).not.toContain(">61,000<");
   });
 });
+
+describe("renderFunnelChart — segment color", () => {
+  // Regression: every row cycled through the categorical `palette` (bar/
+  // pie's multi-series colors) — a rainbow with no meaning, and the exact
+  // opposite of barRenderer.tsx's own "colour means something" contract.
+  const ramp = ["#F5F3FF", "#C4B5FD", "#8B5CF6", "#6D28D9", "#4C1D95"]; // faint -> saturated
+  const semantic = { success: "#0E7C5B", danger: "#B4304A", warning: "#A8690F", info: "#3B37D1", neutral: "#8A90A3" };
+  const stages = [
+    { stage: "Lead", n: 100 },
+    { stage: "Qualified", n: 70 },
+    { stage: "Discovery", n: 40 },
+    { stage: "Negotiation", n: 20 },
+    { stage: "Closed Won", n: 9 },
+    { stage: "Closed Lost", n: 6 },
+  ];
+
+  it("shades ordinary stages from the theme's ramp, spread across however many rows there are", () => {
+    // 5 non-terminal rows against a 5-stop ramp — every stop should get used.
+    const pureProgression = stages.slice(0, 4).concat([{ stage: "Verbal Commit", n: 12 }]);
+    const ctx = baseCtx({ xField: "stage", yFields: ["n"], data: pureProgression, ramp, semantic });
+    const html = renderSized(renderFunnelChart(ctx));
+    for (const hex of ramp) expect(html).toContain(`fill="${hex}"`);
+    // None of the unrelated categorical palette colors leaked through.
+    for (const hex of ["#6366f1", "#f59e0b", "#f43f5e"]) expect(html).not.toContain(`fill="${hex}"`);
+  });
+
+  it("colors a terminal win outcome with the theme's success token, not the ramp", () => {
+    const ctx = baseCtx({ xField: "stage", yFields: ["n"], data: stages, ramp, semantic });
+    const html = renderSized(renderFunnelChart(ctx));
+    expect(html).toContain(`fill="${semantic.success}"`);
+  });
+
+  it("colors a terminal loss outcome with the theme's danger token, not the ramp", () => {
+    const ctx = baseCtx({ xField: "stage", yFields: ["n"], data: stages, ramp, semantic });
+    const html = renderSized(renderFunnelChart(ctx));
+    expect(html).toContain(`fill="${semantic.danger}"`);
+  });
+
+  it("falls back to the categorical palette when no ramp is supplied, without crashing", () => {
+    const ctx = baseCtx({ xField: "stage", yFields: ["n"], data: stages, ramp: undefined });
+    expect(() => renderSized(renderFunnelChart(ctx))).not.toThrow();
+  });
+
+  it("leaves an ordinary mid-funnel stage on the ramp — no false positive on 'Discovery' or 'Negotiation'", () => {
+    const rows = [{ stage: "Discovery", n: 10 }, { stage: "Negotiation", n: 5 }];
+    const ctx = baseCtx({ xField: "stage", yFields: ["n"], data: rows, ramp, semantic });
+    const html = renderSized(renderFunnelChart(ctx));
+    expect(html).not.toContain(`fill="${semantic.success}"`);
+    expect(html).not.toContain(`fill="${semantic.danger}"`);
+  });
+});

@@ -1,6 +1,6 @@
 {
   "name": "curf",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Curf — reports that think, act, and remember.",
   "private": true,
   "scripts": {
