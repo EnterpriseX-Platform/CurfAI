@@ -1,6 +1,6 @@
 {
   "name": "curf",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Curf — reports that think, act, and remember.",
   "private": true,
   "scripts": {
@@ -21,6 +21,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "stripe:setup-prices": "node scripts/stripe-setup-prices.mjs",
+    "stripe:backfill-invoices": "tsx scripts/stripe-backfill-invoices.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

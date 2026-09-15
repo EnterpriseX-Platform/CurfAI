@@ -29,6 +29,11 @@ import { eeClient } from "@/ee/client";
 
 /** Community edition: paid nav, palette and count badges are absent. */
 const IS_COMMUNITY = eeClient.edition === "community";
+// Cloud billing UI — Community tenants never hold a Stripe subscription, so
+// the registry's Community stub never fills this in and it resolves to null
+// there, same as every other paid component attached to a shared surface
+// (see src/lib/ee/clientTypes.ts).
+const PastDueBanner = eeClient.layout?.PastDueBanner ?? null;
 import { CurfLogo } from "@/components/common/CurfLogo";
 import { onNavCountsRefresh } from "@/lib/navCounts";
 import { useResilientSession } from "@/lib/useResilientSession";
@@ -63,6 +68,9 @@ export function AppShell({
   const [navOpen, setNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const pathname = usePathname();
+  // Community tenants never hold a Stripe subscription — skip the fetch
+  // entirely rather than have it always resolve to "not past due".
+  const { role } = useResilientSession();
 
   // Close on navigation so tapping a link doesn't leave the drawer covering
   // the page it just opened.
@@ -120,6 +128,7 @@ export function AppShell({
       )}
       <div className="flex min-h-screen min-w-0 flex-col overflow-hidden lg:min-h-0">
         <TopBar breadcrumbs={breadcrumbs} actions={actions} onOpenNav={() => setNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
+        {PastDueBanner && <PastDueBanner isAdmin={role === "admin"} />}
         <main ref={mainRef} className="flex-1 overflow-auto">{children}</main>
       </div>
     </div>

@@ -79,7 +79,7 @@ export type RunResult = {
 
 // ---------- Helpers ----------
 
-function bindParams(sql: string, params: Record<string, unknown>) {
+export function bindParams(sql: string, params: Record<string, unknown>) {
   const needed = new Set<string>();
   sql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_m, p1) => {
     needed.add(p1);

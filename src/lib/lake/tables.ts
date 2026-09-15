@@ -866,7 +866,7 @@ function safeJson(s: string | null | undefined): Record<string, unknown> | undef
  * natively). Objects/arrays get JSON-stringified so structured payloads
  * survive a round trip without surprising the runner.
  */
-function coerceForStorage(v: unknown): string | null {
+export function coerceForStorage(v: unknown): string | null {
   // Every lake column has TEXT affinity (see createOrReplaceTable). Bind
   // every non-null value as a string so SQLite's affinity coercion doesn't
   // surprise us — historically we returned numbers unchanged here, but

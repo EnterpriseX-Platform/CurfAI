@@ -46,4 +46,14 @@ export type EeClientRegistry = {
     hubspotBaseUrl?: string;
     zendeskBaseUrl?: (subdomain: string) => string;
   };
+
+  layout?: {
+    /** Slim banner between the top bar and page content when the workspace's
+     *  Stripe subscription payment has failed (billing.past_due) — mounted
+     *  from AppShell, which ships in Community too, so this goes through the
+     *  registry like everything else here rather than a bare edition check:
+     *  Community tenants never hold a Stripe subscription in the first
+     *  place, and the component itself is Cloud billing UI. */
+    PastDueBanner?: ComponentType<{ isAdmin: boolean }>;
+  };
 };

@@ -671,13 +671,13 @@ model SavedView {
 // host. For now, all apps live on the canonical platform host.
 // ----------------------------------------------------------------------------
 model App {
-  id             String    @id @default(cuid())
-  tenantId       String
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id               String            @id @default(cuid())
+  tenantId         String
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Legacy single-view target. Null once an app has real `viewsJson` entries;
   // still populated (and still authoritative) on every row created before
   // the multi-view rename.
-  reportId       String?
+  reportId         String?
   // URL slug. Lowercase letters, digits, dashes; max 60 chars.
   // Auto-generated from the report name on create but the author can
   // change it. The DB constraint below is per-tenant (@@unique), but
@@ -686,29 +686,29 @@ model App {
   // GLOBAL uniqueness before writing one. A bare @unique here would be a
   // breaking migration against any pre-existing cross-tenant duplicate
   // (there were two as of 2026-09-12 — see the page's own header comment).
-  slug           String
+  slug             String
   // Display title in the app's <title> + the public page header. Defaults
   // to the report's name; authors can override (often punchier copy than
   // the internal report name).
-  title          String?
+  title            String?
   // Description shown under the title and in social previews (og:description).
-  description    String?
+  description      String?
   // Locale-keyed overrides for title/description, e.g. {"th": "...", "zh": "..."}.
   // Same shape as Report.nameI18n/descriptionI18n (lib/reporting/schema.ts).
   // Missing locale falls back to the plain title/description above.
-  titleI18n       String?  @default("{}")
-  descriptionI18n String?  @default("{}")
+  titleI18n        String?           @default("{}")
+  descriptionI18n  String?           @default("{}")
   // Per-app Executive Brief config — same shape as Tenant.briefConfigJson
   // ({ pinnedKpis, pinnedReportIds, comparison, greeting }). Empty falls
   // back to the tenant's. Read by a `brief`-kind view; edited today only
   // through the API, since /admin/brief still edits the tenant singleton.
-  briefConfigJson String? @default("{}")
+  briefConfigJson  String?           @default("{}")
   // Ordered array of view definitions once this app is multi-view:
   //   { id, kind: "report" | "dashboard" | "brief", label, labelI18n?, reportId?, dashboardId? }
   // Validated against AppViewSchema (src/lib/apps/schema.ts) at the API
   // layer, same convention as Dashboard.slotLayoutJson. Empty = legacy
   // single-view app (see `reportId` above).
-  viewsJson      String    @default("[]")
+  viewsJson        String            @default("[]")
   // "simulated" | "pilot" | "real" — whether the app's data is Master
   // Builder synthetic rows, a pilot mid-binding, or fully real. Drives the
   // badge in the app bar; the bind flow that transitions it lands with E2.
@@ -719,7 +719,7 @@ model App {
   // warehouse reports. Only a writer that actually knows (Master Builder,
   // or a PUT) sets it; everything else stays silent rather than lying about
   // whose numbers these are.
-  dataMode       String?
+  dataMode         String?
   // "public" | "password" | "viewers" | "member" | "kiosk". Enforced by
   // apps/[slug]/page.tsx: "public" (anyone), "password" (see passwordHash
   // below), "viewers" (tenant members + external viewers holding an
@@ -729,36 +729,36 @@ model App {
   // have been sharing by URL, so that stays a separate, deliberate change.
   // Writes go through AppAuthModeSchema (src/lib/apps/schema.ts), which
   // only accepts the three enforced values.
-  authMode       String    @default("public")
+  authMode         String            @default("public")
   // "draft" | "discovery" | "pilot" | "scale" — Master Builder / Analytic
   // Apps lifecycle stage. Column only; the Discovery -> Pilot -> Scale UI
   // and Decision Log wiring are a separate change.
-  stage          String    @default("draft")
+  stage            String            @default("draft")
   // App-wide filter declarations (A4) — AppFilterParamSchema[] in
   // lib/apps/schema.ts. Empty = no shared filter; the app renders exactly
   // as it did before this column existed.
-  paramsJson     String    @default("[]")
+  paramsJson       String            @default("[]")
   // Per-app brand override. Falls back to the tenant's brandJson.accentColor
   // when unset.
-  accentColor    String?
+  accentColor      String?
   // Optional bcrypt password hash. When set, viewers must enter the
   // password before the report renders; a signed cookie remembers them
   // for 7 days. Gated `apps.password_gate` (Business).
-  passwordHash   String?
+  passwordHash     String?
   // 0 = no auto-refresh (default). Any positive value = browser polls
   // every N seconds and re-runs the report. Capped at 86400 (1 day) in
   // the API.
-  autoRefreshSec Int       @default(0)
+  autoRefreshSec   Int               @default(0)
   // Whether the app is live. Unpublished apps still resolve via /apps/<slug>
   // for the author (preview), but return 404 for everyone else.
-  published      Boolean   @default(false)
+  published        Boolean           @default(false)
   // Cumulative view counter. Incremented per render (not per asset).
-  viewCount      Int       @default(0)
-  lastViewedAt   DateTime?
+  viewCount        Int               @default(0)
+  lastViewedAt     DateTime?
   // Author who created this app — kept for audit, not used for permissions.
-  createdById    String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdById      String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
   // Copilot threads scoped to this app (view kind "copilot").
 
   @@unique([tenantId, slug])
@@ -924,18 +924,18 @@ model OnScreenDisplay {
 // semantics as DashboardKioskToken, kept as a separate table for the same
 // reason (revocation independent of the display row, independent audit).
 model OnScreenDisplayKioskToken {
-  id            String          @id @default(cuid())
-  tenantId      String
-  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  onScreenId    String
-  onScreen      OnScreenDisplay @relation(fields: [onScreenId], references: [id], onDelete: Cascade)
-  token         String          @unique
-  label         String?
-  expiresAt     DateTime?
-  revokedAt     DateTime?
-  lastUsedAt    DateTime?
-  createdById   String?
-  createdAt     DateTime        @default(now())
+  id          String          @id @default(cuid())
+  tenantId    String
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  onScreenId  String
+  onScreen    OnScreenDisplay @relation(fields: [onScreenId], references: [id], onDelete: Cascade)
+  token       String          @unique
+  label       String?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime        @default(now())
 
   @@index([tenantId, onScreenId])
 }
