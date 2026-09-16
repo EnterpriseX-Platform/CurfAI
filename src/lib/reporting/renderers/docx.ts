@@ -7,7 +7,7 @@ import {
   Table, TableCell, TableRow, WidthType, TextRun, BorderStyle,
   Header, Footer, PageNumber,
 } from "docx";
-import { runReport, interpolate } from "@/lib/reporting/runner";
+import { runReport, interpolate, type RunViewer } from "@/lib/reporting/runner";
 import { aggregate, formatCell, uncappedTableTitle } from "@/lib/reporting/format";
 import type { Report } from "@/lib/reporting/schema";
 
@@ -22,10 +22,15 @@ export async function renderDocx(
    * Omit it and the report executes as usual.
    */
   presetDataset?: Record<string, Array<Record<string, unknown>>>,
+  /** A downloaded file leaves the app entirely, so redaction matters here
+   *  at least as much as on-screen — pass the requesting user's viewer.
+   *  Meaningless (and skipped) when presetDataset is supplied — those
+   *  rows are assembled in memory, not queried. */
+  viewer?: RunViewer,
 ): Promise<Buffer> {
   // A Word export is a document people read, but its tables are still the
   // data — so lift the generator's display cap and emit every row.
-  const dataset = presetDataset ?? (await runReport({ report, params, forExport: true }));
+  const dataset = presetDataset ?? (await runReport({ report, params, forExport: true, viewer }));
   const children: any[] = [];
 
   children.push(new Paragraph({

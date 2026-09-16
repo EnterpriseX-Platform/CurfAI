@@ -14,7 +14,9 @@ import { prisma } from "@/lib/db";
 import { AppShell } from "@/components/layout/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { previewRows, getTable } from "@/lib/lake/tables";
-import { Database, Globe, Webhook, FileSpreadsheet, ArrowRight, Sparkles } from "lucide-react";
+import { refineManualOrigin } from "@/lib/lake/originLabel";
+import { freshnessIssueForOne } from "@/lib/lake/freshness";
+import { Database, Globe, Webhook, FileSpreadsheet, ArrowRight, Sparkles, AlertTriangle } from "lucide-react";
 import { DeleteTableButton } from "./DeleteTableButton";
 import { AutoGenerateButton } from "./AutoGenerateButton";
 import { TableManagePanel } from "./TableManagePanel";
@@ -49,6 +51,8 @@ export default async function TableDetailPage({ params }: { params: { name: stri
   const preview = previewRows(user.tenantId, row.name, 50);
   const Icon = (SOURCE_ICONS as any)[row.sourceKind] ?? Database;
   const sourceConfig = safeParse(row.sourceConfigJson) ?? {};
+  const originDetail = refineManualOrigin(row.sourceKind, sourceConfig)?.detail;
+  const freshnessIssue = await freshnessIssueForOne(user.tenantId, row.name, row.sourceKind, sourceConfig);
   const schema = meta?.columns ?? safeParse(row.schemaJson) ?? [];
   const visibleToRoles: string[] = (() => {
     try { const v = JSON.parse(row.visibleToRolesJson ?? "[]"); return Array.isArray(v) ? v : []; }
@@ -70,11 +74,12 @@ export default async function TableDetailPage({ params }: { params: { name: stri
         <PageHeader
           // The source kind is information, so it stays — as the eyebrow,
           // not a roundel beside the title.
-          eyebrow={<span className="inline-flex items-center gap-1.5"><Icon className="h-3.5 w-3.5" />{prettyKind(row.sourceKind, locale)}</span>}
+          eyebrow={<span className="inline-flex items-center gap-1.5"><Icon className="h-3.5 w-3.5" />{prettyKind(row.sourceKind, sourceConfig, locale)}</span>}
           title={row.name}
           description={<>
             {sourceConfig.filename && <>{t(locale, "tableDetail.from")} {String(sourceConfig.filename)} · </>}
             {sourceConfig.label && <>{t(locale, "tableDetail.tokenWord")} "{String(sourceConfig.label)}" · </>}
+            {originDetail && <>{t(locale, "tableDetail.from")} {originDetail} · </>}
             {t(locale, "tableDetail.rowsColsSummary").replace("{rows}", row.rowCount.toLocaleString()).replace("{cols}", String(schema.length))}
           </>}
           actions={<>
@@ -105,6 +110,16 @@ export default async function TableDetailPage({ params }: { params: { name: stri
             <DeleteTableButton name={row.name} />
           </>}
         />
+
+        {freshnessIssue && (
+          <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium text-destructive">{t(locale, "tableDetail.freshnessIssueHeading")}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{freshnessIssue.error}</p>
+            </div>
+          </div>
+        )}
 
         {/* TableManagePanel's trigger lives in the header actions above; the
             expanded panel portals in here, so it lays out as a page section
@@ -180,7 +195,9 @@ function safeParse(s: string | null | undefined): any {
   try { return JSON.parse(s); } catch { return null; }
 }
 
-function prettyKind(k: string, locale: Locale): string {
+function prettyKind(k: string, sourceConfig: Record<string, unknown>, locale: Locale): string {
+  const refined = refineManualOrigin(k, sourceConfig);
+  if (refined) return t(locale, refined.labelKey);
   switch (k) {
     case "upload":    return t(locale, "tables.source.upload");
     case "webhook":   return t(locale, "tableDetail.kind.webhookIngest");

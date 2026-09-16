@@ -12,6 +12,7 @@ import { prisma } from "@/lib/db";
 import { AppShell } from "@/components/layout/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { getQuotaForTenant, getUsageForTenant, formatBytes } from "@/lib/lake/quota";
+import { freshnessIssueFor, emptyFreshnessMaps, type FreshnessMaps } from "@/lib/lake/freshness";
 import { TablesManager } from "./TablesManager";
 import { BackupsPanel } from "./BackupsPanel";
 import { BackupDestinationsPanel } from "./BackupDestinationsPanel";
@@ -59,6 +60,56 @@ export default async function TablesPage() {
     usage = { bytes: 0, tables: 0 };
   }
 
+  // Freshness — "is the schedule behind this table currently failing".
+  // Each source independently try/caught: SyncCursor/LakeCdcSubscription
+  // are Growth+ models absent from the Community schema entirely (the
+  // generated client has no such property there), and any of these can
+  // also be missing pre-`prisma db push`. One source's absence shouldn't
+  // blank out freshness for tables that DO have a working source.
+  const freshnessMaps: FreshnessMaps = emptyFreshnessMaps();
+  try {
+    const connIds = (await prisma.syncConnection.findMany({
+      where: { tenantId: user.tenantId },
+      select: { id: true },
+    })).map((c) => c.id);
+    if (connIds.length > 0) {
+      const cursors = await prisma.syncCursor.findMany({
+        where: { connectionId: { in: connIds } },
+        select: { connectionId: true, objectName: true, lastRunAt: true, lastError: true },
+      });
+      for (const c of cursors) {
+        freshnessMaps.syncCursors.set(`${c.connectionId}|${c.objectName}`, { lastRunAt: c.lastRunAt, lastError: c.lastError });
+      }
+    }
+  } catch { /* sync models absent (Community) or pre prisma db push */ }
+  try {
+    const subs = await (prisma as any).lakeCdcSubscription.findMany({
+      where: { tenantId: user.tenantId },
+      select: { targetLakeTable: true, lastRunAt: true, lastStatus: true, lastError: true },
+    });
+    for (const s of subs) {
+      freshnessMaps.cdcSubs.set(s.targetLakeTable, { lastRunAt: s.lastRunAt, lastStatus: s.lastStatus, lastError: s.lastError });
+    }
+  } catch { /* CDC model excluded from Community, or pre prisma db push */ }
+  try {
+    const mvs = await prisma.materializedView.findMany({
+      where: { tenantId: user.tenantId },
+      select: { id: true, lastRunAt: true, lastStatus: true, lastError: true },
+    });
+    for (const mv of mvs) {
+      freshnessMaps.materializedViews.set(mv.id, { lastRunAt: mv.lastRunAt, lastStatus: mv.lastStatus, lastError: mv.lastError });
+    }
+  } catch { /* pre prisma db push */ }
+  try {
+    const pulls = await prisma.lakePull.findMany({
+      where: { tenantId: user.tenantId },
+      select: { id: true, lastRunAt: true, lastStatus: true, lastError: true },
+    });
+    for (const p of pulls) {
+      freshnessMaps.pulls.set(p.id, { lastRunAt: p.lastRunAt, lastStatus: p.lastStatus, lastError: p.lastError });
+    }
+  } catch { /* pre prisma db push */ }
+
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.tables") }]}>
       <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
@@ -82,16 +133,21 @@ export default async function TablesPage() {
         />
 
         <TablesManager
-          initialTables={initialTables.map((t: any) => ({
-            id: t.id,
-            name: t.name,
-            sourceKind: t.sourceKind,
-            schema: safeParse(t.schemaJson) ?? [],
-            rowCount: t.rowCount,
-            sizeBytes: t.sizeBytes,
-            createdAt: typeof t.createdAt === "string" ? t.createdAt : t.createdAt?.toISOString?.() ?? "",
-            updatedAt: typeof t.updatedAt === "string" ? t.updatedAt : t.updatedAt?.toISOString?.() ?? "",
-          }))}
+          initialTables={initialTables.map((t: any) => {
+            const sourceConfig = safeParse(t.sourceConfigJson);
+            return {
+              id: t.id,
+              name: t.name,
+              sourceKind: t.sourceKind,
+              sourceConfig,
+              freshnessIssue: freshnessIssueFor(t.name, t.sourceKind, sourceConfig, freshnessMaps),
+              schema: safeParse(t.schemaJson) ?? [],
+              rowCount: t.rowCount,
+              sizeBytes: t.sizeBytes,
+              createdAt: typeof t.createdAt === "string" ? t.createdAt : t.createdAt?.toISOString?.() ?? "",
+              updatedAt: typeof t.updatedAt === "string" ? t.updatedAt : t.updatedAt?.toISOString?.() ?? "",
+            };
+          })}
           initialTokens={initialTokens.map((tk: any) => ({
             id: tk.id,
             label: tk.label,

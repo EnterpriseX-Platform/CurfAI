@@ -24,6 +24,12 @@ type Status = {
    *  false the DuckDB EngineCard is shown but disabled with an
    *  "install to unlock" hint — DuckDB is an optional dep. */
   duckDbAvailable?: boolean;
+  /** False until the report runner, backups, branches, and time-travel
+   *  all read through the resolved engine instead of assuming SQLite —
+   *  see the server route's own doc comment. While false, migrating
+   *  sqlite→duckdb is disabled with an explanation; duckdb→sqlite (the
+   *  direction that fixes an already-migrated tenant) stays open. */
+  engineReadPathUnified?: boolean;
 };
 
 type Finding = { severity: "error" | "warning"; message: string; snippet: string };
@@ -107,6 +113,10 @@ export function LakeEnginePanel() {
   const errorCount = preflight?.preflight.errorCount ?? 0;
   const warningCount = preflight?.preflight.warningCount ?? 0;
   const canMigrate = preflight && errorCount === 0;
+  // Only the sqlite→duckdb direction is blocked — see the server route's
+  // doc comment. A tenant already on DuckDB keeps the reverse migration
+  // available, since that's the direction that fixes the divergence.
+  const duckDbBlockedByUnification = status.engine !== "duckdb" && status.engineReadPathUnified === false;
 
   return (
     <section className="mb-8 rounded-lg border bg-card p-5 shadow-xs">
@@ -144,9 +154,12 @@ export function LakeEnginePanel() {
           title="DuckDB"
           subtitle={status.duckDbAvailable === false
             ? <>{t("admin.lakeEngine.duckdbSubtitleUnavailablePre")} <code>npm install @duckdb/node-api</code> {t("admin.lakeEngine.duckdbSubtitleUnavailablePost")}</>
-            : t("admin.lakeEngine.duckdbSubtitleAvailable")}
+            : duckDbBlockedByUnification
+              ? t("admin.lakeEngine.duckdbSubtitleUnificationPending")
+              : t("admin.lakeEngine.duckdbSubtitleAvailable")}
           tier="Growth+"
-          disabled={status.duckDbAvailable === false}
+          disabled={status.duckDbAvailable === false || duckDbBlockedByUnification}
+          disabledBadge={duckDbBlockedByUnification && status.duckDbAvailable !== false ? t("admin.lakeEngine.comingSoonBadge") : undefined}
           bullets={[
             t("admin.lakeEngine.duckdbBullet1"),
             t("admin.lakeEngine.duckdbBullet2"),
@@ -258,7 +271,7 @@ export function LakeEnginePanel() {
   );
 }
 
-function EngineCard({ id, active, title, subtitle, bullets, tier, onMigrate, disabled }: {
+function EngineCard({ id, active, title, subtitle, bullets, tier, onMigrate, disabled, disabledBadge }: {
   id: string;
   active: boolean;
   title: string;
@@ -268,8 +281,12 @@ function EngineCard({ id, active, title, subtitle, bullets, tier, onMigrate, dis
   onMigrate: () => void;
   /** When true, the migrate button is disabled and the card is dimmed.
    *  Used for DuckDB when @duckdb/node-api isn't installed in this
-   *  deployment — surfaces an "install to unlock" hint instead of a 500. */
+   *  deployment, or while the engine-unification gate is closed. */
   disabled?: boolean;
+  /** Overrides the default "Not installed" badge text — the
+   *  engine-unification gate is a different reason to be disabled and
+   *  shouldn't tell an admin who DID install the package that they didn't. */
+  disabledBadge?: string;
 }) {
   const { t } = useT();
   return (
@@ -285,7 +302,7 @@ function EngineCard({ id, active, title, subtitle, bullets, tier, onMigrate, dis
           <p className="text-sm font-semibold">{title}</p>
           {active && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">{t("admin.lakeEngine.activeBadge")}</span>}
           {disabled && (
-            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{t("admin.lakeEngine.notInstalledBadge")}</span>
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{disabledBadge ?? t("admin.lakeEngine.notInstalledBadge")}</span>
           )}
         </div>
         {tier && !active && <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">{tier}</span>}
@@ -306,7 +323,7 @@ function EngineCard({ id, active, title, subtitle, bullets, tier, onMigrate, dis
           disabled={disabled}
           className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
         >
-          {disabled ? t("admin.lakeEngine.installRequired") : t("admin.lakeEngine.migrateTo").replace("{target}", title)}
+          {disabled ? (disabledBadge ? t("admin.lakeEngine.unavailableButton") : t("admin.lakeEngine.installRequired")) : t("admin.lakeEngine.migrateTo").replace("{target}", title)}
         </button>
       )}
     </div>

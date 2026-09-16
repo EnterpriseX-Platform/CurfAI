@@ -10,7 +10,7 @@
  */
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
-import { runReportWithProof, runSingleQuery } from "@/lib/reporting/runner";
+import { runReportWithProof, runSingleQuery, ANONYMOUS_VIEWER, type RunViewer } from "@/lib/reporting/runner";
 import { extractSqlParamNames } from "@/lib/reporting/params";
 
 /**
@@ -18,8 +18,15 @@ import { extractSqlParamNames } from "@/lib/reporting/params";
  * that no longer exist or that the viewer can no longer see are dropped
  * silently with a placeholder slot, so a missing report doesn't blank the
  * whole rotation.
+ *
+ * `viewer` drives column-level redaction on any lake-backed query in the
+ * rotation. The authenticated page.tsx passes the real signed-in viewer;
+ * the token-only kiosk display (hallway TV, nobody authenticated) omits it
+ * and gets ANONYMOUS_VIEWER, so a sensitivity-tagged column redacts there
+ * by default rather than defaulting to fully unredacted for an unattended
+ * screen.
  */
-export async function prefetchDashboardPayload(dashboard: any) {
+export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer = ANONYMOUS_VIEWER) {
   let reportIds: string[] = [];
   try { reportIds = JSON.parse(dashboard.reportIdsJson ?? "[]"); }
   catch { /* corrupt → empty rotation */ }
@@ -67,7 +74,7 @@ export async function prefetchDashboardPayload(dashboard: any) {
       // parameter bar, so we render with whatever the report's defaults are.
       const pvals: Record<string, unknown> = {};
       for (const p of def.parameters) pvals[p.name] = p.default ?? "";
-      const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals });
+      const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, viewer });
       slots.push({
         id, name: row.name,
         rendered: { definition: def, dataset, provenance: provenance as any, params: pvals },
@@ -95,7 +102,7 @@ export async function prefetchDashboardPayload(dashboard: any) {
         // school/affiliation/... on another). GET /api/dashboards/:id/kpis/run
         // re-runs these same queries with real values once the viewer drills in.
         const baseDrillParams = Object.fromEntries(extractSqlParamNames(kpi.query.sql).map((n) => [n, ""]));
-        const rows = await runSingleQuery(kpi.query, baseDrillParams);
+        const rows = await runSingleQuery(kpi.query, baseDrillParams, viewer);
         // Get the first value of the first row
         let value = 0;
         if (rows.length > 0) {

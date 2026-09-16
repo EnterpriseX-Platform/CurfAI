@@ -14,7 +14,7 @@ import ExcelJS from "exceljs";
 import { currencySymbol } from "@/lib/reporting/currency";
 import puppeteer from "puppeteer";
 import { internalBase } from "@/lib/http/appBase";
-import { runReport } from "@/lib/reporting/runner";
+import { runReport, type RunViewer } from "@/lib/reporting/runner";
 import { aggregate, uncappedTableTitle } from "@/lib/reporting/format";
 import { interpolate } from "@/lib/reporting/interpolate";
 import type { Block, Report } from "@/lib/reporting/schema";
@@ -38,6 +38,9 @@ export type XlsxOptions = {
   authCookie?: string;
   /** ISO 4217 code — see lib/reporting/currency.ts. Defaults to "USD". */
   currency?: string;
+  /** A downloaded file leaves the app entirely, so redaction matters here
+   *  at least as much as on-screen — pass the requesting user's viewer. */
+  viewer?: RunViewer;
 };
 
 export async function renderXlsx(
@@ -49,7 +52,7 @@ export async function renderXlsx(
   // forExport lifts the generator's display cap: the laid-out dashboard
   // sheet stays bounded by its grid, but the per-table "Data" sheet that
   // accompanies it now carries every row rather than the first 500.
-  const dataset = await runReport({ report, params, forExport: true });
+  const dataset = await runReport({ report, params, forExport: true, viewer: opts.viewer });
 
   const images: Record<string, BlockImage> = {};
   if (opts.reportId) {

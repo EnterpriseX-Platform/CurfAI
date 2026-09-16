@@ -11,7 +11,7 @@
  *      importers, and a column of them sums to nothing.
  */
 import Papa from "papaparse";
-import { runReport } from "@/lib/reporting/runner";
+import { runReport, type RunViewer } from "@/lib/reporting/runner";
 import type { Report } from "@/lib/reporting/schema";
 
 /**
@@ -49,9 +49,12 @@ function csvCell(value: unknown, type: string): string | number | boolean | null
 export async function renderCsv(
   report: Report,
   params: Record<string, unknown>,
-  blockId?: string
+  blockId?: string,
+  /** A downloaded file leaves the app entirely, so redaction matters here
+   *  at least as much as on-screen — pass the requesting user's viewer. */
+  viewer?: RunViewer,
 ): Promise<string> {
-  const dataset = await runReport({ report, params, forExport: true });
+  const dataset = await runReport({ report, params, forExport: true, viewer });
 
   const tableBlock = report.pages
     .flatMap((p) => p.blocks)

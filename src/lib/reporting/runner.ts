@@ -26,6 +26,8 @@ import { guardedFetch } from "@/lib/security/ssrfGuard";
 import type { Dataset, Row } from "@/lib/reporting/interpolate";
 import { buildProvenance, hashRows, type ProvenanceMap } from "@/lib/reporting/provenance";
 import { canSeeDataSource } from "@/lib/datasourceAcl";
+import { checkSqlAccess } from "@/lib/lake/sqlAccess";
+import { applyRedaction } from "@/lib/lake/redaction";
 import { hashJoin } from "@/lib/reporting/hashJoin";
 import { getCachedRows, setCachedRows } from "@/lib/reporting/queryCache";
 import { reportRunMs } from "@/lib/metrics";
@@ -51,6 +53,17 @@ export type RunViewer = {
   isAdmin: boolean;
   roles: string[];
 };
+
+/**
+ * Viewer identity for a surface with no logged-in user at all — a public
+ * share link, an embed token, a kiosk display. `id: "anonymous"` never
+ * matches a real user's id (cuids), so an owner_only DataSource or lake
+ * table still correctly denies/redacts for it. `roles: []` means every
+ * sensitivity-tagged lake column redacts by default (LakeColumn's own
+ * "empty allowlist = no role can see it" rule) — the right posture for a
+ * viewer nobody authenticated.
+ */
+export const ANONYMOUS_VIEWER: RunViewer = { id: "anonymous", isAdmin: false, roles: [] };
 
 export type RunContext = {
   report: Report;
@@ -626,6 +639,42 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
         // rows to an array. Keeps TS satisfied.
         rows = [];
       }
+
+      // Column-level redaction (Phase 3). A lake table's sensitivity tags
+      // apply here exactly the way they already do on the Tables browser
+      // and the free-form SQL surfaces (Notebook, Data Quality, Agent,
+      // Activations) via lib/lake/sqlAccess.ts's checkSqlAccess() +
+      // lib/lake/redaction.ts's applyRedaction() — reused verbatim rather
+      // than re-implementing the table-reference matching or the mask
+      // rules here. Only "lake" queries carry sensitivity metadata at all,
+      // so every other kind (postgres/mysql/rest/warehouse) is untouched.
+      //
+      // Redacts a CLONE, never `rows` in place: on a cache hit, `rows` is
+      // the live array `getCachedRows()` returned from the shared entry
+      // keyed on (tenant, source, sql, params) — every viewer who runs
+      // this same query hits that one entry. Mutating it here would leak
+      // this viewer's redaction (or lack of it) into every other viewer's
+      // read of the same cached rows, in whichever direction lost the
+      // race. `access.error` also denies the query outright when the SQL
+      // references a table this viewer can't read at all (owner-only or
+      // role-restricted) — the same defense-in-depth shape as the
+      // canSeeDataSource() check above, empty rows + a proof note rather
+      // than a hard failure for the rest of the report.
+      if (viewer && dsRow.kind === "lake" && !executionError) {
+        const redactionViewer = { id: viewer.id, role: viewer.isAdmin ? "admin" : "member", roleSlugs: viewer.roles };
+        const access = await checkSqlAccess({
+          tenantId: dsRow.tenantId,
+          sql: ds.sql ?? "",
+          viewer: { id: redactionViewer.id, tenantId: dsRow.tenantId, role: redactionViewer.role },
+        });
+        if (!access.ok) {
+          rows = [];
+          executionError = access.error;
+        } else if (access.schema.length > 0) {
+          rows = applyRedaction(rows.map((r) => ({ ...r })), access.schema, redactionViewer);
+        }
+      }
+
       // Cross-source hash JOIN (Tier 2). After the primary query runs, walk
       // ds.joins[] (each entry references a sibling DataSourceDef in the
       // same report). Topo sort ensures every referenced sibling has already
@@ -772,7 +821,14 @@ export { interpolate } from "@/lib/reporting/interpolate";
  */
 export async function runSingleQuery(
   ds: DataSourceDef,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  /**
+   * Optional — omitted call sites keep the original "designer is admin-
+   * gated upstream" trust documented above. Pass it when a non-admin-
+   * gated caller reuses this function (e.g. the dashboard top-KPI strip)
+   * so a lake query still redacts sensitivity-tagged columns for them.
+   */
+  viewer?: RunViewer,
 ): Promise<Row[]> {
   const dsRow = await prisma.dataSource.findUnique({ where: { id: ds.dataSourceId } });
   if (!dsRow) throw new Error(`DataSource not found: ${ds.dataSourceId}`);
@@ -813,11 +869,24 @@ export async function runSingleQuery(
       try {
         // Address the lake by the row's own tenantId — see the note on the
         // other "lake" branch above.
-        return runOnSqlite(
+        let rows = runOnSqlite(
           ds,
           { ...dsRow, connection: tenantLakePath(dsRow.tenantId) },
           cache, params, resolvedAttaches
         );
+        // Same redaction as runReportWithProof — see its doc comment for
+        // why it's a clone, not an in-place mutation.
+        if (viewer) {
+          const redactionViewer = { id: viewer.id, role: viewer.isAdmin ? "admin" : "member", roleSlugs: viewer.roles };
+          const access = await checkSqlAccess({
+            tenantId: dsRow.tenantId,
+            sql: ds.sql ?? "",
+            viewer: { id: redactionViewer.id, tenantId: dsRow.tenantId, role: redactionViewer.role },
+          });
+          if (!access.ok) return [];
+          if (access.schema.length > 0) rows = applyRedaction(rows.map((r) => ({ ...r })), access.schema, redactionViewer);
+        }
+        return rows;
       } finally {
         await closeCachedConnections(cache);
       }

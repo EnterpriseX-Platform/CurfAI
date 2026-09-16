@@ -50,7 +50,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         const bound = Object.fromEntries(
           extractSqlParamNames(kpi.query.sql).map((name) => [name, url.searchParams.get(`p.${name}`) ?? ""])
         );
-        const rows = await runSingleQuery(kpi.query, bound);
+        const rows = await runSingleQuery(kpi.query, bound, { id: user.id, isAdmin, roles });
         let value = 0;
         if (rows.length > 0) {
           const firstRow = rows[0] as any;

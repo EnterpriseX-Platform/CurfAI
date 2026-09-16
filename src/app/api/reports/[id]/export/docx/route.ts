@@ -4,7 +4,7 @@ import { ReportSchema } from "@/lib/reporting/schema";
 import { resolveCurrency } from "@/lib/reporting/currency";
 import { renderDocx } from "@/lib/reporting/renderers/docx";
 import { parseParams } from "@/lib/reporting/params";
-import { requireUser, requireReportInScope } from "@/lib/auth";
+import { requireUser, requireReportInScope, getUserRoles } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -23,7 +23,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const p = parseParams(url, report.parameters);
 
   const tenantRow = await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { currency: true } }).catch(() => null);
-  const buf = await renderDocx(report, p, resolveCurrency((report as any).currency, tenantRow?.currency));
+  const viewer = { id: user.id, isAdmin: user.role === "admin", roles: user.viaApiKey ? [] : await getUserRoles() };
+  const buf = await renderDocx(report, p, resolveCurrency((report as any).currency, tenantRow?.currency), undefined, viewer);
   await prisma.reportRun.create({
     data: {
       tenantId: user.tenantId,

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { renderCsv } from "@/lib/reporting/renderers/csv";
 import { parseParams } from "@/lib/reporting/params";
-import { requireUser, requireReportInScope } from "@/lib/auth";
+import { requireUser, requireReportInScope, getUserRoles } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -23,7 +23,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const blockId = url.searchParams.get("block") ?? undefined;
 
   try {
-    const csv = await renderCsv(report, p, blockId);
+    const viewer = { id: user.id, isAdmin: user.role === "admin", roles: user.viaApiKey ? [] : await getUserRoles() };
+    const csv = await renderCsv(report, p, blockId, viewer);
     await prisma.reportRun.create({
       data: {
         tenantId: user.tenantId,

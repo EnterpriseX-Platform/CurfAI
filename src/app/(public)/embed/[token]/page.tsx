@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
-import { runReportWithProof } from "@/lib/reporting/runner";
+import { runReportWithProof, ANONYMOUS_VIEWER } from "@/lib/reporting/runner";
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 
@@ -51,7 +51,9 @@ export default async function EmbedPage({
   const def = ReportSchema.parse(JSON.parse(report.definition));
   const pvals: Record<string, unknown> = {};
   for (const p of def.parameters) pvals[p.name] = p.default ?? "";
-  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals });
+  // Chromeless public embed — nobody is authenticated here, so any
+  // sensitivity-tagged lake column redacts by default (see ANONYMOUS_VIEWER).
+  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, viewer: ANONYMOUS_VIEWER });
 
   const dark = searchParams?.theme === "dark";
   const compact = searchParams?.compact === "1";

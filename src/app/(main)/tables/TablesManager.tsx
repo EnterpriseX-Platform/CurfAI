@@ -25,6 +25,7 @@ import {
   DialogIcon, DialogBody, DialogFooter,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { refineManualOrigin } from "@/lib/lake/originLabel";
 
 type Schema = Array<{ name: string; type: string }>;
 
@@ -32,6 +33,15 @@ type TableRow = {
   id: string;
   name: string;
   sourceKind: "upload" | "webhook" | "rest_pull" | "manual";
+  /** Free-form provenance blob — see lib/lake/originLabel.ts. Only
+   *  inspected when sourceKind is "manual", to tell a Master Builder
+   *  build, a sync, a saved result, or a pipeline step apart from a
+   *  table someone genuinely created by hand. */
+  sourceConfig?: Record<string, unknown> | null;
+  /** Set when the schedule feeding this table (sync/CDC/MV/pull) last
+   *  failed — see lib/lake/freshness.ts. Absent for upload/webhook/plain
+   *  manual tables, which have no ongoing schedule to fail. */
+  freshnessIssue?: { error: string; lastAttemptAt?: string } | null;
   schema: Schema;
   rowCount: number;
   sizeBytes: number;
@@ -742,7 +752,10 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
   }
 
   return (
-    <div className="group relative flex flex-col rounded-lg border border-border bg-card p-4 shadow-xs transition-shadow hover:shadow-md">
+    <div className={
+      "group relative flex flex-col rounded-lg border p-4 shadow-xs transition-shadow hover:shadow-md " +
+      (row.freshnessIssue ? "border-destructive/30 bg-destructive/5" : "border-border bg-card")
+    }>
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground ring-1 ring-border group-hover:bg-primary/10 group-hover:text-primary">
           <Icon className="h-4 w-4" />
@@ -751,11 +764,21 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
           <Link
             href={`/tables/${encodeURIComponent(row.name)}`}
             className="block truncate text-sm font-semibold hover:underline"
+            title={row.name}
           >
             {row.name}
           </Link>
           <div className="mt-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-            <span>{t(SOURCE_LABEL_KEYS[row.sourceKind])}</span>
+            <span>{t(refineManualOrigin(row.sourceKind, row.sourceConfig)?.labelKey ?? SOURCE_LABEL_KEYS[row.sourceKind])}</span>
+            {row.freshnessIssue && (
+              <span
+                className="inline-flex items-center gap-0.5 normal-case tracking-normal text-destructive"
+                title={t("tables.card.freshnessIssueTitle").replace("{error}", row.freshnessIssue.error)}
+              >
+                <AlertTriangle className="h-2.5 w-2.5" />
+                {t("tables.card.freshnessIssueBadge")}
+              </span>
+            )}
             <span>·</span>
             <span>
               {t("tables.card.colsLabel")

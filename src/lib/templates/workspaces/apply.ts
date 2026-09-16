@@ -98,7 +98,7 @@ export async function applyWorkspaceTemplate(
           tenantId,
           name: t.name,
           sourceKind: "manual",
-          sourceConfigJson: JSON.stringify({ templateId: template.id }),
+          sourceConfigJson: JSON.stringify({ provenance: "workspace-template", templateId: template.id }),
           schemaJson: JSON.stringify(result.columns),
           rowCount: result.rowCount,
           sizeBytes,

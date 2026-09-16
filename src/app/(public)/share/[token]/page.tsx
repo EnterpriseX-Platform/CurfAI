@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Globe } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
-import { runReportWithProof } from "@/lib/reporting/runner";
+import { runReportWithProof, ANONYMOUS_VIEWER } from "@/lib/reporting/runner";
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { localizeReport } from "@/lib/reporting/localize";
 import { ReportDocument } from "@/components/reports/ReportDocument";
@@ -48,7 +48,9 @@ export default async function PublicSharePage({ params }: { params: { token: str
   // share stable). Use each parameter's default.
   const pvals: Record<string, unknown> = {};
   for (const p of def.parameters) pvals[p.name] = p.default ?? "";
-  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals });
+  // Auth-free public view — nobody is authenticated here, so any
+  // sensitivity-tagged lake column redacts by default (see ANONYMOUS_VIEWER).
+  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, viewer: ANONYMOUS_VIEWER });
 
   return (
     <div className="min-h-screen bg-background">

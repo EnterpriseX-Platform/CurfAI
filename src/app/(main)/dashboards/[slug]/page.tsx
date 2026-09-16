@@ -39,6 +39,6 @@ export default async function DashboardPage({ params }: { params: { slug: string
     redirect("/dashboards");
   }
 
-  const payload = await prefetchDashboardPayload(dashboard);
+  const payload = await prefetchDashboardPayload(dashboard, { id: user.id, isAdmin, roles: userRoles });
   return <DashboardViewer dashboard={payload} isAdmin={isAdmin} />;
 }
