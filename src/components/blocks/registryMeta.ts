@@ -1,5 +1,7 @@
 /**
- * Static per-block-type metadata: label, icon, default canvas size.
+ * Static per-block-type metadata: icon and default canvas size. A block
+ * type's display name is blockType.<type> in lib/i18n/dict.ts, so a new
+ * block type needs that key in all three locales.
  *
  * Deliberately has NO import of the block components themselves. Split
  * out of index.ts because several consumers (the designer store, the
@@ -21,27 +23,26 @@ import {
 import type { BlockType } from "@/lib/reporting/schema";
 
 export type BlockMeta = {
-  label: string;
   icon: React.ComponentType<{ className?: string }>;
   defaultSize: { w: number; h: number };
 };
 
 export const BLOCK_META: Record<BlockType, BlockMeta> = {
-  title:     { label: "Title",      icon: Heading1,             defaultSize: { w: 12, h: 2 } },
-  text:      { label: "Text",       icon: Type,                 defaultSize: { w: 12, h: 2 } },
-  table:     { label: "Table",      icon: Table2,               defaultSize: { w: 12, h: 8 } },
-  kpi:       { label: "KPI",        icon: GalleryVertical,      defaultSize: { w: 4,  h: 3 } },
-  chart:     { label: "Chart",      icon: BarChart3,            defaultSize: { w: 8,  h: 6 } },
-  image:     { label: "Image",      icon: ImageIcon,            defaultSize: { w: 4,  h: 4 } },
-  divider:   { label: "Divider",    icon: Minus,                defaultSize: { w: 12, h: 1 } },
-  pageBreak: { label: "Page Break", icon: SplitSquareVertical,  defaultSize: { w: 12, h: 1 } },
-  callout:   { label: "Callout",    icon: MessageSquareText,    defaultSize: { w: 12, h: 3 } },
-  progress:  { label: "Progress",   icon: Activity,             defaultSize: { w: 6,  h: 3 } },
-  pivot:     { label: "Pivot",      icon: LayoutGrid,           defaultSize: { w: 12, h: 6 } },
-  heatmap:   { label: "Heatmap",    icon: Grid3x3,              defaultSize: { w: 12, h: 5 } },
-  map:       { label: "Map",        icon: MapIcon,              defaultSize: { w: 12, h: 6 } },
-  cohort_retention: { label: "Cohort retention", icon: Users,   defaultSize: { w: 12, h: 8 } },
-  funnel:           { label: "Funnel",           icon: Filter,  defaultSize: { w: 12, h: 6 } },
+  title:            { icon: Heading1,            defaultSize: { w: 12, h: 2 } },
+  text:             { icon: Type,                defaultSize: { w: 12, h: 2 } },
+  table:            { icon: Table2,              defaultSize: { w: 12, h: 8 } },
+  kpi:              { icon: GalleryVertical,     defaultSize: { w: 4,  h: 3 } },
+  chart:            { icon: BarChart3,           defaultSize: { w: 8,  h: 6 } },
+  image:            { icon: ImageIcon,           defaultSize: { w: 4,  h: 4 } },
+  divider:          { icon: Minus,               defaultSize: { w: 12, h: 1 } },
+  pageBreak:        { icon: SplitSquareVertical, defaultSize: { w: 12, h: 1 } },
+  callout:          { icon: MessageSquareText,   defaultSize: { w: 12, h: 3 } },
+  progress:         { icon: Activity,            defaultSize: { w: 6,  h: 3 } },
+  pivot:            { icon: LayoutGrid,          defaultSize: { w: 12, h: 6 } },
+  heatmap:          { icon: Grid3x3,             defaultSize: { w: 12, h: 5 } },
+  map:              { icon: MapIcon,             defaultSize: { w: 12, h: 6 } },
+  cohort_retention: { icon: Users,               defaultSize: { w: 12, h: 8 } },
+  funnel:           { icon: Filter,              defaultSize: { w: 12, h: 6 } },
 };
 
 export const BLOCK_ORDER: BlockType[] = [

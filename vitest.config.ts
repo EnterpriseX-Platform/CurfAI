@@ -28,6 +28,10 @@ export default defineConfig({
     exclude: ["node_modules", ".next", "dist", "tests/e2e/**"],
     // Each test file owns its own state; no shared fixtures.
     isolate: true,
+    // The suite runs the same whatever a developer's .env says (Prisma loads
+    // .env into the process, but never over a variable already set). Lake
+    // tests that exercise typed storage turn it on themselves.
+    env: { CURF_LAKE_TYPED_COLUMNS: "false" },
     pool: "forks",
     // Coverage opt-in. Run `vitest run --coverage` to see line-by-line.
     coverage: {

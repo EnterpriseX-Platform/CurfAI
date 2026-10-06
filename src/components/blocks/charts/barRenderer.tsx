@@ -19,10 +19,7 @@ import type { ReactElement } from "react";
 import {
   BarChart, Bar, Cell, CartesianGrid, Legend, Tooltip, XAxis, YAxis, LabelList, Rectangle,
 } from "recharts";
-import {
-  AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, LABEL_FILL, CURSOR_FILL, LEGEND_STYLE,
-  formatValue, styleOf, gridPropsFor, DEEMPHASIS_FILL, type ChartRenderCtx,
-} from "./shared";
+import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, LABEL_FILL, CURSOR_FILL, LEGEND_STYLE, formatValue, styleOf, gridPropsFor, DEEMPHASIS_FILL, type ChartRenderCtx, dateTick, dateLabel, seriesName, categoryAxisProps, seriesTooltip } from "./shared";
 import { SeriesGradients, seriesFill } from "./gradients";
 import { directLabelsFit } from "@/lib/reporting/chartStyles";
 import { FORECAST_COLOR } from "./PredictionOverlay";
@@ -32,11 +29,13 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
     data, xField, yFields, palette, fmt, currency, print, showLegend, showDataLabels,
     stacked, cfg, gid, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
   } = ctx;
+  const numOpts = { locale: ctx.dateStyle?.locale };
   const style = styleOf(ctx);
   const categoricalColor = cfg?.categoricalColor as boolean | undefined;
   const emphasisTop = cfg?.emphasisTop as number | undefined;
-  const yTickFormatter = (v: number) => formatValue(v, fmt, currency);
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+  const emphasisLast = cfg?.emphasisLast === true;
+  const yTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
+  const tooltipFormatter = seriesTooltip(ctx);
   const rows = data as any[];
 
   // Horizontal bars: Recharts spells this `layout="vertical"` (it describes
@@ -75,7 +74,7 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
     ? null
     : gridPropsFor(style, { vertical: horizontal, horizontal: !horizontal });
   // Category labels need real room when they run down the side.
-  const CATEGORY_AXIS_WIDTH = 120;
+  const CATEGORY_AXIS_WIDTH = 150;
 
   return (
     <BarChart
@@ -89,6 +88,8 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
         left: 0, bottom: 0,
       }}
       barCategoryGap={horizontal ? style.bar.categoryGap.horizontal : style.bar.categoryGap.vertical}
+      // A stacked loss (churn beside new sales) stacks below zero, not on top of the gains; all-positive stacks are unchanged.
+      stackOffset={stacked ? "sign" : undefined}
       onClick={handleClick}
     >
       {SeriesGradients({ prefix: "bar", gid, colors: palette, style, horizontal })}
@@ -101,16 +102,16 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
           <XAxis type="number" {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} hide={listMode || hideValueAxis} />
           <YAxis
             type="category" dataKey={xField} {...AXIS_PROPS} width={CATEGORY_AXIS_WIDTH}
-            tick={{ fill: LABEL_FILL, fontSize: 12, fontWeight: 500 }}
+            tick={(props: any) => <CategoryTick {...props} maxWidth={CATEGORY_AXIS_WIDTH - 8} />}
           />
         </>
       ) : (
         <>
-          <XAxis dataKey={xField} {...AXIS_PROPS} />
+          <XAxis dataKey={xField} {...AXIS_PROPS} {...categoryAxisProps(rows.length)} tickFormatter={dateTick(ctx)} />
           <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} hide={hideValueAxis} />
         </>
       )}
-      <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: CURSOR_FILL }} formatter={tooltipFormatter as any} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: CURSOR_FILL }} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} />
       {/* One series needs no legend — the title already names it. */}
       {(showLegend ?? !isSingleSeries) && <Legend wrapperStyle={LEGEND_STYLE} iconType="circle" iconSize={7} />}
       {renderReferenceLines()}
@@ -136,6 +137,7 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
         // on a single series — with grouped or stacked bars colour is already
         // carrying which series a segment belongs to.
         const useEmphasis = isSingleSeries && typeof emphasisTop === "number" && emphasisTop > 0;
+        const useLast = isSingleSeries && !useEmphasis && emphasisLast;
         const hasForecastRows = !!forecast && rows.some((r) => r.__forecast);
         const barFill = seriesFill("bar", gid, i, palette, style);
         // The sunk track behind each bar. An element, not a props object:
@@ -146,13 +148,13 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
           : undefined;
         return (
           <Bar
-            key={f} dataKey={f} stackId={stacked ? "s" : undefined}
+            key={f} dataKey={f} name={seriesName(f, ctx.cfg)} stackId={stacked ? "s" : undefined}
             fill={barFill} radius={barRadius}
             maxBarSize={horizontal ? style.bar.maxBarSize.horizontal : style.bar.maxBarSize.vertical}
             background={track}
             isAnimationActive={!print} animationDuration={600}
           >
-            {(useCategorical || hasForecastRows || useEmphasis) && rows.map((row, ri) => {
+            {(useCategorical || hasForecastRows || useEmphasis || useLast) && rows.map((row, ri) => {
               const isForecastRow = !!row.__forecast;
               // Priority order, and the reason for it: a projected bar is a
               // different KIND of bar so the forecast accent outranks
@@ -160,7 +162,7 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
               // setting; then per-category colour for the rows still in scope.
               const fill = isForecastRow
                 ? FORECAST_COLOR
-                : useEmphasis && ri >= emphasisTop!
+                : (useEmphasis && ri >= emphasisTop!) || (useLast && ri < rows.length - 1)
                   ? DEEMPHASIS_FILL
                   : useCategorical
                     ? seriesFill("bar", gid, ri, palette, style)
@@ -188,12 +190,39 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
                 // the same call the horizontal ranked list already made.
                 fill={horizontal || hideValueAxis ? "hsl(var(--foreground))" : LABEL_FILL}
                 className="font-mono"
-                formatter={(v: any) => formatValue(Number(v), fmt, currency)}
+                formatter={(v: any) => formatValue(Number(v), fmt, currency, numOpts)}
               />
             )}
           </Bar>
         );
       })}
     </BarChart>
+  );
+}
+
+/** Per-character width at the tick's 12px, generous enough for Thai and CJK. */
+const TICK_CHAR_PX = 7;
+const graphemes = (s: string): string[] => {
+  const Seg = (Intl as any).Segmenter;
+  return Seg ? Array.from(new Seg(undefined, { granularity: "grapheme" }).segment(s), (g: any) => g.segment as string) : Array.from(s);
+};
+
+/**
+ * A category name down the side of a horizontal bar, on one line: a long
+ * name used to wrap onto a second line that ran into the next bar's label,
+ * so a ranking of product names couldn't be read at all. Cut to the axis
+ * width with an ellipsis (by grapheme, so a Thai vowel stays on its
+ * consonant); the whole name is in the hover title and the tooltip.
+ */
+function CategoryTick({ x, y, payload, maxWidth }: { x: number; y: number; payload?: { value?: unknown }; maxWidth: number }) {
+  const label = String(payload?.value ?? "");
+  const room = Math.max(4, Math.floor(maxWidth / TICK_CHAR_PX));
+  const parts = graphemes(label);
+  const text = parts.length > room ? parts.slice(0, room - 1).join("") + "…" : label;
+  return (
+    <text x={x} y={y} dy={4} textAnchor="end" fill={LABEL_FILL} fontSize={12} fontWeight={500}>
+      <title>{label}</title>
+      {text}
+    </text>
   );
 }

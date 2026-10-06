@@ -69,13 +69,11 @@ export function PresenceChip({ reportId, selfKey }: { reportId: string; selfKey:
     // Best-effort leave on tab close. `keepalive` lets the request fly
     // even though the page is being unloaded.
     const onUnload = () => {
-      try {
-        fetch(`/api/reports/${reportId}/presence`, {
-          method: "DELETE",
-          credentials: "include",
-          keepalive: true,
-        });
-      } catch { /* fire and forget */ }
+      fetch(`/api/reports/${reportId}/presence`, {
+        method: "DELETE",
+        credentials: "include",
+        keepalive: true,
+      }).catch(() => { /* fire and forget — the server reaps idle viewers anyway */ });
     };
     window.addEventListener("beforeunload", onUnload);
     window.addEventListener("pagehide", onUnload);

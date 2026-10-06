@@ -3,6 +3,9 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/layout/AppShell";
+import { loadTenantTier } from "@/lib/billing";
+import { featureAvailable } from "@/lib/featureGate";
+import { UpgradeLock } from "@/components/common/UpgradeLock";
 
 import { ApiKeysManager } from "./ApiKeysManager";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
@@ -20,6 +23,7 @@ export default async function ApiKeysPage() {
   if (!user) redirect("/login?callbackUrl=/admin/api-keys");
   if (user.role !== "admin") redirect("/reports");
   const locale = readLocale();
+  const tier = await loadTenantTier(user.tenantId);
 
   const [rows, reports] = await Promise.all([
     prisma.apiKey.findMany({
@@ -48,7 +52,7 @@ export default async function ApiKeysPage() {
         <PageHeader title={t(locale, "adminApiKeys.pageTitle")} description={<>{t(locale, "adminApiKeys.pageSubtitleBefore")} <code className="font-mono">curf_...</code> {t(locale, "adminApiKeys.pageSubtitleAfter")}</>} />
 
 
-        <ApiKeysManager initial={keys} reports={reports} />
+        <ApiKeysManager initial={keys} reports={reports} tier={tier} />
 
         <section className="mt-10 rounded-lg border bg-muted/30 p-5 text-xs text-muted-foreground">
           <p className="mb-2 font-semibold text-foreground">{t(locale, "adminApiKeys.usingKeyTitle")}</p>

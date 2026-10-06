@@ -3,8 +3,10 @@ import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { renderCsv } from "@/lib/reporting/renderers/csv";
 import { parseParams } from "@/lib/reporting/params";
-import { requireUser, requireReportInScope, getUserRoles } from "@/lib/auth";
+import { requireUser, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { contentDisposition } from "@/lib/http/contentDisposition";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +25,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const blockId = url.searchParams.get("block") ?? undefined;
 
   try {
-    const viewer = { id: user.id, isAdmin: user.role === "admin", roles: user.viaApiKey ? [] : await getUserRoles() };
-    const csv = await renderCsv(report, p, blockId, viewer);
+    const viewer = await exportViewer(user);
+    const csv = await renderCsv(report, p, { tenantId: row.tenantId, blockId, viewer });
     await prisma.reportRun.create({
       data: {
         tenantId: user.tenantId,
@@ -42,14 +44,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": 'attachment; filename="' + slug(row.name) + '.csv"',
+        "Content-Disposition": contentDisposition("attachment", row.name, "csv"),
       },
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 400 });
   }
-}
-
-function slug(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
 }

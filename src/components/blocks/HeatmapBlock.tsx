@@ -1,8 +1,10 @@
 "use client";
 import { useMemo } from "react";
-import { formatCurrency, formatNumber, formatPercent } from "@/lib/reporting/format";
+import { dateValueLabel, formatCurrency, formatMetricCompact, formatNumber, formatPercent, isMonthStartSeries, thaiDateLabel } from "@/lib/reporting/format";
+import { useDateStyle } from "@/components/providers/DateStyleProvider";
 import type { BlockRenderContext } from "./types";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { queryNotRun } from "@/lib/reporting/queryRunState";
 import { ShowWorkButton } from "./ShowWorkButton";
 import { AskButton } from "./AskButton";
 import { CommentButton } from "./CommentButton";
@@ -12,8 +14,12 @@ import { BlockActions } from "./BlockActions";
 import { BlockEmptyState } from "./BlockEmptyState";
 import { cn } from "@/lib/utils";
 import { STATUS_ALIASES, STATUS_LEGEND_ORDER } from "./heatmapStatus";
+import { ChartHoverTip } from "./charts/ChartHoverTip";
 import { useT } from "@/lib/i18n/LocaleContext";
 import { useDrillThrough } from "@/components/providers/drill-through-context";
+
+/** The five tones spelled as themselves — a statusField holding one of these is a colour, not a label. */
+const TONE_KEYS = new Set(["success", "warning", "danger", "info", "neutral"]);
 
 /**
  * Heatmap block — pure SVG, two visual modes (calendar + grid).
@@ -56,7 +62,8 @@ function fmt(v: number, kind: "number" | "currency" | "percent" | "compact", cur
     if (abs >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
     if (abs >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
     if (abs >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
-    return v.toLocaleString();
+    // Same precision as the K/M/B cells beside it: 456, 45.3, 0.2 — not 456.44.
+    return (abs >= 100 ? Math.round(v) : Math.round(v * 10) / 10).toLocaleString();
   }
   return formatNumber(v);
 }
@@ -70,7 +77,14 @@ export function HeatmapBlock({ block, dataset, provenance, print, report, params
   const ds = !print ? report.dataSources.find((d) => d.id === cfg.queryId) ?? null : null;
 
   if (!cfg.queryId || rows.length === 0) {
-    return <BlockEmptyState type="heatmap" blockId={block.id} title={cfg.title} description={t("blockEmpty.noData")} />;
+    const notRun = queryNotRun(provenance?.[cfg.queryId]);
+    return (
+      <BlockEmptyState
+        type="heatmap" blockId={block.id} title={cfg.title} typeLabel={t("blockType.heatmap")}
+        description={t(notRun ? (notRun.kind === "failed" ? "blockEmpty.queryFailed" : "blockEmpty.restricted") : "blockEmpty.noData")}
+        notRun={notRun}
+      />
+    );
   }
 
   return (
@@ -95,9 +109,11 @@ export function HeatmapBlock({ block, dataset, provenance, print, report, params
         </header>
       )}
       <div className={"min-h-0 flex-1 overflow-auto " + (bare ? "pt-8" : "")}>
-        {cfg.mode === "calendar" ? <CalendarHeatmap rows={rows} cfg={cfg} />
-          : cfg.mode === "tiles" ? <TilesHeatmap rows={rows} cfg={cfg} blockId={block.id} activeValue={cfg.drillParam ? (params as any)?.[cfg.drillParam] : undefined} />
-          : <GridHeatmap rows={rows} cfg={cfg} />}
+        <ChartHoverTip className={cfg.mode === "tiles" ? "min-h-full w-full" : "h-full w-full"}>
+          {cfg.mode === "calendar" ? <CalendarHeatmap rows={rows} cfg={cfg} />
+            : cfg.mode === "tiles" ? <TilesHeatmap rows={rows} cfg={cfg} blockId={block.id} activeValue={cfg.drillParam ? (params as any)?.[cfg.drillParam] : undefined} />
+            : <GridHeatmap rows={rows} cfg={cfg} />}
+        </ChartHoverTip>
       </div>
     </div>
   );
@@ -137,12 +153,16 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
     return e.sum;
   };
 
-  // Pick a 1-year window ending at the most recent date in the data (or
-  // today, if there is no data — keeps the layout sensible during loading).
+  // Up to a year ending at the most recent date in the data (or today, if
+  // there is no data — keeps the layout sensible during loading), starting no
+  // earlier than the first date with data: six months of sales drew a year,
+  // half of it empty squares.
   const dates = Object.keys(byDate).sort();
   const end = dates.length ? new Date(dates[dates.length - 1] + "T00:00:00Z") : new Date();
-  const start = new Date(end);
-  start.setUTCFullYear(start.getUTCFullYear() - 1);
+  const yearBack = new Date(end);
+  yearBack.setUTCFullYear(yearBack.getUTCFullYear() - 1);
+  const first = dates.length ? new Date(dates[0] + "T00:00:00Z") : yearBack;
+  const start = first > yearBack ? first : yearBack;
 
   // Walk every day in [start..end] and bucket into weeks (column) × weekday (row).
   // Sunday is row 0 to match GitHub's contributions calendar.
@@ -172,6 +192,9 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
   // semantic slugs (emerald/rose/etc) stay constant by design.
   const theme = useTheme();
   const currency = useCurrency();
+  const dateStyle = useDateStyle();
+  const { t } = useT();
+  const thai = dateStyle.locale === "th";
   const slug = cfg.ramp ?? "primary";
   const ramp = slug === "primary"
     ? theme.ramps.primary[theme.ramps.primary.length - 1]
@@ -186,7 +209,7 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
   const height = TOP_GUTTER + 7 * (CELL + GAP) + 16;
 
   // Month labels along the top.
-  const monthLabels = labelMonths(weeks);
+  const monthLabels = labelMonths(weeks, thai ? TH_MONTHS : MONTHS);
 
   function cellColor(v: number | null): string {
     if (v == null) return "rgba(15,23,42,0.04)"; // empty day
@@ -200,8 +223,11 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
   }
 
   return (
-    <div>
-      <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="block">
+    // A column filling the card: the calendar takes what the legend leaves and
+    // fits inside it (meet) — scaled to the width alone it ran past the card's
+    // bottom and lost Saturday.
+    <div className="flex h-full flex-col">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMinYMin meet" className="block min-h-0 w-full flex-1" style={{ maxWidth: width * 1.8 }}>
         {monthLabels.map((m) => (
           <text key={m.label + m.x} x={LEFT_GUTTER + m.x} y={11}
             className="fill-muted-foreground" fontSize={10}>{m.label}</text>
@@ -209,7 +235,7 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
         {[0, 2, 4, 6].map((row) => (
           <text key={row} x={0} y={TOP_GUTTER + row * (CELL + GAP) + CELL - 1}
             className="fill-muted-foreground" fontSize={9}>
-            {WEEKDAYS[row]}
+            {(thai ? TH_WEEKDAYS : WEEKDAYS)[row]}
           </text>
         ))}
         {weeks.map((w, wi) => (
@@ -222,9 +248,9 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
                 fill={cellColor(cell.value)}
                 stroke="rgba(15,23,42,0.04)" strokeWidth={0.5}
               >
-                <title>{cell.value != null
-                  ? `${cell.iso} — ${fmt(cell.value, cfg.format ?? "compact", currency)}`
-                  : `${cell.iso} — no data`}</title>
+                <desc className="chart-tip">{cell.value != null
+                  ? `${thaiDateLabel(cell.iso, dateStyle) ?? cell.iso} — ${fmt(cell.value, cfg.format ?? "compact", currency)}`
+                  : `${thaiDateLabel(cell.iso, dateStyle) ?? cell.iso} — ${t("heatmap.noData")}`}</desc>
               </rect>
             ))}
           </g>
@@ -233,17 +259,16 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
 
       {/* Legend */}
       <div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground">
-        <span>less</span>
+        <span>{t("heatmap.less")}</span>
         {[0.1, 0.3, 0.55, 0.8, 1].map((t, i) => (
           <span key={i}
             className="inline-block h-3 w-3 rounded-sm"
             style={{ background: colorMix(ramp, Math.round(15 + t * 70)) }}
           />
         ))}
-        <span>more</span>
+        <span>{t("heatmap.more")}</span>
         <span className="ml-auto">
-          {dates.length} day{dates.length === 1 ? "" : "s"} with data ·
-          peak {fmt(maxAbs, cfg.format ?? "compact", currency)}
+          {t(dates.length === 1 ? "heatmap.daysWithDataOne" : "heatmap.daysWithData").replace("{n}", String(dates.length)).replace("{peak}", fmt(maxAbs, cfg.format ?? "compact", currency))}
         </span>
       </div>
     </div>
@@ -252,9 +277,12 @@ function CalendarHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: 
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Thai readers get Thai names (the day and month are the same in both eras).
+const TH_WEEKDAYS = Array.from({ length: 7 }, (_, i) => new Intl.DateTimeFormat("th-TH", { weekday: "narrow", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 4 + i))));
+const TH_MONTHS = Array.from({ length: 12 }, (_, m) => new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, m, 1))));
 
 /** Find the column index where each month first appears, for axis labels. */
-function labelMonths(weeks: Array<Array<{ iso: string }>>): Array<{ x: number; label: string }> {
+function labelMonths(weeks: Array<Array<{ iso: string }>>, names: string[] = MONTHS): Array<{ x: number; label: string }> {
   let lastMonth = -1;
   const out: Array<{ x: number; label: string }> = [];
   weeks.forEach((w, wi) => {
@@ -262,11 +290,13 @@ function labelMonths(weeks: Array<Array<{ iso: string }>>): Array<{ x: number; l
     if (!first) return;
     const m = parseInt(first.slice(5, 7), 10) - 1;
     if (m !== lastMonth) {
-      out.push({ x: wi * 14, label: MONTHS[m] });
+      out.push({ x: wi * 14, label: names[m]! });
       lastMonth = m;
     }
   });
-  return out;
+  // A month that only shows a week or so (the padding before the first day)
+  // would print on top of the next: "MaApr". Keep the later one.
+  return out.filter((m, i) => !(out[i + 1] && out[i + 1]!.x - m.x < 28));
 }
 
 // CSS color-mix-ish: blend hex toward transparent at the given alpha (0-100).
@@ -377,7 +407,8 @@ function TilesHeatmap({
               </div>
               <div className={`font-mono text-[11px] ${solid ? "opacity-90" : "opacity-75"}`}>
                 {hasValue ? fmt(displayV, cfg.format, currency) : ""}
-                {rawStatus && <span>{hasValue ? " · " : ""}{String(r[statusField])}</span>}
+                {/* A bare tone ("success") only picks the colour — it isn't wording to show. */}
+                {rawStatus && !TONE_KEYS.has(rawStatus) && <span>{hasValue ? " · " : ""}{String(r[statusField])}</span>}
               </div>
             </>
           );
@@ -415,7 +446,22 @@ function TilesHeatmap({
             .filter(Boolean)
             .map((s) => STATUS_ALIASES[s] ?? "neutral"),
         );
-        const entries = STATUS_LEGEND_ORDER.filter((e) => present.has(e.key));
+        // When every tile of a colour shares one code (all the greens are
+        // "Star"), that's what the colour means here — say so instead of
+        // the generic tone label.
+        const codes = new Map<string, Set<string>>();
+        if (codeField) {
+          for (const r of shown) {
+            const raw = String(r[statusField] ?? "").trim().toLowerCase();
+            if (!raw || r[codeField] == null) continue;
+            const tone = STATUS_ALIASES[raw] ?? "neutral";
+            codes.set(tone, (codes.get(tone) ?? new Set()).add(String(r[codeField])));
+          }
+        }
+        const entries = STATUS_LEGEND_ORDER.filter((e) => present.has(e.key)).map((e) => {
+          const named = codes.get(e.key);
+          return named?.size === 1 ? { ...e, label: [...named][0]! } : e;
+        });
         if (entries.length === 0) return null;
         return (
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
@@ -465,8 +511,30 @@ function GridHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: any 
     if (v > e.max) e.max = v;
     matrix[y][x] = e;
   }
-  const xs = Array.from(xKeys).sort();
-  const ys = Array.from(yKeys).sort();
+  // Sets keep insertion order, i.e. the order values first appear in the rows.
+  // Otherwise numbers sort as numbers (hour 8 before 10), anything else as text.
+  const sorted = (keys: Set<string>) => {
+    const all = Array.from(keys);
+    return all.every((k) => k !== "" && Number.isFinite(Number(k))) ? all.sort((a, b) => Number(a) - Number(b)) : all.sort();
+  };
+  const xs = cfg.order === "query" ? Array.from(xKeys) : sorted(xKeys);
+  const ys = cfg.order === "query" ? Array.from(yKeys) : sorted(yKeys);
+  // A weekday column of 0–6 (Sunday first, as the retail tables keep it)
+  // reads as the day's name, not its number.
+  const dateStyle = useDateStyle();
+  const thai = dateStyle.locale === "th";
+  const isWeekday = (field: string, keys: string[]) => /^(weekday|day_of_week|dow)$/i.test(field) && keys.every((k) => /^[0-6]$/.test(k));
+  const dayName = (k: string) => (thai ? TH_WEEKDAYS : WEEKDAYS)[Number(k)]!;
+  // A month kept as a date ("2025-09-01", or "2025-09") reads as the month —
+  // thirteen ten-character dates printed over each other (Siam Tech's churn
+  // by segment and month, 2026-10-03); any other date in the reader's words.
+  const dateKey = (keys: string[]) => {
+    const monthly = isMonthStartSeries(keys);
+    return (k: string) => dateValueLabel(k, dateStyle, "axis", monthly) ?? k;
+  };
+  const axisLabel = (field: string, keys: string[]) => (isWeekday(field, keys) ? dayName : dateKey(keys));
+  const xLabel = axisLabel(xField, xs);
+  const yLabel = axisLabel(yField, ys);
   const valueOf = (e?: Bucket) => {
     if (!e) return null;
     if (cfg.aggregation === "avg") return e.sum / e.count;
@@ -482,6 +550,7 @@ function GridHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: any 
   // semantic slugs (emerald/rose/etc) stay constant by design.
   const theme = useTheme();
   const currency = useCurrency();
+  const { t } = useT();
   const slug = cfg.ramp ?? "primary";
   const ramp = slug === "primary"
     ? theme.ramps.primary[theme.ramps.primary.length - 1]
@@ -491,8 +560,15 @@ function GridHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: any 
   const CELL_W = Math.max(28, Math.min(60, Math.floor(560 / Math.max(1, xs.length))));
   const CELL_H = 28;
   const GAP = 2;
-  const LEFT_GUTTER = 90;
+  // Wide enough for the longest row label (about 6px a character at 10px),
+  // so an item name isn't cut off at the left edge.
+  const LEFT_GUTTER = Math.min(240, Math.max(60, 20 + 7.2 * Math.max(0, ...ys.map((y) => yLabel(y).length))));
   const TOP_GUTTER = 24;
+  // A column's name fits its cell — a long stage name over the last column ran
+  // off the frame (the Bureau's "คณะกรรมการพิจารณา", 2026-10-04); the cell's
+  // tooltip keeps the whole name.
+  const headChars = Math.max(4, Math.floor((CELL_W + GAP) / 6.5));
+  const xHead = (k: string) => { const s = xLabel(k); return s.length > headChars ? s.slice(0, headChars - 1) + "…" : s; };
   const width = LEFT_GUTTER + xs.length * (CELL_W + GAP);
   const height = TOP_GUTTER + ys.length * (CELL_H + GAP) + 8;
 
@@ -508,16 +584,22 @@ function GridHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: any 
   }
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="block">
+    // Fits the card (meet), like the calendar: scaled to the width alone, the
+    // last rows ran past the card's bottom and scrolled out of sight (อบต.
+    // บ้านกลาง's eleven plans by month, 2026-10-03). It shrinks to 80% of its
+    // own size at most; a grid taller than that scrolls rather than turning
+    // its labels unreadable.
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMinYMin meet" className="block h-full w-full"
+      style={{ maxWidth: width * 1.8, minHeight: Math.round(height * 0.8) }}>
       {/* X axis labels */}
       {xs.map((x, i) => (
         <text key={x} x={LEFT_GUTTER + i * (CELL_W + GAP) + CELL_W / 2} y={16}
-          className="fill-muted-foreground" fontSize={10} textAnchor="middle">{x}</text>
+          className="fill-muted-foreground" fontSize={10} textAnchor="middle">{xHead(x)}</text>
       ))}
       {/* Y axis labels */}
       {ys.map((y, j) => (
         <text key={y} x={LEFT_GUTTER - 6} y={TOP_GUTTER + j * (CELL_H + GAP) + CELL_H / 2 + 3}
-          className="fill-muted-foreground" fontSize={10} textAnchor="end">{y}</text>
+          className="fill-muted-foreground" fontSize={10} textAnchor="end">{yLabel(y)}</text>
       ))}
       {/* Cells */}
       {ys.map((y, j) =>
@@ -527,14 +609,15 @@ function GridHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: any 
             <g key={x + y} transform={`translate(${LEFT_GUTTER + i * (CELL_W + GAP)},${TOP_GUTTER + j * (CELL_H + GAP)})`}>
               <rect width={CELL_W} height={CELL_H} rx={3} ry={3} fill={cellColor(v)}
                 stroke="rgba(15,23,42,0.06)" strokeWidth={0.5}>
-                <title>{v != null
-                  ? `${x} × ${y} — ${fmt(v, cfg.format ?? "compact", currency)}`
-                  : `${x} × ${y} — no data`}</title>
+                <desc className="chart-tip">{v != null
+                  ? `${xLabel(x)} × ${yLabel(y)} — ${fmt(v, cfg.format ?? "compact", currency)}`
+                  : `${xLabel(x)} × ${yLabel(y)} — ${t("heatmap.noData")}`}</desc>
               </rect>
               {v != null && CELL_W >= 36 && (
                 <text x={CELL_W / 2} y={CELL_H / 2 + 3} textAnchor="middle" fontSize={10}
                   fill={Math.abs(v) / maxAbs > 0.6 ? "white" : "#334155"} fontWeight={500}>
-                  {fmt(v, cfg.format ?? "compact", currency)}
+                  {/* A cell holds a few characters: the short form (฿118K), the exact one is in its title. */}
+                  {formatMetricCompact(v, cfg.format ?? "compact", currency)}
                 </text>
               )}
             </g>

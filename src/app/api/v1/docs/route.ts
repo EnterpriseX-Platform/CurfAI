@@ -57,18 +57,18 @@ export async function GET() {
       },
       {
         method: "GET", path: "/api/v1/reports/{id}",
-        description: "Fetch one report's metadata + validated definition JSON.",
+        description: "Fetch one report's metadata + validated definition JSON. An admin or developer caller gets the whole definition; anyone else gets it without the blocks the report hides from their role (visibleToRoles) and the queries only those blocks read.",
         roleRequired: "viewer",
       },
       {
         method: "GET", path: "/api/v1/reports/{id}/data",
-        description: "Run a report and return the dataset as { [queryId]: rows[] }.",
+        description: "Run a report and return { dataset: { [queryId]: rows[] }, paramsApplied, queryErrors: { [queryId]: reason } }. A query that failed (or that the caller can't see) is an empty array in dataset AND an entry in queryErrors — check queryErrors before treating an empty array as 'no data'; it is {} when every query ran. A query used only by blocks the report hides from the caller's role (visibleToRoles) isn't run and is absent from both.",
         params: { "p.<name>": "Report parameter values; falls back to report defaults" },
         roleRequired: "viewer",
       },
       {
         method: "POST", path: "/api/v1/reports/{id}/ask-chat",
-        description: "Multi-turn conversational chat over a report's live dataset — pass a running message history, get prose + an optional structured action + suggested follow-ups. Rate limited to 30 turns/min per tenant.",
+        description: "Multi-turn conversational chat over a report's live dataset — pass a running message history, get prose + an optional structured action + suggested follow-ups. The report runs as the key, as /data does: sources its role can't see, and sensitivity-tagged lake columns, are kept from the model. Rate limited to 30 turns/min per tenant.",
         roleRequired: "viewer",
       },
       // ---- Lake --------------------------------------------------------

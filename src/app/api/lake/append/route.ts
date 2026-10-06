@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
 
   // 4. Append. The lake helper handles "doesn't exist yet" → falls back
   //    to a create. Schema additions emit ALTER TABLE under the hood.
-  const result = appendRows({
+  const result = await appendRows({
     tenantId: tokenRow.tenantId,
     tableName: tokenRow.tableName,
     rows: cleanRows,

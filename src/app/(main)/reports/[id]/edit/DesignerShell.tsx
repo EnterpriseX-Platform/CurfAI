@@ -107,8 +107,11 @@ export function DesignerShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // minmax(0,…) on both grids: a wide canvas (a 1920px "Dashboard" page)
+  // scrolls inside its column instead of stretching the whole designer —
+  // and the side panels — past the window.
   return (
-    <div className="grid h-screen grid-rows-[auto_auto_auto_1fr] bg-background">
+    <div className="grid h-screen grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_auto_1fr] bg-background">
       <Toolbar reportId={reportId} />
       <DesignParameterBar
         report={liveReport}
@@ -122,7 +125,7 @@ export function DesignerShell({
         onShowShortcuts={() => setShowShortcuts(true)}
       />
       <PageTabs />
-      <div className="grid grid-cols-[240px_1fr_340px] overflow-hidden">
+      <div className="grid grid-cols-[240px_minmax(0,1fr)_340px] overflow-hidden">
         <aside className="overflow-y-auto border-r border-border bg-sidebar">
           <BlockPalette />
         </aside>

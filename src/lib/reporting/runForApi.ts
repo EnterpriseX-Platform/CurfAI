@@ -14,11 +14,13 @@
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { ReportSchema } from "@/lib/reporting/schema";
-import { runReportWithProof, type RunResult } from "@/lib/reporting/runner";
+import { ReportSchema, type Report } from "@/lib/reporting/schema";
+import { runReportWithProof, type RunResult, type RunViewer } from "@/lib/reporting/runner";
+import { visibleReport } from "@/lib/reporting/visibleReport";
 import { parseParams } from "@/lib/reporting/params";
 import { getUserRoles, reportWhere, type CurfSessionUser } from "@/lib/auth";
 import { ensureLimit } from "@/lib/rateLimit";
+import { runOutcome } from "@/lib/reporting/queryRunState";
 
 export type RunReportForApiResult =
   | {
@@ -55,9 +57,9 @@ export async function runReportForApi(
     return { ok: false, response: NextResponse.json({ error: "Not found" }, { status: 404 }) };
   }
 
-  let report: ReturnType<typeof ReportSchema.parse>;
+  let full: Report;
   try {
-    report = ReportSchema.parse(JSON.parse(row.definition));
+    full = ReportSchema.parse(JSON.parse(row.definition));
   } catch (e: any) {
     return {
       ok: false,
@@ -65,15 +67,21 @@ export async function runReportForApi(
     };
   }
 
-  const paramsApplied = parseParams(url, report.parameters);
-  const userRoles = await getUserRoles();
+  const paramsApplied = parseParams(url, full.parameters);
+  const viewer: RunViewer = { id: user.id, isAdmin: user.role === "admin", roles: await getUserRoles() };
+  // Only the queries behind blocks this caller may see. The dataset used to
+  // carry every query, so an API key got the rows of a table the author hid
+  // from its role.
+  const report = visibleReport(full, viewer);
+  const withheld = full.dataSources.length - report.dataSources.length;
 
   const started = Date.now();
   try {
     const { dataset, provenance } = await runReportWithProof({
       report,
       params: paramsApplied,
-      viewer: { id: user.id, isAdmin: user.role === "admin", roles: userRoles },
+      tenantId: row.tenantId,
+      viewer,
       cacheBust: opts.cacheBust,
     });
 
@@ -81,6 +89,7 @@ export async function runReportForApi(
     // Cap snapshot size at 2 MB so we don't balloon the DB on huge exports.
     const datasetJson = JSON.stringify(dataset);
     const snapshot = datasetJson.length < 2_000_000 ? datasetJson : null;
+    const outcome = runOutcome(provenance, withheld);
     await (prisma as any).reportRun.create({
       data: {
         tenantId: row.tenantId,
@@ -88,7 +97,8 @@ export async function runReportForApi(
         userId: user.viaApiKey ? null : user.id,
         format: "html",
         params: JSON.stringify(paramsApplied),
-        status: "completed",
+        status: outcome.status,
+        error: outcome.error ?? null,
         durationMs: Date.now() - started,
         dataset: snapshot,
         provenance: snapshot ? JSON.stringify(provenance) : null,

@@ -13,7 +13,7 @@
  * passing `title`/`description` in.
  */
 export function EmptyState({
-  icon, title, description, action, preview, tone = "dashed", className,
+  icon, title, description, action, preview, tone = "dashed", compact = false, className,
 }: {
   /** A rendered icon element, e.g. <Inbox className="h-5 w-5" /> — not a
    *  component reference, so the caller controls size/stroke like every
@@ -31,16 +31,19 @@ export function EmptyState({
    *  report block or list with no rows yet. "card": a solid bordered card
    *  for a state that needs more visual weight, e.g. "no AI connected". */
   tone?: "dashed" | "card";
+  /** Tighter padding and a smaller roundel, for a frame that has to fit a small
+   *  fixed-height slot (a short report block) with more than the usual one line. */
+  compact?: boolean;
   className?: string;
 }) {
   const frame = tone === "card"
     ? "border-border bg-card shadow-xs"
     : "border-dashed border-border bg-muted/20";
   return (
-    <div className={["rounded-report border p-8 text-center", frame, className].filter(Boolean).join(" ")}>
+    <div className={["rounded-report border text-center", compact ? "p-3" : "p-8", frame, className].filter(Boolean).join(" ")}>
       {icon && (
         <div
-          className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full"
+          className={`mx-auto flex items-center justify-center rounded-full ${compact ? "mb-1.5 h-7 w-7" : "mb-3 h-10 w-10"}`}
           style={{
             background: "var(--app-accent-soft, hsl(var(--primary) / 0.1))",
             color: "var(--app-accent, hsl(var(--primary)))",
@@ -51,10 +54,10 @@ export function EmptyState({
       )}
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
       {description && (
-        <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
+        <p className={`mx-auto max-w-sm text-muted-foreground ${compact ? "mt-0.5 text-xs" : "mt-1 text-sm"}`}>{description}</p>
       )}
       {action && <div className="mt-4">{action}</div>}
-      {preview && <div className="mt-3">{preview}</div>}
+      {preview && <div className={compact ? "mt-2" : "mt-3"}>{preview}</div>}
     </div>
   );
 }

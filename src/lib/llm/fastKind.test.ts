@@ -9,7 +9,7 @@ import { isFastKind } from "./index";
 
 describe("isFastKind", () => {
   it("routes the grounded, short-output kinds to the fast model", () => {
-    for (const k of ["ask", "ask_workspace", "ask.suggestions", "why", "caption", "operate_suggest", "operate.document_draft", "brief", "watcherSuggest", "suggest", "document_qa", "marketplace.describe", "forecast", "dashboard.recommend_kpis"]) {
+    for (const k of ["ask", "ask_workspace", "ask.suggestions", "why", "caption", "operate_suggest", "operate.document_draft", "brief", "watcherSuggest", "suggest", "document_qa", "marketplace.describe", "forecast", "dashboard.recommend_kpis", "translate.report_name"]) {
       expect(isFastKind(k), k).toBe(true);
     }
   });

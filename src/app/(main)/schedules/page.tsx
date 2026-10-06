@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { SchedulesManager } from "./SchedulesManager";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { canBuild } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,7 @@ export default async function SchedulesPage() {
       <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "schedules.pageTitle")} description={t(locale, "schedules.pageSubtitle")} />
 
-        <SchedulesManager reports={reports} />
+        <SchedulesManager reports={reports} canManage={canBuild(user.role)} />
         <div className="mt-10 rounded-lg border border-dashed bg-muted/30 p-5 text-xs text-muted-foreground">
           <p className="mb-2 font-semibold text-foreground">{t(locale, "schedules.cronRunnerTitle")}</p>
           <p className="mb-2">

@@ -13,6 +13,7 @@
  * responses (e.g. "$.data.items").
  */
 import { guardedFetch } from "@/lib/security/ssrfGuard";
+import { joinRestUrl } from "@/lib/reporting/restUrl";
 import { safeJsonParse } from "@/lib/security/safeJson";
 
 export type DiscoveredField = {
@@ -64,7 +65,16 @@ export async function probeRestDataSource(
   }
   if (!conn.baseUrl) return { ok: false, error: "Connection missing baseUrl" };
 
-  const url = joinUrl(conn.baseUrl, opts.path ?? "/");
+  // joinRestUrl pins the path to the connection's own origin: an absolute
+  // path to a different host is refused rather than fetched with this
+  // connection's decrypted credentials attached (the same origin-pin the
+  // runner uses — see restUrl.ts). The old local joinUrl honoured it verbatim.
+  let url: string;
+  try {
+    url = joinRestUrl(conn.baseUrl, opts.path ?? "/");
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "Invalid probe path" };
+  }
   const headers: Record<string, string> = { "Accept": "application/json" };
   if (conn.headers) Object.assign(headers, conn.headers);
 
@@ -143,14 +153,6 @@ export async function probeRestDataSource(
 }
 
 // ---------------------------------------------------------------------------
-
-function joinUrl(base: string, path: string): string {
-  if (!path) return base;
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  if (base.endsWith("/") && path.startsWith("/")) return base + path.slice(1);
-  if (!base.endsWith("/") && !path.startsWith("/")) return base + "/" + path;
-  return base + path;
-}
 
 function walkPath(obj: any, path: string): { value: any; pathFound?: string } {
   const parts = path.replace(/^\$\.?/, "").split(".").filter(Boolean);

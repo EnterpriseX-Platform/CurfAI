@@ -112,7 +112,7 @@ export const TEMPLATES: Template[] = [
         pages: [page([
           { id: rid(), type: "title", x: 0, y: 0, w: 12, h: 2, config: { text: "Financial P&L", subtitle: "{{param.from}} to {{param.to}}", align: "left" } },
           { id: rid(), type: "kpi", x: 0, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Revenue",  valueField: "revenue",    format: "currency" } },
-          { id: rid(), type: "kpi", x: 3, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "COGS",     valueField: "cogs",       format: "currency" } },
+          { id: rid(), type: "kpi", x: 3, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "COGS",     valueField: "cogs",       format: "currency", sparkPositive: "down" } },
           { id: rid(), type: "kpi", x: 6, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Margin",   valueField: "margin",     format: "currency" } },
           { id: rid(), type: "kpi", x: 9, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Margin %", valueField: "margin_pct", format: "percent"  } },
           { id: rid(), type: "chart", x: 0, y: 5, w: 12, h: 6, config: { queryId: "ds_month", chartType: "line", xField: "month", yFields: ["revenue","cogs","margin"], title: "Monthly P&L", stacked: false, showLegend: true } },
@@ -160,7 +160,7 @@ export const TEMPLATES: Template[] = [
         pages: [page([
           { id: rid(), type: "title", x: 0, y: 0, w: 12, h: 2, config: { text: "Inventory Status", subtitle: "Live snapshot", align: "left" } },
           { id: rid(), type: "kpi", x: 0, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Active SKUs",      valueField: "skus",  format: "number"   } },
-          { id: rid(), type: "kpi", x: 4, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Low stock",        valueField: "low",   format: "number"   } },
+          { id: rid(), type: "kpi", x: 4, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Low stock",        valueField: "low",   format: "number", sparkPositive: "down" } },
           { id: rid(), type: "kpi", x: 8, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Inventory value",  valueField: "value", format: "currency" } },
           { id: rid(), type: "table", x: 0, y: 5, w: 12, h: 7, config: { queryId: "ds_store", title: "By store", pageSize: 50, stripe: true, showTotals: true, columns: [
             { key: "store",    label: "Store",    type: "string",   total: "none" },
@@ -213,7 +213,7 @@ export const TEMPLATES: Template[] = [
           { id: rid(), type: "title", x: 0, y: 0, w: 12, h: 2, config: { text: "Headcount & Attrition", align: "left" } },
           { id: rid(), type: "kpi", x: 0, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Active employees", valueField: "active",         format: "number"  } },
           { id: rid(), type: "kpi", x: 4, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "New hires (12mo)", valueField: "newHires",       format: "number"  } },
-          { id: rid(), type: "kpi", x: 8, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Attrition rate",   valueField: "attritionRate",  format: "percent" } },
+          { id: rid(), type: "kpi", x: 8, y: 2, w: 4, h: 3, config: { queryId: "ds_totals", label: "Attrition rate",   valueField: "attritionRate",  format: "percent", sparkPositive: "down" } },
           { id: rid(), type: "chart", x: 0, y: 5, w: 12, h: 6, config: { queryId: "ds_dept", chartType: "bar", xField: "department", yFields: ["headcount"], title: "Headcount by department", stacked: false, showLegend: true } },
           { id: rid(), type: "table", x: 0, y: 11, w: 12, h: 6, config: { queryId: "ds_dept", title: "By department", pageSize: 50, stripe: true, showTotals: true, columns: [
             { key: "department", label: "Department",  type: "string",   total: "none" },
@@ -352,7 +352,7 @@ export const TEMPLATES: Template[] = [
           { id: rid(), type: "kpi", x: 0, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Deposits", valueField: "deposits", format: "currency" } },
           { id: rid(), type: "kpi", x: 3, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Loans",    valueField: "loans",    format: "currency" } },
           { id: rid(), type: "kpi", x: 6, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "NIM",      valueField: "nim",      format: "percent"  } },
-          { id: rid(), type: "kpi", x: 9, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "NPL",      valueField: "npl",      format: "percent"  } },
+          { id: rid(), type: "kpi", x: 9, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "NPL",      valueField: "npl",      format: "percent", sparkPositive: "down" } },
           { id: rid(), type: "chart", x: 0, y: 5, w: 12, h: 6, config: { queryId: "ds_trend", chartType: "line", xField: "month", yFields: ["deposits","loans"], title: "Deposits vs. loan book", stacked: false, showLegend: true } },
           { id: rid(), type: "table", x: 0, y: 11, w: 12, h: 8, config: { queryId: "ds_products", title: "Loan portfolio by product", pageSize: 50, stripe: true, showTotals: true, columns: [
             { key: "product",  label: "Product",     type: "string",   total: "none" },
@@ -403,7 +403,7 @@ export const TEMPLATES: Template[] = [
           { id: rid(), type: "kpi", x: 0, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Active policies", valueField: "policies",  format: "number"   } },
           { id: rid(), type: "kpi", x: 3, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "GWP",             valueField: "gwp",       format: "currency" } },
           { id: rid(), type: "kpi", x: 6, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Claims paid",     valueField: "claims",    format: "currency" } },
-          { id: rid(), type: "kpi", x: 9, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Loss ratio",      valueField: "lossRatio", format: "percent"  } },
+          { id: rid(), type: "kpi", x: 9, y: 2, w: 3, h: 3, config: { queryId: "ds_totals", label: "Loss ratio",      valueField: "lossRatio", format: "percent", sparkPositive: "down" } },
           { id: rid(), type: "chart", x: 0, y: 5, w: 12, h: 6, config: { queryId: "ds_month", chartType: "area", xField: "month", yFields: ["claims"], title: "Claims over time", stacked: false, showLegend: true } },
           { id: rid(), type: "table", x: 0, y: 11, w: 12, h: 8, config: { queryId: "ds_line", title: "By line of business", pageSize: 50, stripe: true, showTotals: true, columns: [
             { key: "line",      label: "Line",         type: "string",   total: "none" },

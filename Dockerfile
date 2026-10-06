@@ -14,12 +14,12 @@
 #
 # The base image is pinned to a digest so a rebuild cannot silently pull
 # different upstream content. Re-resolve deliberately with
-# `docker pull node:20-slim && docker inspect --format='{{index .RepoDigests 0}}' node:20-slim`.
+# `docker pull node:22-bookworm-slim && docker inspect --format='{{index .RepoDigests 0}}' node:22-bookworm-slim`.
 
 # -----------------------------------------------------------------------------
 # 1. deps
 # -----------------------------------------------------------------------------
-FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS deps
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS deps
 WORKDIR /app
 
 # Build tools for better-sqlite3. Dropped in the runner stage.
@@ -37,7 +37,7 @@ RUN npx prisma generate \
 # -----------------------------------------------------------------------------
 # 2. build
 # -----------------------------------------------------------------------------
-FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS build
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -49,7 +49,7 @@ RUN npx prisma generate \
 # -----------------------------------------------------------------------------
 # 3. runner
 # -----------------------------------------------------------------------------
-FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runner
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runner
 WORKDIR /app
 
 # Chromium for PDF export, plus fonts for Latin, CJK and Thai output.

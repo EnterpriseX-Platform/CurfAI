@@ -7,6 +7,7 @@ import { Users, FileText, Database } from "lucide-react";
 import { TenantRenameForm } from "./TenantRenameForm";
 import { CurrencyPanel } from "./CurrencyPanel";
 import { RegionPanel } from "./RegionPanel";
+import { TimezonePanel } from "./TimezonePanel";
 import { PdpaRecordPanel, type PdpaRecord } from "./PdpaRecordPanel";
 import { LlmProviderPanel } from "./LlmProviderPanel";
 import { LakeEnginePanel } from "./LakeEnginePanel";
@@ -71,6 +72,8 @@ export default async function TenantSettingsPage() {
         <CurrencyPanel initial={tenant.currency ?? null} />
 
         <RegionPanel initial={tenant.region ?? null} />
+
+        <TimezonePanel initial={(tenant as any).timezone ?? null} />
 
         <PdpaRecordPanel initial={pdpaRecord} tenantName={tenant.name} region={tenant.region ?? null} />
 

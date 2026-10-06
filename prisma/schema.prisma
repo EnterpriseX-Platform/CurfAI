@@ -90,9 +90,14 @@ model Tenant {
   // `llmProvider` defaults to "anthropic" for back-compat with tenants
   // that pre-date this column. `llmKeyEnc` is the AES-256-GCM encrypted
   // API key for the selected provider. `llmModel` is the model id (e.g.
-  // claude-sonnet-4-6, gpt-4o, gemini-2.5-pro, kimi-k2). `llmBaseUrl` is
+  // claude-sonnet-4-6, gpt-4o, gemini-2.5-pro, kimi-k3). `llmBaseUrl` is
   // only used by the openai-compatible driver — paste in Together /
   // OpenRouter / Groq / Kimi / DeepSeek / Ollama base URLs to use those.
+  // A model id can go stale on its own when the upstream provider retires
+  // it (e.g. Moonshot sunsetting the whole moonshot-v1 line and kimi-k2.5
+  // on 2026-08-31) — scripts/migrate-retired-llm-models.ts clears any
+  // tenant still pinned to a retired id so calls fall back to the
+  // driver's current default instead of failing outright.
   llmProvider              String?       @default("anthropic")
   llmKeyEnc                String?
   llmModel                 String?
@@ -119,7 +124,37 @@ model Tenant {
   // Read by the cron tick to debounce — we only re-fire after 24h of
   // continued spend over threshold so the channel doesn't get spammed.
   llmCostLastNotifyAt      DateTime?
-  // Workspace default currency (ISO 4217, e.g. "THB", "USD"). Null → "USD".
+  // E2 Phase E (E2_JOBS_SCOPING_PLAN.md §5) — the nightly auto-snapshot's
+  // 23h "too recent" check (backup.ts's snapshotTenant) was a soft dedupe:
+  // two concurrent calls (the cron sweep and a manual "Snapshot now" click,
+  // or two overlapping cron ticks) could both pass the staleness check
+  // before either committed a new LakeBackup row, and both proceed to
+  // snapshot. Leased the same way as the other five subsystems (see
+  // MaterializedView's leasedBy/leasedUntil comment) — Tenant is the
+  // natural one-row-per-unit-of-work target here since backup isn't a
+  // per-row schedule config the way MaterializedView/LakePull/etc are.
+  // Scoped strictly to backup's own dedupe; not used for anything else.
+  backupLeasedBy           String?
+  backupLeasedUntil        DateTime?
+  // Cross-PROCESS lock for a DuckDB tenant's live file. DuckDB's own
+  // exclusive-open (see engine/duckdb.ts's module comment) only reliably
+  // serializes within one Node process; the in-process FIFO queue there
+  // covers that. It does NOT cover two separate pods opening the same
+  // tenant's .duckdb file at once — the lake volume is provisioned
+  // ReadWriteMany specifically so the deployment can scale past one
+  // replica (k8s/lake-pvc.yaml's own comment), and DuckDB's file lock over
+  // NFS can't be trusted the way a real POSIX flock can (well-documented
+  // NFS lock unreliability, not something worth depending on here). This
+  // is the second half of that: acquired around the live tenant file only
+  // (not backup/clone/migration temp files, which are never a shared,
+  // contended resource by construction), heartbeated while a connection
+  // stays open so a genuinely long operation doesn't get preempted, and
+  // released — or, if the pod dies, reclaimed after the TTL — the same
+  // way every other lease in this file already works.
+  lakeLockedBy             String?
+  lakeLockedUntil          DateTime?
+  // Workspace default currency (ISO 4217, e.g. "THB", "USD"). Null → baht
+  // (DEFAULT_CURRENCY in lib/reporting/currency.ts).
   // Individual reports can override via Report.currency; this is the
   // fallback every block's currency formatting resolves to otherwise.
   // Deliberately NOT part of brandJson — that panel is Business-tier
@@ -133,6 +168,14 @@ model Tenant {
   // processing record panel to decide whether to show Thailand-specific
   // guidance or a generic note. See src/lib/tenantRegion.ts.
   region                   String?
+  // Workspace time zone (IANA name, e.g. "Asia/Bangkok"), set by an admin at
+  // Admin -> Tenant. Null means no workspace default is set. Only place this
+  // is read today: the Strategist's morning results check (lib/executive/
+  // strategistResults.ts) falls back to it for a member who hasn't set their
+  // own LINE brief time zone, so "every morning" means the workspace's
+  // morning rather than UTC. Not used for anything display-side yet (report
+  // timestamps, schedules) — a candidate for widening later, not now.
+  timezone                 String?
   // ---- Legacy (pre-LLM-pivot) Anthropic key ----
   // Kept for back-compat: getLLMKey() still reads this when llmKeyEnc is
   // null AND llmProvider is "anthropic". A migration script will copy
@@ -213,8 +256,13 @@ model Tenant {
   onScreenKioskTokens      OnScreenDisplayKioskToken[]
   snippets                 Snippet[]
   apps                     App[]
+  appScenarios             AppScenario[]
   savedViews               SavedView[]
   lakeTables               LakeTable[]
+  lakeImportMappings       LakeImportMapping[]
+  strategistQuestions      StrategistQuestion[]
+  companyProfileVersions   CompanyProfileVersion[]
+  aiJobs                   AiJob[]
   lakeIngestTokens         LakeIngestToken[]
   lakePulls                LakePull[]
   lakeBackups              LakeBackup[]
@@ -230,6 +278,10 @@ model Tenant {
   // Pricing-dimension only — the orchestration that actually spawns
   // the dedicated pod lives in ops, not the app.
   dedicatedInstance        Boolean                           @default(false)
+  // Executive journey (P2): who may assign whom, free-form vs template
+  // assignments, overdue escalation — Zod-validated in lib/assign/policy.ts.
+  // Null = the defaults there.
+  execPolicyJson           String?
 
   @@index([organizationId])
 }
@@ -244,6 +296,9 @@ model User {
   email             String             @unique
   name              String?
   passwordHash      String?
+  // When the password was last set by a reset. Sessions authenticated before
+  // it are signed out on their next periodic re-check (lib/auth.ts jwt()).
+  passwordChangedAt DateTime?
   // Per-user preferences. JSON shape:
   //   { themeOverride?: Theme | null,    // forces this theme regardless of report.theme
   //     mode?: "light" | "dark" | "auto",
@@ -605,7 +660,9 @@ model PublicShareToken {
   tenantId    String
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reportId    String
-  token       String    @unique
+  // sha256 of the link's secret (hashInviteToken). The raw value is shown
+  // once, when the link is made; a copy of the database opens no report.
+  tokenHash   String    @unique
   expiresAt   DateTime?
   createdById String?
   createdAt   DateTime  @default(now())
@@ -760,6 +817,8 @@ model App {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   // Copilot threads scoped to this app (view kind "copilot").
+  // Named What-if scenarios saved on this app's What-if tab.
+  scenarios        AppScenario[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, reportId])
@@ -781,10 +840,39 @@ model App {
 // tenant-scoped AppViewerGrant row per app. Session is its own opaque
 // cookie (curf_viewer_session) backed by AppViewerSession, never NextAuth —
 // see src/lib/appViewers/session.ts.
+model AppScenario {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appId       String
+  app         App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  // The What-if view it was saved on (App.viewsJson id).
+  viewId      String
+  name        String
+  valuesJson  String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([appId, name])
+  @@index([tenantId, appId])
+}
+
+// ── Executive journey P2: org chart + assignments ────────────────────────
+//
+// OrgPerson is everyone in a workspace who can be handed work: seated
+// members get a row automatically (lib/assign/org.ts), and seatless people
+// (P3) are rows with no userId. Reporting lines (managerId) decide "my team",
+// who someone may delegate to, and who an overdue item escalates to.
 model AuditEvent {
   id             String   @id @default(cuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Nullable for a genuine platform-level action with no tenant yet
+  // (waitlist invite/approve/deny — see WaitlistRequest's own "not
+  // tenant-scoped" note). recordAudit() only writes null here when the
+  // caller explicitly passes `tenantId: null`; every other call site keeps
+  // requiring a real tenantId, so this doesn't loosen the normal case.
+  tenantId       String?
+  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId         String?
   userEmail      String?
   // Dotted action namespace: signin, signout, report.create, report.delete,
@@ -802,6 +890,9 @@ model AuditEvent {
   // role in a DIFFERENT tenant than the actor's own). Lets an org-wide
   // audit view surface these even though `tenantId` alone can't.
   organizationId String?
+  // Executive journey P5: an assistant acted for this person (userId is the
+  // assistant). Null for everything done in person.
+  onBehalfOfUserId String?
 
   @@index([tenantId, createdAt])
   @@index([tenantId, kind])
@@ -1036,6 +1127,31 @@ model LakeTable {
   @@index([tenantId, domain])
 }
 
+// A column mapping the user confirmed for one file layout, so the next
+// export from the same point-of-sale system maps itself (lib/lake/columnMapping.ts).
+// A layout is identified by its headers — headerSignature(), order and case
+// ignored — within one standard dataset (lib/lake/standardDatasets.ts).
+model LakeImportMapping {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Standard dataset id: "sales_lines" | "inventory".
+  dataset        String
+  signature      String
+  // ColumnMapping — standard field key → { column } | { value }.
+  mappingJson    String
+  // Day/month order per source date column, as confirmed.
+  dateOrdersJson String?
+  // The file this layout was last confirmed on, for display.
+  lastFilename   String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, dataset, signature])
+  @@index([tenantId])
+}
+
 // Tenant-scoped HMAC token used by the inbound webhook ingest endpoint
 // (POST /api/lake/append). Each token is bound to a specific table; that
 // way a leaked token can be revoked without rotating credentials for
@@ -1115,6 +1231,13 @@ model MaterializedView {
   lastError      String?
   createdAt      DateTime  @default(now())
   createdById    String?
+  // E2 Phase C (E2_JOBS_SCOPING_PLAN.md §5) — same conditional-UPDATE lease
+  // sync/leases.ts already proves works, generalized in lib/cron/leases.ts.
+  // Guards against two cron ticks (replicas, a manual trigger racing the
+  // scheduled one) both recomputing this MV concurrently; a crashed worker's
+  // lease just expires at leasedUntil and the next tick reclaims the row.
+  leasedBy       String?
+  leasedUntil    DateTime?
 
   // ---- Catalog metadata (round 7). Same shape as LakeTable.
   description String?
@@ -1207,6 +1330,9 @@ model LakePull {
   lastError        String?
   createdAt        DateTime  @default(now())
   createdById      String?
+  // E2 Phase C — see MaterializedView's leasedBy/leasedUntil comment.
+  leasedBy         String?
+  leasedUntil      DateTime?
 
   @@index([tenantId, enabled])
   @@index([tenantId, tableName])
@@ -1396,6 +1522,14 @@ model MarketplaceTemplate {
   // show "Already published" + "Update" affordances. Null when the
   // source was deleted or the template was imported and re-published.
   sourceReportId   String?
+  // Same idea as sourceReportId, for kind="operate" rows (published from
+  // an ActionTemplate, not a Report — the two source kinds don't share a
+  // table so this needed its own column rather than overloading
+  // sourceReportId). (authorTenantId, sourceActionTemplateId) is the
+  // dedupe key /api/operate/templates/[id]/publish checks before
+  // creating a new row, so publishing the same template twice updates
+  // the existing listing instead of minting "-2", "-3" duplicate slugs.
+  sourceActionTemplateId String?
   // User-facing fields. `description` supports markdown; rendered with
   // the same renderer the report viewer uses (no script execution).
   name             String
@@ -1487,6 +1621,29 @@ model LakeSnapshot {
 // Schedule: standard 5-field cron. The whole pipeline runs as one DAG
 // per tick — we don't allow per-step schedules (that's a different
 // product).
+model ActivationRunWrite {
+  id          String        @id @default(cuid())
+  tenantId    String
+  runId       String
+  // "created" | "updated" | "posted" | "delivered" | "bulk_job"
+  operation   String
+  // HubSpot object id, Salesforce record or bulk-job id, Slack "channel:ts",
+  // webhook batch number — whatever the destination's undo call needs.
+  externalId  String
+  // Field values before the write (encrypted JSON — it is customer CRM data):
+  // an updated record's previous values, or a Salesforce job's snapshot.
+  previousEnc String?
+  undoneAt    DateTime?
+  undoError   String?
+  createdAt   DateTime      @default(now())
+
+  @@index([tenantId, runId])
+  @@index([runId])
+}
+
+// External system configuration — credentials, base URL, target object.
+// One destination can power many activations; rotating creds in one place
+// updates all dependent activations.
 model LakeExternalTable {
   id                   String    @id @default(cuid())
   tenantId             String
@@ -1545,6 +1702,43 @@ model LakeExternalTable {
 // the schema diff small — tenantId filtering happens in the API layer.
 // ----------------------------------------------------------------------------
 
+model AiJob {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // What kind of work this job represents — open-ended for future
+  // callers, same convention as MasterBuildArtifact.kind.
+  kind        String
+  // running | done | failed
+  status      String   @default("running")
+  // Human-readable label of the current step ("Designing your plan
+  // with AI…", "Validating the plan…"). Set by the code actually doing
+  // the work, at real checkpoints — never a client-side timer guessing.
+  stage       String   @default("")
+  // Coarse, not a measured percentage: real checkpoints reached (job
+  // created / LLM responded / done), not fabricated smooth progress.
+  progressPct Int      @default(0)
+  // Append-only log of what the job actually did — repairs, budget
+  // widening, stage transitions (see PlanLogEntry in customPlanner.ts) —
+  // so a UI can show real work happening instead of one frozen `stage`
+  // string for the whole run. JSON array, kind-specific like resultJson;
+  // capped by the writer, not here.
+  eventsJson  String?
+  // The job's return value once status="done" — shape is kind-specific.
+  resultJson  String?
+  // The job's error envelope once status="failed" — shape is kind-
+  // specific too (e.g. the custom-plan job preserves canSwitchModel/
+  // hint/supportedArchetypes so the caller's existing error UI needs no
+  // special-casing for having come from a job instead of a direct call).
+  errorJson   String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, createdAt])
+}
+
+// instead of canned ones.
 model WaitlistRequest {
   id              String    @id @default(cuid())
   email           String    @unique
@@ -1655,7 +1849,125 @@ model SyncRun {
   @@index([connectionId, startedAt])
 }
 
+// Unified run-history — E2 ("Jobs that survive") Phase A. One append-only
+// row per run attempt across every background job kind, so freshness
+// badges and the admin "run now" surfaces read one shape instead of each
+// subsystem inventing its own (see E2_JOBS_SCOPING_PLAN.md §1: today
+// MaterializedView/LakePull/LakeParquetExport/LakeCdcSubscription only
+// ever overwrite a lastStatus column in place, with no history at all).
+//
+// Deliberately NOT a replacement for the domain-specific run tables
+// (SyncRun, ReportRun, ActivationRun, DataQualityRun, LakePipelineRun) —
+// those carry per-domain detail (e.g. ReportRun's dataset snapshots for
+// time-travel diffing) this table doesn't try to hold. JobRun answers
+// exactly one question — "is this fresh, did the last run succeed" —
+// for every kind, including the four that have no history table today.
+//
+// No formal Tenant relation, matching SyncConnection's own precedent
+// directly above (bare tenantId column, app-enforced, no FK/cascade) —
+// this table is written by cron ticks across every tenant, not scoped
+// through a single parent the way most per-tenant models are.
+model JobRun {
+  id           String    @id @default(cuid())
+  tenantId     String
+  kind         String // 'sync' | 'cdc' | 'materialize' | 'pipeline' | 'restPull' | 'backup' | 'parquetExport'
+  targetId     String // the SyncJob/LakeCdcSubscription/MaterializedView/... row's own id
+  targetLabel  String? // denormalized name so a freshness badge doesn't need a join per kind
+  status       String // 'running' | 'ok' | 'failed'
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  durationMs   Int?
+  rowsAffected Int?
+  error        String?
+  metaJson     String? // kind-specific extra detail (e.g. sync's added/updated/deleted split)
+
+  @@index([tenantId, kind, targetId, startedAt])
+}
+
 // Mapping from source-object → tenant-lake table. columnMapJson is the
 // authoritative source-column → lake-column map plus per-column type hints.
 // Lets users rename Salesforce.Opportunity.Owner_c → opp_owner without
-// touching their report SQL.
+// touching their report SQL.
+model StrategistQuestion {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdById String
+  question    String
+  // planning | plan_ready | researching | ready | failed | closed
+  status      String    @default("planning")
+  // { steps: [{ title, how }], estimateMinutes }
+  planJson    String?
+  // What the research found ({ reply, queries, evidence }), kept so a memo
+  // that fails can be written again without redoing the research.
+  researchJson String?
+  // { answer, checks[], options[], nextSteps[] } — see StrategistMemo
+  memoJson    String?
+  // The company context the memo was written with (StrategistContextStamp):
+  // profile version, plans as of, counts — "Based on …" on the memo and paper.
+  contextJson  String?
+  // Results tracking, once a next step is assigned (strategistResults.ts):
+  // { target, since, checks: [{ at, value, plan, state, gap }], replanId? }
+  trackingJson String?
+  // A re-plan made because the target stayed off track: the question it follows up.
+  parentId     String?
+  // What a Deep Ask already found, when this question was handed over from
+  // one: background for the plan and the memo, never evidence it may cite.
+  briefing     String?
+  // What it did, in order: [{ at, text }]
+  logJson     String    @default("[]")
+  error       String?
+  // Model tokens spent, for the budget line.
+  tokensUsed  Int       @default(0)
+  approvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  deckVersions StrategistDeckVersion[]
+
+  @@index([tenantId, createdById, updatedAt])
+  @@index([status, updatedAt])
+}
+
+// A saved edit of a Strategist memo's deck (lib/executive/deckVersion.ts): an
+// overlay of text changes - titles, the answer, option and next-step wording,
+// hidden/reordered slides - kept beside the memo, never in it. The memo and
+// its figures stay the evidence-checked original; opening a version applies
+// the overlay on top, and every export marks the text as edited by a person.
+model StrategistDeckVersion {
+  id              String             @id @default(cuid())
+  tenantId        String
+  questionId      String
+  question        StrategistQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  name            String
+  // The overlay (DeckOverlaySchema), plain text only.
+  overridesJson   String
+  createdById     String
+  // The version this one was edited from, if it was not made from the original.
+  parentVersionId String?
+  createdAt       DateTime           @default(now())
+
+  @@index([tenantId, questionId, createdAt])
+}
+
+// Deep Ask: a question Ask Curf works through in the background once the
+// person approves its plan — the same run as the Strategist's
+// (lib/agent/deepRun.ts), answering what and why on the workspace's data
+// rather than writing a strategy memo. lib/ask/deepAsk.ts.
+model CompanyProfileVersion {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  version      Int
+  // { sell, customers, markets, priorities: string[], offLimits }
+  bodyJson     String
+  createdById  String
+  // Who keeps it current — reminded when it goes unreviewed.
+  ownerUserId  String?
+  // Set when saved, and again when someone confirms it's still right.
+  reviewedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@unique([tenantId, version])
+  @@index([tenantId, createdAt])
+}

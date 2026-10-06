@@ -9,11 +9,13 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireUser, requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { dropTable, previewRows, getTable, rowCount as countRows } from "@/lib/lake/tables";
 import { lakeFileSize } from "@/lib/lake/storage";
 import { bustLakeCacheForTenant } from "@/lib/lake/bust";
+import { mergeGovernanceMetadata, parseSchemaJson } from "@/lib/lake/schemaGovernance";
+import { lakeTableFor } from "@/lib/lake/tableAccess";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,34 +25,25 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Resolve via the catalog so we get the canonical (case-preserved) name
-  // and the createdAt etc the user expects.
-  const row = await prisma.lakeTable.findFirst({
-    where: { tenantId: user.tenantId, name: decodeURIComponent(params.name) },
-  });
-  if (!row) return NextResponse.json({ error: "Table not found" }, { status: 404 });
-
-  // ACL gate — same response as "not found" so a hidden table doesn't
-  // even reveal its existence to a user who shouldn't see it.
-  const { canRead, loadRoleSlugs } = await import("@/lib/lake/acl");
-  const roleSlugs = await loadRoleSlugs(user.id, user.tenantId);
-  if (!canRead({ id: user.id, tenantId: user.tenantId, role: user.role, roleSlugs }, row)) {
-    return NextResponse.json({ error: "Table not found" }, { status: 404 });
-  }
+  // and the createdAt etc the user expects. A table the viewer can't read
+  // answers "not found", so a hidden table doesn't reveal it exists.
+  const access = await lakeTableFor(user, decodeURIComponent(params.name), "read");
+  if (access instanceof NextResponse) return access;
+  const { row, viewer } = access;
 
   // Column-level redaction (Phase 3). The schema is loaded from the
   // catalog row's schemaJson — that's the authoritative sensitivity-tag
   // store. We pass it through redaction.applyRedaction which mutates the
   // preview rows in place. Tenant admins always see unredacted values
   // (see redaction.ts threat model).
-  const { applyRedaction, readsSensitiveData } = await import("@/lib/lake/redaction");
-  const viewer = { id: user.id, role: user.role, roleSlugs };
+  const { applyRedaction, readsSensitiveData, redactSamples } = await import("@/lib/lake/redaction");
 
-  const meta = getTable(user.tenantId, row.name);
+  const meta = await getTable(user.tenantId, row.name);
   // Prefer the cached row count from the catalog when on-disk count agrees
   // — it usually does. The disk number wins on disagreement (e.g. an
   // earlier ingest crashed mid-write).
-  let diskCount = countRows(user.tenantId, row.name);
-  let rawPreview = previewRows(user.tenantId, row.name, 50);
+  let diskCount = await countRows(user.tenantId, row.name);
+  let rawPreview = await previewRows(user.tenantId, row.name, 50);
   let asOfResolved: string | null = null;
   let asOfMissed = false;
 
@@ -78,15 +71,10 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
   // The catalog row's schemaJson has the authoritative sensitivity tags.
   // The on-disk inferred schema (from getTable) doesn't — it's just
   // type/sample. Merge: type from disk, sensitivity from catalog.
-  const catalogSchema = (safeJson(row.schemaJson) ?? []) as any[];
-  const sensitivityByName = new Map<string, { sensitivity?: any; unredactedForRoles?: string[] }>();
-  for (const c of catalogSchema) {
-    if (c?.sensitivity) sensitivityByName.set(c.name, { sensitivity: c.sensitivity, unredactedForRoles: c.unredactedForRoles });
-  }
-  const schema = (meta?.columns ?? catalogSchema).map((c: any) => ({
-    ...c,
-    ...(sensitivityByName.get(c.name) ?? {}),
-  }));
+  // (mergeGovernanceMetadata, as the rows and formula routes build it; a
+  // formula column's tags come from the columns it reads.)
+  const catalogSchema = parseSchemaJson(row.schemaJson);
+  const schema = mergeGovernanceMetadata(catalogSchema, meta?.columns ?? catalogSchema);
 
   // Redact per-role. Mutates preview in place, returns same array.
   const preview = applyRedaction(rawPreview, schema, viewer);
@@ -107,7 +95,8 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
     name: row.name,
     sourceKind: row.sourceKind,
     sourceConfig: safeJson(row.sourceConfigJson),
-    schema,
+    // Each column's sample is a value from the table: masked like the rows.
+    schema: redactSamples(schema, viewer),
     rowCount: diskCount,
     sizeBytes: row.sizeBytes,
     asOfResolved,
@@ -119,18 +108,18 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { name: string } }) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
 
-  const row = await prisma.lakeTable.findFirst({
-    where: { tenantId: user.tenantId, name: decodeURIComponent(params.name) },
-  });
-  if (!row) return NextResponse.json({ error: "Table not found" }, { status: 404 });
+  // Dropping a table needs reading it first: one the caller can't see is not found.
+  const access = await lakeTableFor(user, decodeURIComponent(params.name), "build");
+  if (access instanceof NextResponse) return access;
+  const { row } = access;
 
   // On-disk first so a partial failure leaves the catalog with a stale row
   // (recoverable via re-create) rather than the opposite (catalog says
   // "table is gone" but file is still there silently consuming quota).
-  dropTable(user.tenantId, row.name);
+  await dropTable(user.tenantId, row.name);
   await prisma.lakeTable.delete({ where: { id: row.id } });
   // Recompute size cache for any sibling rows so the quota readout reflects
   // the freed space immediately.

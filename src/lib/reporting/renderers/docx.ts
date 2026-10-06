@@ -7,30 +7,48 @@ import {
   Table, TableCell, TableRow, WidthType, TextRun, BorderStyle,
   Header, Footer, PageNumber,
 } from "docx";
-import { runReport, interpolate, type RunViewer } from "@/lib/reporting/runner";
-import { aggregate, formatCell, uncappedTableTitle } from "@/lib/reporting/format";
+import { runReportWithProof, interpolate, ANONYMOUS_VIEWER, type RunViewer } from "@/lib/reporting/runner";
+import { queryErrors } from "@/lib/reporting/queryRunState";
+import { visibleReport } from "@/lib/reporting/visibleReport";
+import { aggregate, formatCell, uncappedTableTitle, thaiDateLabel, type DateStyle } from "@/lib/reporting/format";
 import type { Report } from "@/lib/reporting/schema";
+import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 
 export async function renderDocx(
   report: Report,
   params: Record<string, unknown>,
-  currency?: string,
-  /**
-   * Rows to render instead of executing the report. For documents that are
-   * ASSEMBLED rather than queried — the Master Builder data-requirements
-   * manifest builds its own rows in memory and has no dataSources to run.
-   * Omit it and the report executes as usual.
-   */
-  presetDataset?: Record<string, Array<Record<string, unknown>>>,
-  /** A downloaded file leaves the app entirely, so redaction matters here
-   *  at least as much as on-screen — pass the requesting user's viewer.
-   *  Meaningless (and skipped) when presetDataset is supplied — those
-   *  rows are assembled in memory, not queried. */
-  viewer?: RunViewer,
+  opts: {
+    /** The workspace the report belongs to — see RunContext.tenantId. */
+    tenantId: string;
+    currency?: string;
+    /**
+     * Rows to render instead of executing the report. For documents that are
+     * ASSEMBLED rather than queried — the Master Builder data-requirements
+     * manifest builds its own rows in memory and has no dataSources to run.
+     * Omit it and the report executes as usual.
+     */
+    presetDataset?: Record<string, Array<Record<string, unknown>>>;
+    /** A downloaded file leaves the app entirely, so redaction matters here
+     *  at least as much as on-screen — pass the requesting user's viewer.
+     *  Its redaction is meaningless (and skipped) when presetDataset is
+     *  supplied — those rows are assembled in memory, not queried — but it
+     *  still decides which blocks the document carries. Omitted, the
+     *  document renders as nobody: blocks and data both. */
+    viewer?: RunViewer;
+    /** Reader's language + year style, report's dateEra applied (resolveDateStyle). */
+    dateStyle?: DateStyle;
+  },
 ): Promise<Buffer> {
+  const { tenantId, currency, presetDataset, viewer, dateStyle } = opts;
+  const display = (v: unknown) => thaiDateLabel(v, dateStyle);
+  report = visibleReport(report, viewer);
   // A Word export is a document people read, but its tables are still the
   // data — so lift the generator's display cap and emit every row.
-  const dataset = presetDataset ?? (await runReport({ report, params, forExport: true, viewer }));
+  const run = presetDataset ? null : await runReportWithProof({ report, params, tenantId, forExport: true, viewer: viewer ?? ANONYMOUS_VIEWER });
+  const dataset = presetDataset ?? run!.dataset;
+  // A query that failed is an empty array in the dataset; written out as-is it is a blank KPI or
+  // an empty table in a document that then travels without any sign that something is missing.
+  const notRun = queryErrors(run?.provenance);
   const children: any[] = [];
 
   children.push(new Paragraph({
@@ -42,23 +60,40 @@ export async function renderDocx(
       children: [new TextRun({ text: report.description, italics: true, color: "666666" })],
     }));
   }
+  // A report a model wrote says so in the document too (ai.notice), in the reader's language.
+  if (report.quality?.authored === "ai") {
+    const lang: Locale = (LOCALES as readonly string[]).includes(dateStyle?.locale ?? "") ? (dateStyle!.locale as Locale) : "en";
+    children.push(new Paragraph({ children: [new TextRun({ text: `✦ ${t(lang, "ai.notice")}`, size: 18, color: "6B7280" })] }));
+  }
   children.push(new Paragraph({ text: "" }));
 
   for (const page of report.pages) {
     for (const b of page.blocks) {
+      const failedReason = (b.type === "kpi" || b.type === "table" || b.type === "chart") ? notRun[(b.config as any).queryId] : undefined;
+      if (failedReason !== undefined) {
+        const label = (b.config as any).label ?? (b.config as any).title ?? "";
+        children.push(new Paragraph({
+          children: [
+            ...(label ? [new TextRun({ text: `${label}: `, bold: true })] : []),
+            new TextRun({ text: `\u26A0 This query didn't run: ${failedReason}`, color: "B91C1C" }),
+          ],
+        }));
+        children.push(new Paragraph({ text: "" }));
+        continue;
+      }
       if (b.type === "title") {
         children.push(new Paragraph({
-          text: interpolate(b.config.text, { params }),
+          text: interpolate(b.config.text, { params, display }),
           heading: HeadingLevel.HEADING_1,
         }));
         if (b.config.subtitle) {
           children.push(new Paragraph({
-            children: [new TextRun({ text: interpolate(b.config.subtitle, { params }), color: "666666" })],
+            children: [new TextRun({ text: interpolate(b.config.subtitle, { params, display }), color: "666666" })],
           }));
         }
       } else if (b.type === "text") {
         children.push(new Paragraph({
-          text: interpolate(b.config.text, { params }),
+          text: interpolate(b.config.text, { params, display }),
           alignment: b.config.align === "center" ? AlignmentType.CENTER : b.config.align === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
         }));
       } else if (b.type === "kpi") {
@@ -89,7 +124,7 @@ export async function renderDocx(
             ...rows.map((r) => new TableRow({
               children: b.config.columns.map((c) => new TableCell({
                 children: [new Paragraph({
-                  text: formatCell(r[c.key], c.type, c.format, currency),
+                  text: formatCell(r[c.key], c.type, c.format, currency, dateStyle),
                   alignment: c.align === "right" || ["number", "currency", "percent"].includes(c.type)
                     ? AlignmentType.RIGHT
                     : c.align === "center"
@@ -106,7 +141,7 @@ export async function renderDocx(
                       borders: { top: { style: BorderStyle.SINGLE, size: 6, color: "000000" } } as any,
                       children: [new Paragraph({
                         children: [new TextRun({
-                          text: agg == null ? "" : formatCell(agg, c.type, c.format, currency),
+                          text: agg == null ? "" : formatCell(agg, c.type, c.format, currency, dateStyle),
                           bold: true,
                         })],
                         alignment: ["number", "currency", "percent"].includes(c.type)

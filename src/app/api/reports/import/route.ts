@@ -15,10 +15,11 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, requireAdminOrEditor, blockScopedApiKey } from "@/lib/auth";
+import { requireAdminOrEditor, blockScopedApiKey } from "@/lib/auth";
 import { withTenantContext } from "@/lib/rls";
 import { recordAudit } from "@/lib/audit";
 import { ReportSchema } from "@/lib/reporting/schema";
+import { foreignSourcesBlock } from "@/lib/reporting/sourceOwnership";
 import { requireReportQuota } from "@/lib/billing";
 import { cloneIntoTenant, isPlaceholder } from "@/lib/reporting/sanitizeTemplate";
 import { prisma } from "@/lib/db";
@@ -91,6 +92,10 @@ export async function POST(req: NextRequest) {
       issues: validated.error.issues.slice(0, 8),
     }, { status: 422 });
   }
+  // Query ids were rewired above; an ATTACH's weren't. Nothing that names
+  // another workspace's source is written.
+  const foreign = await foreignSourcesBlock(user.tenantId, validated.data);
+  if (foreign) return foreign;
 
   const created = await withTenantContext(user, (tx) =>
     tx.report.create({

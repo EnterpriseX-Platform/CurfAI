@@ -6,14 +6,14 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
   const row = await prisma.lakeIngestToken.findFirst({
     where: { id: params.id, tenantId: user.tenantId },
   });

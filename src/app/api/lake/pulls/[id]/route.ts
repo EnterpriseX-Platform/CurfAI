@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { runLakePull } from "@/lib/lake/restPull";
 
@@ -15,8 +15,8 @@ export const dynamic = "force-dynamic";
 const ActionSchema = z.object({ action: z.enum(["run", "toggle"]) });
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
   const pull = await prisma.lakePull.findFirst({
     where: { id: params.id, tenantId: user.tenantId },
   });
@@ -42,8 +42,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
   const pull = await prisma.lakePull.findFirst({
     where: { id: params.id, tenantId: user.tenantId },
   });

@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { resolveCurrency } from "@/lib/reporting/currency";
+import { resolveDateStyle } from "@/lib/reporting/format";
 import { renderDocx } from "@/lib/reporting/renderers/docx";
 import { parseParams } from "@/lib/reporting/params";
-import { requireUser, requireReportInScope, getUserRoles } from "@/lib/auth";
+import { requireUser, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { contentDisposition } from "@/lib/http/contentDisposition";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +26,24 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const p = parseParams(url, report.parameters);
 
   const tenantRow = await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { currency: true } }).catch(() => null);
-  const viewer = { id: user.id, isAdmin: user.role === "admin", roles: user.viaApiKey ? [] : await getUserRoles() };
-  const buf = await renderDocx(report, p, resolveCurrency((report as any).currency, tenantRow?.currency), undefined, viewer);
+  const viewer = await exportViewer(user);
+  let buf: Buffer;
+  try {
+    buf = await renderDocx(report, p, { tenantId: row.tenantId, currency: resolveCurrency((report as any).currency, tenantRow?.currency), viewer, dateStyle: resolveDateStyle(req.cookies.get("rd_locale")?.value, req.cookies.get("rd_era")?.value === "ce" ? "ce" : undefined, report.dateEra) });
+  } catch (e: any) {
+    await prisma.reportRun.create({
+      data: {
+        tenantId: user.tenantId,
+        reportId: row.id,
+        userId: user.viaApiKey ? null : user.id,
+        format: "docx",
+        params: JSON.stringify(p),
+        status: "failed",
+        error: e?.message,
+      },
+    });
+    return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
+  }
   await prisma.reportRun.create({
     data: {
       tenantId: user.tenantId,
@@ -42,11 +61,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "Content-Disposition": 'attachment; filename="' + slug(row.name) + '.docx"',
+      "Content-Disposition": contentDisposition("attachment", row.name, "docx"),
     },
   });
-}
-
-function slug(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
 }

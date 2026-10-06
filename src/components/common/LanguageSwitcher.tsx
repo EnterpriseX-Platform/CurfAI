@@ -4,7 +4,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/lib/i18n/LocaleContext";
-import { LOCALES, LOCALE_LABELS, LOCALE_FLAGS } from "@/lib/i18n/dict";
+import { LOCALES, LOCALE_LABELS, LOCALE_CODES } from "@/lib/i18n/locales";
 
 export function LanguageSwitcher({
   compact = false,
@@ -33,13 +33,13 @@ export function LanguageSwitcher({
           title="Language"
         >
           <Globe className={onAccent ? "h-3.5 w-3.5 text-white/80" : "h-3.5 w-3.5 text-muted-foreground"} />
-          {compact ? LOCALE_FLAGS[locale] : LOCALE_LABELS[locale]}
+          {compact ? LOCALE_CODES[locale] : LOCALE_LABELS[locale]}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">
         {LOCALES.map((l) => (
           <DropdownMenuItem key={l} onClick={() => setLocale(l)}>
-            <span className="mr-2">{LOCALE_FLAGS[l]}</span>
+            <span className="mr-2 w-5 font-mono text-[10.5px] text-muted-foreground">{LOCALE_CODES[l]}</span>
             {LOCALE_LABELS[l]}
             {l === locale && <span className="ml-auto text-primary">•</span>}
           </DropdownMenuItem>

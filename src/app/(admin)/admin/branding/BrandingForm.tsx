@@ -104,7 +104,7 @@ export function BrandingForm({ initial }: { initial: Brand }) {
             >
               <div className="flex items-center gap-2">
                 <span aria-hidden className="h-4 w-4 rounded-full ring-1 ring-border" style={{ background: preset.swatch }} />
-                <span className="text-sm font-medium">{preset.label}</span>
+                <span className="text-sm font-medium">{t(`themePreset.${preset.slug}`)}</span>
                 {brand.defaultTheme === preset.slug && <Check className="h-3.5 w-3.5 text-primary" />}
               </div>
               <div className="flex overflow-hidden rounded ring-1 ring-border">

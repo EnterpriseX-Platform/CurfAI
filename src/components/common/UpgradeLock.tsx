@@ -23,19 +23,18 @@
  *
  * The component looks up its own messaging from FEATURE_TIERS — callers
  * never pass strings. That keeps the gate machinery a single source of
- * truth: change the required tier in featureGate.ts and every UpgradeLock
+ * truth: change the required tier in featureTiers.ts and every UpgradeLock
  * follows along automatically.
  */
 import Link from "next/link";
-import { eeClient } from "@/ee/client";
 import { Lock, Sparkles, ArrowRight } from "lucide-react";
 import {
   FEATURE_TIERS,
   featureAvailable,
   humanizeFeatureKey,
   type FeatureKey,
-} from "@/lib/featureGate";
-import { planForTier } from "@/lib/billing";
+} from "@/lib/featureTiers";
+import { planForTier, UPGRADE_URL } from "@/lib/plans";
 import { useT } from "@/lib/i18n/LocaleContext";
 
 const TAGLINE_KEY: Record<string, string> = {
@@ -52,7 +51,7 @@ export type UpgradeLockProps = {
   currentTier: string | null | undefined;
   /** Visual variant — see file header. Default: "card". */
   variant?: "card" | "wrap" | "inline";
-  /** Optional override for the upgrade CTA destination. Defaults to /admin/billing. */
+  /** Optional override for the upgrade CTA destination. Defaults to UPGRADE_URL (in-app billing on Cloud, the pricing page for Community). */
   upgradeUrl?: string;
   /** Wrap variant only — the children rendered behind the dimmed overlay. */
   children?: React.ReactNode;
@@ -74,7 +73,7 @@ export function UpgradeLock({
   feature,
   currentTier,
   variant = "card",
-  upgradeUrl = eeClient.edition === "community" ? "https://curf.ai/pricing/" : "/admin/billing",
+  upgradeUrl = UPGRADE_URL,
   children,
   description,
   title,
@@ -185,7 +184,7 @@ export function UpgradeLock({
 /**
  * Convenience hook-free predicate. Re-exported for callers that just want
  * a boolean ("should I render the real picker option or grey it out?")
- * without pulling in featureGate directly.
+ * without pulling in featureTiers directly.
  */
 export function isFeatureAvailable(currentTier: string | null | undefined, feature: FeatureKey): boolean {
   return featureAvailable(currentTier, feature);

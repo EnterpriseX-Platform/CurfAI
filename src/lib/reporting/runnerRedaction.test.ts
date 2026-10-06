@@ -48,7 +48,7 @@ let lakeTableSchema: any[] = [];
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    dataSource: { findUnique: vi.fn(async ({ where }: any) => (where.id === "ds1" ? DS_ROW : null)) },
+    dataSource: { findFirst: vi.fn(async ({ where }: any) => (where.id === "ds1" && where.tenantId === DS_ROW.tenantId ? DS_ROW : null)) },
     lakeTable: {
       findMany: vi.fn(async () => [
         { name: "customers", ownerUserId: null, visibleToRolesJson: "[]", schemaJson: JSON.stringify(lakeTableSchema) },
@@ -58,7 +58,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { runReportWithProof } from "./runner";
+import { runReportWithProof, SYSTEM_RUN } from "./runner";
 import { ReportSchema } from "./schema";
 import { bustForDataSource } from "./queryCache";
 
@@ -79,7 +79,7 @@ describe("runReportWithProof — column redaction on lake sources", () => {
       { name: "email", type: "text", sensitivity: "pii", unredactedForRoles: [] },
     ];
     const report = buildReport("SELECT id, email FROM customers ORDER BY id -- t1");
-    const { dataset } = await runReportWithProof({ report, params: {}, viewer: { id: "u1", isAdmin: false, roles: [] } });
+    const { dataset } = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "u1", isAdmin: false, roles: [] } });
     expect(dataset.q1).toEqual([
       { id: "1", email: "•••••" },
       { id: "2", email: "•••••" },
@@ -92,7 +92,7 @@ describe("runReportWithProof — column redaction on lake sources", () => {
       { name: "email", type: "text", sensitivity: "pii", unredactedForRoles: [] },
     ];
     const report = buildReport("SELECT id, email FROM customers ORDER BY id -- t2");
-    const { dataset } = await runReportWithProof({ report, params: {}, viewer: { id: "admin1", isAdmin: true, roles: [] } });
+    const { dataset } = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "admin1", isAdmin: true, roles: [] } });
     expect(dataset.q1).toEqual([
       { id: "1", email: "alice@example.com" },
       { id: "2", email: "bob@example.com" },
@@ -105,7 +105,7 @@ describe("runReportWithProof — column redaction on lake sources", () => {
       { name: "email", type: "text", sensitivity: "pii", unredactedForRoles: ["finance"] },
     ];
     const report = buildReport("SELECT id, email FROM customers ORDER BY id -- t3");
-    const { dataset } = await runReportWithProof({ report, params: {}, viewer: { id: "u2", isAdmin: false, roles: ["finance"] } });
+    const { dataset } = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "u2", isAdmin: false, roles: ["finance"] } });
     expect(dataset.q1[0].email).toBe("alice@example.com");
   });
 
@@ -115,17 +115,17 @@ describe("runReportWithProof — column redaction on lake sources", () => {
       { name: "email", type: "text", sensitivity: "pii", unredactedForRoles: ["finance"] },
     ];
     const report = buildReport("SELECT id, email FROM customers ORDER BY id -- t4");
-    const { dataset } = await runReportWithProof({ report, params: {}, viewer: { id: "u3", isAdmin: false, roles: ["sales"] } });
+    const { dataset } = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "u3", isAdmin: false, roles: ["sales"] } });
     expect(dataset.q1[0].email).toBe("•••••");
   });
 
-  it("does not redact when no viewer is supplied — system/background callers are unchanged", async () => {
+  it("does not redact for a SYSTEM_RUN — a lake pipeline filling a table", async () => {
     lakeTableSchema = [
       { name: "id", type: "text" },
       { name: "email", type: "text", sensitivity: "pii", unredactedForRoles: [] },
     ];
     const report = buildReport("SELECT id, email FROM customers ORDER BY id -- t5");
-    const { dataset } = await runReportWithProof({ report, params: {} });
+    const { dataset } = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: SYSTEM_RUN });
     expect(dataset.q1[0].email).toBe("alice@example.com");
   });
 
@@ -140,17 +140,17 @@ describe("runReportWithProof — column redaction on lake sources", () => {
       ];
       const report = buildReport(CACHE_SQL);
 
-      const adminFirst = await runReportWithProof({ report, params: {}, viewer: { id: "admin1", isAdmin: true, roles: [] } });
+      const adminFirst = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "admin1", isAdmin: true, roles: [] } });
       expect(adminFirst.dataset.q1[0].email).toBe("alice@example.com");
 
       // Cache hit on the exact same (tenant, source, sql, params) key — must
       // still redact for THIS viewer even though the cached rows are raw.
-      const memberSecond = await runReportWithProof({ report, params: {}, viewer: { id: "u1", isAdmin: false, roles: [] } });
+      const memberSecond = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "u1", isAdmin: false, roles: [] } });
       expect(memberSecond.dataset.q1[0].email).toBe("•••••");
 
       // The cache entry itself must be untouched by the member's read — a
       // second admin read (same cache entry) must still see the raw value.
-      const adminThird = await runReportWithProof({ report, params: {}, viewer: { id: "admin1", isAdmin: true, roles: [] } });
+      const adminThird = await runReportWithProof({ report, params: {}, tenantId: "t1", viewer: { id: "admin1", isAdmin: true, roles: [] } });
       expect(adminThird.dataset.q1[0].email).toBe("alice@example.com");
     });
   });

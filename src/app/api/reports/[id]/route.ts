@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
+import { foreignSourcesBlock } from "@/lib/reporting/sourceOwnership";
 import { requireUser, requireAdminOrEditor, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
 import { featureGate } from "@/lib/featureGate";
+import type { FeatureKey } from "@/lib/featureTiers";
+import { readableDefinition } from "@/lib/reporting/visibleReport";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const user = await requireUser(req);
@@ -18,7 +21,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   return NextResponse.json({
     id: report.id,
     name: report.name,
-    definition: JSON.parse(report.definition),
+    // Blocks gated to roles the caller lacks, and their queries' SQL, stay
+    // out unless the caller can edit the report.
+    definition: await readableDefinition(user, JSON.parse(report.definition)),
     version: report.version,
     published: report.published,
   });
@@ -43,6 +48,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
 
   const r = parsed.data;
+  // Only this workspace's sources — see lib/reporting/sourceOwnership.ts.
+  const foreign = await foreignSourcesBlock(user.tenantId, r);
+  if (foreign) return foreign;
 
   // Tier-gated content checks. We refuse to *persist* configurations that
   // require a higher tier than the tenant has. Reads stay unrestricted —
@@ -76,11 +84,17 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   // Gated chart types — Tier 2 viz roadmap. We refuse to persist a report
   // that uses gauge/waterfall/bullet/sankey on a non-Team tenant. Same
   // pattern as theme/conditional: viewer reads stay open, save is gated.
-  const GATED_CHART_TYPES: Record<string, "viz.chart.gauge" | "viz.chart.waterfall" | "viz.chart.bullet" | "viz.chart.sankey"> = {
+  const GATED_CHART_TYPES: Record<string, FeatureKey> = {
     gauge:     "viz.chart.gauge",
     waterfall: "viz.chart.waterfall",
     bullet:    "viz.chart.bullet",
     sankey:    "viz.chart.sankey",
+    boxplot:   "viz.chart.boxplot",
+    network:   "viz.chart.network",
+    chord:     "viz.chart.chord",
+    parallel:  "viz.chart.parallel",
+    radial:    "viz.chart.radial",
+    scatter3d: "viz.chart.scatter3d",
   };
   const usedGatedTypes = new Set<string>();
   for (const p of r.pages) {
@@ -93,6 +107,14 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
   for (const ct of usedGatedTypes) {
     const block = await featureGate(user, GATED_CHART_TYPES[ct]);
+    if (block) return block;
+  }
+
+  // A KPI held against its plan (viz.kpi_plan) — same rule: reads stay open, saving one is gated.
+  const usesPlan = r.pages.some((p) => p.blocks.some((b) =>
+    b.type === "kpi" && ((b.config as any).plan != null || !!(b.config as any).planField)));
+  if (usesPlan) {
+    const block = await featureGate(user, "viz.kpi_plan");
     if (block) return block;
   }
 
@@ -117,6 +139,34 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
   if (usesLinearForecast) {
     const block = await featureGate(user, "ai.forecast_linear");
+    if (block) return block;
+  }
+
+  // Cross-source joins. Both ship and both run in the runner — ATTACH at
+  // Tier 1, the in-runner hash join at Tier 2 — and both have carried a
+  // FEATURE_TIERS entry since they landed with nothing reading it, so any
+  // tier could save and run them. Same save-time shape as the gates above.
+  // Both live on each query, not on the report: these checks used to read
+  // r.attaches / r.joins, which ReportSchema strips, so neither ever fired.
+  if (r.dataSources.some((q) => (q.attaches?.length ?? 0) > 0)) {
+    const block = await featureGate(user, "connector.attach");
+    if (block) return block;
+  }
+  if (r.dataSources.some((q) => (q.joins?.length ?? 0) > 0)) {
+    const block = await featureGate(user, "connector.hash_join");
+    if (block) return block;
+  }
+
+  // Threshold / reference lines on a chart — viz.threshold_lines, another
+  // flag that existed with nothing enforcing it. Written by the AI author
+  // (autoCurf) as well as by hand, so the gate belongs here on the save.
+  const usesReferenceLines = r.pages.some((p) =>
+    p.blocks.some((b) =>
+      b.type === "chart" && ((b.config as any).referenceLines?.length ?? 0) > 0
+    )
+  );
+  if (usesReferenceLines) {
+    const block = await featureGate(user, "viz.threshold_lines");
     if (block) return block;
   }
 

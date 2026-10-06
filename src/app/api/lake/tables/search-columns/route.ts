@@ -23,7 +23,10 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { blockScopedApiKey, requireUser, tenantWhere } from "@/lib/auth";
+import { canRead, loadRoleSlugs } from "@/lib/lake/acl";
+import { redactSamples } from "@/lib/lake/redaction";
+import { parseSchemaJson } from "@/lib/lake/schemaGovernance";
 import { ee } from "@/ee";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +52,8 @@ type Hit = {
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
 
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").trim();
@@ -98,22 +103,23 @@ export async function GET(req: NextRequest) {
     // vector index is already tenant-scoped, but composition between
     // RLS systems is worth a second check.
     const tables = await prisma.lakeTable.findMany({
-      where: { id: { in: Array.from(tableIds) }, tenantId: user.tenantId },
-      select: { id: true, name: true, schemaJson: true },
+      where: { id: { in: Array.from(tableIds) }, ...tenantWhere(user) },
+      select: { id: true, name: true, schemaJson: true, tenantId: true, ownerUserId: true, visibleToRolesJson: true },
     });
+    // Only tables this viewer can read, with samples masked as their rows
+    // would be — the same answer the table list gives them.
+    const roleSlugs = await loadRoleSlugs(user.id, user.tenantId);
+    const lakeViewer = { id: user.id, tenantId: user.tenantId, role: user.role, roleSlugs };
     const tableById = new Map<string, { name: string; cols: Map<string, { type: string; sample: string | null }> }>();
     for (const t of tables ?? []) {
-      let parsed: any[] = [];
-      try { parsed = JSON.parse(t.schemaJson ?? "[]"); } catch { /* ignore malformed */ }
+      if (!canRead(lakeViewer, t)) continue;
       const cols = new Map<string, { type: string; sample: string | null }>();
-      if (Array.isArray(parsed)) {
-        for (const c of parsed) {
-          if (c?.name) {
-            cols.set(c.name, {
-              type: typeof c.type === "string" ? c.type : "unknown",
-              sample: c.sample == null ? null : String(c.sample).slice(0, 60),
-            });
-          }
+      for (const c of redactSamples(parseSchemaJson(t.schemaJson), lakeViewer)) {
+        if (c?.name) {
+          cols.set(c.name, {
+            type: typeof c.type === "string" ? c.type : "unknown",
+            sample: c.sample == null ? null : String(c.sample).slice(0, 60),
+          });
         }
       }
       tableById.set(t.id, { name: t.name, cols });

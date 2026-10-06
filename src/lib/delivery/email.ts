@@ -19,6 +19,8 @@
  */
 
 export type SendResult = { ok: boolean; error?: string };
+/** A file sent with the email — e.g. the board pack PDF (executive journey P6). */
+export type EmailAttachment = { filename: string; content: Buffer; contentType: string };
 
 export async function sendEmail(args: {
   to: string[];
@@ -27,6 +29,7 @@ export async function sendEmail(args: {
   text: string;
   /** Tenant whose Admin → Tenant SMTP settings act as the fallback transport. */
   tenantId?: string;
+  attachments?: EmailAttachment[];
 }): Promise<SendResult> {
   if (args.to.length === 0) {
     return { ok: false, error: "No recipients configured for this channel" };
@@ -58,6 +61,9 @@ export async function sendEmail(args: {
         subject: args.subject,
         html: args.html,
         text: args.text,
+        ...(args.attachments?.length
+          ? { attachments: args.attachments.map((a) => ({ filename: a.filename, content: a.content.toString("base64"), content_type: a.contentType })) }
+          : {}),
       }),
     });
     if (!res.ok) {
@@ -77,6 +83,7 @@ async function sendViaSmtp(args: {
   html: string;
   text: string;
   tenantId?: string;
+  attachments?: EmailAttachment[];
 }): Promise<SendResult> {
   const { resolveSmtp } = await import("@/lib/delivery/smtp");
   const smtp = await resolveSmtp(args.tenantId);
@@ -100,6 +107,11 @@ async function sendViaSmtp(args: {
       port: smtp.port,
       secure: smtp.secure,
       auth: smtp.user && smtp.pass ? { user: smtp.user, pass: smtp.pass } : undefined,
+      // nodemailer's defaults wait minutes on a stalled server — long enough
+      // to hang the request that's sending (ending a meeting, a board pack).
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 30_000,
     });
     await transporter.sendMail({
       from: smtp.from,
@@ -107,6 +119,7 @@ async function sendViaSmtp(args: {
       subject: args.subject,
       html: args.html,
       text: args.text,
+      ...(args.attachments?.length ? { attachments: args.attachments } : {}),
     });
     return { ok: true };
   } catch (e: any) {

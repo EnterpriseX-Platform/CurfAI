@@ -13,6 +13,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { getQuotaForTenant, getUsageForTenant, formatBytes } from "@/lib/lake/quota";
 import { freshnessIssueFor, emptyFreshnessMaps, type FreshnessMaps } from "@/lib/lake/freshness";
+import { ee } from "@/ee";
 import { TablesManager } from "./TablesManager";
 import { BackupsPanel } from "./BackupsPanel";
 import { BackupDestinationsPanel } from "./BackupDestinationsPanel";
@@ -110,6 +111,21 @@ export default async function TablesPage() {
     }
   } catch { /* pre prisma db push */ }
 
+  // "Used in N reports" — lineage is a paid feature (excluded from the
+  // Community export), so we reach it through ee.lineage rather than
+  // importing lib/lineage.ts directly, and skip the work entirely in
+  // Community rather than showing a badge that claims "0 reports" for a
+  // table we simply never checked.
+  const usedInReportsByTableId = new Map<string, number>();
+  if (EDITION !== "community") {
+    try {
+      const counted = await Promise.all(
+        initialTables.map(async (t: any) => [t.id, (await ee.lineage?.usedInReports(user.tenantId, t.id))?.length ?? 0] as const),
+      );
+      for (const [id, n] of counted) usedInReportsByTableId.set(id, n);
+    } catch { /* lineage is best-effort here — never blocks the Tables page */ }
+  }
+
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.tables") }]}>
       <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
@@ -133,6 +149,9 @@ export default async function TablesPage() {
         />
 
         <TablesManager
+          // Creating a table is authoring — the same admin/developer gate the
+          // upload routes enforce (viewer and executive are read-only roles).
+          canUpload={user.role === "admin" || user.role === "developer"}
           initialTables={initialTables.map((t: any) => {
             const sourceConfig = safeParse(t.sourceConfigJson);
             return {
@@ -141,6 +160,7 @@ export default async function TablesPage() {
               sourceKind: t.sourceKind,
               sourceConfig,
               freshnessIssue: freshnessIssueFor(t.name, t.sourceKind, sourceConfig, freshnessMaps),
+              usedInReports: usedInReportsByTableId.get(t.id),
               schema: safeParse(t.schemaJson) ?? [],
               rowCount: t.rowCount,
               sizeBytes: t.sizeBytes,

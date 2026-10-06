@@ -25,6 +25,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { withSystemDbContext } from "@/lib/dbContext";
+import { findWorkspaceById } from "@/lib/workspaceDirectory";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,7 +50,10 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     return NextResponse.json({ error: "You can't delete your only workspace" }, { status: 400 });
   }
 
-  const tenant = await prisma.tenant.findUnique({ where: { id: targetId } });
+  // The target is usually not the workspace this request is bound to, so
+  // its row is read and deleted in the system scope — the admin-membership
+  // check above is the authorization (lib/workspaceDirectory.ts).
+  const tenant = await findWorkspaceById(targetId, { name: true, slug: true, stripeSubscriptionId: true, stripeStatus: true });
   if (!tenant) return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
 
   const body = await req.json().catch(() => null);
@@ -75,7 +80,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     `deletedBy=${user.email} at=${new Date().toISOString()}`,
   );
 
-  await prisma.tenant.delete({ where: { id: targetId } });
+  await withSystemDbContext(() => prisma.tenant.delete({ where: { id: targetId } }));
 
   return NextResponse.json({ ok: true });
 }

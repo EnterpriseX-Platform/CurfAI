@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { renderPdf } from "@/lib/reporting/renderers/pdf";
+import { browserBusyResponse } from "@/lib/reporting/renderers/headlessBrowser";
 import { parseParams } from "@/lib/reporting/params";
 import { requireUser, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { exportViewer, forwardedSessionCookie } from "@/lib/reporting/exportCaller";
+import { contentDisposition } from "@/lib/http/contentDisposition";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,21 +26,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const p = parseParams(url, report.parameters);
   const page = report.pages[0];
 
-  const sessionCookie = req.cookies.get("next-auth.session-token")
-    ?? req.cookies.get("__Secure-next-auth.session-token");
-  const authCookie = sessionCookie
-    ? sessionCookie.name + "=" + encodeURIComponent(sessionCookie.value)
-    : undefined;
+  const authCookie = forwardedSessionCookie(req);
   const locale = req.cookies.get("rd_locale")?.value;
+  const era = req.cookies.get("rd_era")?.value === "ce" ? "ce" as const : undefined;
+  // An API key has no cookie to forward, so the page runs the report as
+  // this viewer from the render token, and shows the blocks it may see.
+  const viewer = await exportViewer(user);
 
   try {
     const pdf = await renderPdf({
       reportId: row.id,
+      tenantId: row.tenantId,
+      viewer,
+      blocksAsViewer: true,
       params: p,
       pageSize: page?.size,
       landscape: page?.orientation === "landscape",
       authCookie,
       locale,
+      era,
       reportName: row.name,
     });
     await prisma.reportRun.create({
@@ -57,10 +64,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return new NextResponse(new Uint8Array(pdf), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": 'inline; filename="' + slug(row.name) + '.pdf"',
+        "Content-Disposition": contentDisposition("inline", row.name, "pdf"),
       },
     });
   } catch (e: any) {
+    // Busy is "try again", not a failed run. It never started.
+    const busy = browserBusyResponse(e);
+    if (busy) return busy;
     await prisma.reportRun.create({
       data: {
         tenantId: user.tenantId,
@@ -74,8 +84,4 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     });
     return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
   }
-}
-
-function slug(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
 }

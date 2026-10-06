@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { runReportForApi } from "@/lib/reporting/runForApi";
+import { queryErrors } from "@/lib/reporting/queryRunState";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,5 +40,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   return NextResponse.json({
     dataset: result.dataset,
     paramsApplied: result.paramsApplied,
+    // A query that failed is an empty array in `dataset` — indistinguishable from one
+    // that returned nothing unless it is named here. Empty object when every query ran.
+    queryErrors: queryErrors(result.provenance),
   });
 }

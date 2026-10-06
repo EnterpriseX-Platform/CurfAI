@@ -11,6 +11,7 @@ import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { generateSigningSecret, EVENT_REGISTRY, knownEventIds } from "@/lib/webhooks";
+import { featureGate } from "@/lib/featureGate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -64,6 +65,12 @@ const CreateSchema = z.object({
 export async function POST(req: NextRequest) {
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
+  // Outbound webhooks are HMAC-signed per subscription (see
+  // lib/webhooks/dispatcher.ts) and priced as Business, but
+  // intelligence.signed_webhooks was declared and never read — any tier
+  // could register one. Gated on create; existing rows keep delivering.
+  const tierBlock = await featureGate(user, "intelligence.signed_webhooks");
+  if (tierBlock) return tierBlock;
 
   const body = await req.json().catch(() => ({}));
   const parsed = CreateSchema.safeParse(body);

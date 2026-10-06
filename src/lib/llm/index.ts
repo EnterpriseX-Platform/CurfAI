@@ -27,7 +27,8 @@ import { hasEnvLlm } from "./credentials";
 import { llmTokens } from "@/lib/metrics";
 import { requireAiCredits } from "@/lib/billing";
 import type { NextResponse } from "next/server";
-import type { LlmDriver, LlmRequest, LlmResponse, ProviderId } from "./types";
+import type { DriverContext, LlmDriver, LlmRequest, LlmResponse, ProviderId } from "./types";
+import { abortableSleep, acquireSlot, backoffMs, effectiveTimeoutMs, isRetryable, llmConcurrency, llmMaxRetries } from "./resilience";
 
 const DRIVERS: Record<ProviderId, LlmDriver> = {
   anthropic: anthropicDriver,
@@ -93,6 +94,12 @@ const REASONING_RETRY_CEILING = 4000;
 const FAST_KIND_PREFIXES = [
   "ask", "why", "caption", "operate_suggest", "operate.document_draft", "brief", "story", "digest",
   "watcher", "watcherSuggest", "suggest", "document_qa", "marketplace", "forecast", "dashboard.recommend_kpis", "search", "qa",
+  // ⌘K "what if…" — a few slider values from a short question; not whatif.design.
+  "whatif.interpret",
+  // A report's name in another language (master-builder/reportNames.ts).
+  "translate",
+  // The Strategist's critic — a short adversarial read of a finished memo (executive/strategistReview.ts); not strategist_memo.
+  "strategist_critic",
 ];
 
 export function isFastKind(kind: string): boolean {
@@ -172,11 +179,8 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
   if (fast && req.reasoning === undefined) req = { ...req, reasoning: "off" };
 
   // Dispatch.
-  let resp = await driver.call(req, {
-    apiKey: creds.apiKey,
-    baseUrl: creds.baseUrl,
-    model,
-  });
+  const ctx: DriverContext = { apiKey: creds.apiKey, baseUrl: creds.baseUrl, model };
+  let resp = await callDriver(driver, req, ctx, creds.source, creds.baseUrl);
 
   // One widened retry when a reasoning model spends its whole budget
   // thinking and emits nothing.
@@ -198,66 +202,152 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
   if (
     resp.status === "failed" &&
     (resp.error ?? "").includes("REASONING_BUDGET_EXHAUSTED") &&
+    !resp.thinkingCapped && // a cut-off thinker gains nothing from a wider ceiling: it goes straight to the no-thinking retry
     askedFor > 0 &&
     askedFor < REASONING_RETRY_CEILING
   ) {
-    resp = await driver.call(
-      { ...req, maxTokens: REASONING_RETRY_CEILING },
-      { apiKey: creds.apiKey, baseUrl: creds.baseUrl, model },
-    );
+    recordUsage(req, resp, creds.source);
+    resp = await callDriver(driver, { ...req, maxTokens: REASONING_RETRY_CEILING }, ctx, creds.source, creds.baseUrl);
+  }
+
+  // Last resort: the model thought through the widened ceiling too — or the
+  // caller already asked for more than it, so there was nothing to widen —
+  // and still wrote nothing. Ask once more with thinking off (see
+  // LlmRequest.reasoning). An answer written without extended reasoning
+  // beats none: on design calls "none" meant a generic fallback in place of
+  // the thing the user asked for (Master Builder on kimi-k2.6, 2026-09-27 —
+  // 5 of 5 reports spent their whole 4000 tokens thinking and fell back).
+  if (
+    resp.status === "failed" &&
+    (resp.error ?? "").includes("REASONING_BUDGET_EXHAUSTED") &&
+    req.reasoning !== "off"
+  ) {
+    recordUsage(req, resp, creds.source); // the thinking attempt that was given up on: its tokens were spent
+    resp = await callDriver(driver, { ...req, reasoning: "off", maxTokens: Math.max(askedFor, REASONING_RETRY_CEILING) }, ctx, creds.source, creds.baseUrl);
   }
 
   // Record usage. Best-effort — we never let a logging failure poison
-  // the user-facing response. Use setImmediate so token write doesn't
-  // add to the request latency.
-  if (req.tenantId) {
-    const tenantId = req.tenantId;
-    llmTokens.inc?.(
-      { tenant: tenantId, kind: req.kind },
-      resp.usage.inputTokens + resp.usage.outputTokens,
+  // the user-facing response.
+  recordUsage(req, resp, creds.source);
+
+  return resp;
+}
+
+/**
+ * One driver call, made the way a shared, rate-limited provider needs it:
+ * through the per-endpoint concurrency limiter (a Master Builder build and
+ * a second chat no longer both hit a 429 together), and retried with
+ * backoff when the driver says the failure was the provider's or the
+ * network's — never the prompt's. Only the HTTP drivers set `retryable`
+ * (see resilience.ts), so Anthropic and Gemini behave exactly as before.
+ *
+ * A timeout is retried once, with 1.5x the room: reasoning models' think
+ * time varies run to run (the same prompt answered in 20s and timed out at
+ * 90s), but one that stalls twice is not going to answer a third time.
+ */
+async function callDriver(
+  driver: LlmDriver,
+  req: LlmRequest,
+  ctx: DriverContext,
+  keySource: "env" | "tenant" | string,
+  baseUrl: string | null,
+): Promise<LlmResponse> {
+  const governed = driver.id === "openai" || driver.id === "openai-compatible";
+  if (!governed) return driver.call(req, ctx);
+
+  const lane = `${driver.id}|${baseUrl ?? ""}`;
+  const maxRetries = llmMaxRetries();
+  let attemptReq: LlmRequest = { ...req, timeoutMs: effectiveTimeoutMs(req) };
+  let queuedMs = 0;
+  let timeouts = 0;
+  for (let attempt = 1; ; attempt++) {
+    const waitStart = Date.now();
+    let release: () => void;
+    try {
+      release = await acquireSlot(lane, llmConcurrency(), req.signal);
+    } catch {
+      return failed(driver.id, ctx.model, "Cancelled", attempt - 1, queuedMs + (Date.now() - waitStart));
+    }
+    queuedMs += Date.now() - waitStart;
+    let resp: LlmResponse;
+    try {
+      resp = await driver.call(attemptReq, ctx);
+    } finally {
+      release();
+    }
+    resp = { ...resp, attempts: attempt, queuedMs };
+    if (!isRetryable(resp) || attempt > maxRetries || req.signal?.aborted) return resp;
+    if (resp.timedOut) {
+      if (req.retryTimeouts === false || timeouts++ >= 1) return resp;
+      const more = Math.min(Math.round((attemptReq.timeoutMs ?? 90_000) * 1.5), 300_000);
+      if (more <= (attemptReq.timeoutMs ?? 0)) return resp; // already at the ceiling: another try has no more room
+      attemptReq = { ...req, timeoutMs: more };
+    }
+    // The failed attempt is its own row so a retry is visible in the usage
+    // log (kind, duration, error class) instead of vanishing behind the
+    // attempt that finally answered.
+    recordUsage(req, resp, keySource);
+    console.warn(
+      `[llm:${driver.id}] ${req.kind} attempt ${attempt} failed (${(resp.error ?? "").slice(0, 120)}) — retrying`,
     );
-    setImmediate(() => {
-      // A call on Curf's key draws down AI credits, so its cost must never
-      // be null; a workspace's own key is only reported, never metered.
-      const microCostUsd = (creds.source === "env" ? computeMicroCostMetered : computeMicroCost)({
+    const slept = await abortableSleep(backoffMs(attempt, resp.retryAfterMs), req.signal);
+    if (!slept) return failed(driver.id, ctx.model, "Cancelled", attempt, queuedMs);
+  }
+}
+
+function failed(provider: ProviderId, model: string, error: string, attempts: number, queuedMs: number): LlmResponse {
+  return { text: "", provider, model, status: "failed", error, usage: { inputTokens: 0, outputTokens: 0 }, durationMs: 0, attempts, queuedMs };
+}
+
+/** Best-effort LlmTokenUsage row (setImmediate: the write adds nothing to the caller's latency). */
+function recordUsage(req: LlmRequest, resp: LlmResponse, keySource: "env" | "tenant" | string): void {
+  if (!req.tenantId) return;
+  const tenantId = req.tenantId;
+  llmTokens.inc?.(
+    { tenant: tenantId, kind: req.kind },
+    resp.usage.inputTokens + resp.usage.outputTokens,
+  );
+  setImmediate(() => {
+    // A call on Curf's key draws down AI credits, so its cost must never
+    // be null; a workspace's own key is only reported, never metered.
+    const microCostUsd = (keySource === "env" ? computeMicroCostMetered : computeMicroCost)({
+      provider: resp.provider,
+      model: resp.model,
+      inputTokens: resp.usage.inputTokens,
+      outputTokens: resp.usage.outputTokens,
+      cacheReadTokens: resp.usage.cacheReadTokens,
+      cacheCreateTokens: resp.usage.cacheCreateTokens,
+    });
+    prisma.llmTokenUsage.create({
+      data: {
+        tenantId,
+        userId: req.userId ?? undefined,
+        kind: req.kind,
         provider: resp.provider,
         model: resp.model,
         inputTokens: resp.usage.inputTokens,
         outputTokens: resp.usage.outputTokens,
-        cacheReadTokens: resp.usage.cacheReadTokens,
-        cacheCreateTokens: resp.usage.cacheCreateTokens,
-      });
-      prisma.llmTokenUsage.create({
-        data: {
-          tenantId,
-          userId: req.userId ?? undefined,
-          kind: req.kind,
-          provider: resp.provider,
-          model: resp.model,
-          inputTokens: resp.usage.inputTokens,
-          outputTokens: resp.usage.outputTokens,
-          cacheReadTokens: resp.usage.cacheReadTokens ?? 0,
-          cacheCreateTokens: resp.usage.cacheCreateTokens ?? 0,
-          microCostUsd,
-          keySource: creds.source === "env" ? "platform" : "tenant",
-          reportId: req.reportId ?? null,
-          durationMs: resp.durationMs,
-          status: resp.status,
-          errorKind: resp.status === "failed" ? classifyError(resp.error) : null,
-        },
-      }).catch(() => null);
-    });
-  }
-
-  return resp;
+        cacheReadTokens: resp.usage.cacheReadTokens ?? 0,
+        cacheCreateTokens: resp.usage.cacheCreateTokens ?? 0,
+        microCostUsd,
+        keySource: keySource === "env" ? "platform" : "tenant",
+        reportId: req.reportId ?? null,
+        durationMs: resp.durationMs,
+        status: resp.status,
+        errorKind: resp.status === "failed" ? classifyError(resp.error) : null,
+      },
+    }).catch(() => null);
+  });
 }
 
 function classifyError(err: string | undefined): string {
   if (!err) return "unknown";
   const e = err.toLowerCase();
   if (e === "cancelled") return "cancelled"; // caller aborted (see LlmRequest.signal) — not a provider fault
+  if (e.includes("reasoning_budget_exhausted")) return "reasoning_budget"; // before the status checks: its text can contain "500" tokens
+  if (e.includes("stalled")) return "stalled";
   if (e.includes("rate") && e.includes("limit")) return "rate_limit";
-  if (e.includes("timeout") || e.includes("aborted")) return "timeout";
+  if (e.includes("timeout") || e.includes("timed out") || e.includes("aborted")) return "timeout";
   if (e.includes("401") || e.includes("invalid") && e.includes("key")) return "invalid_key";
   if (e.includes("403")) return "forbidden";
   if (e.includes("400")) return "bad_request";

@@ -258,6 +258,28 @@ export function KpiDelta({
 }
 
 /**
+ * The number against its plan: "▼ 4.1% behind plan · plan $107K", or
+ * "On plan". Red only when behind — ahead is green, on plan is quiet.
+ */
+export function KpiPlan({ state, text, planFormatted, words }: {
+  state: "ahead" | "behind" | "on";
+  text: string;
+  planFormatted: string;
+  /** The reader's words: { ahead: "{gap} ahead of plan", behind: "…", on: "On plan", plan: "plan {value}" }. */
+  words: { ahead: string; behind: string; on: string; plan: string };
+}) {
+  const cls = state === "ahead" ? "text-success" : state === "behind" ? "text-destructive" : "text-muted-foreground";
+  return (
+    <p className="flex flex-wrap items-center gap-1.5 text-[12.5px] leading-tight">
+      <span className={cn("font-medium tabular-nums", cls)}>
+        {state === "on" ? words.on : `${state === "ahead" ? "▲" : "▼"} ${words[state].replace("{gap}", text)}`}
+      </span>
+      <span className="text-muted-foreground">· {words.plan.replace("{value}", planFormatted)}</span>
+    </p>
+  );
+}
+
+/**
  * The run receipt: a small verified seal (omitted when there's no hash to
  * back it — never a checkmark over nothing) followed by mono provenance
  * text the caller composes (hash, run time, row count).

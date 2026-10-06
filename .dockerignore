@@ -10,6 +10,9 @@ node_modules
 # Claude Code worktrees (contain junctions Docker can't read).
 .claude
 
+# The Java engine is its own image (engines/java/Dockerfile); the Node image never needs it.
+engines
+
 # Never bake local secrets or databases into the image.
 lake
 .env
@@ -18,6 +21,8 @@ lake
 prisma/sample.db
 prisma/*.db
 prisma/*.db-journal
+prisma/*.db-shm
+prisma/*.db-wal
 
 # Tests, docs, and dev artefacts the image doesn't need.
 *.md

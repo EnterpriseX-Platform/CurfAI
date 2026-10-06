@@ -16,6 +16,7 @@ import {
 import { profileColumns, type ChartTypeValue } from "@/lib/reporting/chartCompatibility";
 import { CHART_TYPE_ICON, groupChartTypes } from "@/components/blocks/chartTypeOptions";
 import type { Row } from "@/lib/reporting/interpolate";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 export function ChartTypeField({
   value, onChange, xField, yFields, sizeField, rows,
@@ -27,6 +28,7 @@ export function ChartTypeField({
   sizeField?: string;
   rows: Row[];
 }) {
+  const { t } = useT();
   const groups = useMemo(() => {
     const profiles = profileColumns(rows);
     return groupChartTypes({ xField, yFields, sizeField }, profiles);
@@ -38,7 +40,7 @@ export function ChartTypeField({
       <SelectContent>
         {groups.map((group) => (
           <SelectGroup key={group.purpose}>
-            <SelectLabel>{group.label}</SelectLabel>
+            <SelectLabel>{t(`chartPurpose.${group.purpose}`)}</SelectLabel>
             {group.items.map((item) => {
               const Icon = CHART_TYPE_ICON[item.value as ChartTypeValue];
               return (
@@ -46,10 +48,10 @@ export function ChartTypeField({
                   <span
                     className="flex items-center"
                     style={{ pointerEvents: "auto" }}
-                    title={item.eligible ? undefined : item.reason}
+                    title={item.eligible ? undefined : t(item.reasonKey)}
                   >
                     <Icon className="mr-2 h-3.5 w-3.5 shrink-0" />
-                    {item.labelEn}
+                    {t(`chartType.${item.value}`)}
                   </span>
                 </SelectItem>
               );

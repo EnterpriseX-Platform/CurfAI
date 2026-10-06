@@ -1,0 +1,49 @@
+server:
+  port: 8080
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+spring:
+  application:
+    name: curf-engine
+  datasource:
+    url: ${CURF_ENGINE_DB_URL}
+    username: ${CURF_ENGINE_DB_USER}
+    password: ${CURF_ENGINE_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  jackson:
+    deserialization:
+      fail-on-null-for-primitives: false
+
+curf:
+  engine:
+    secrets:
+      # 32 random bytes, base64 (for example: openssl rand -base64 32). No default; startup fails without it.
+      master-key: ${CURF_ENGINE_MASTER_KEY:}
+      key-id: ${CURF_ENGINE_MASTER_KEY_ID:k1}
+    exports:
+      # Chromium sidecar that prints PDFs (Gotenberg), for example http://gotenberg:3000. Unset: PDF export answers 503.
+      gotenberg-url: ${CURF_ENGINE_GOTENBERG_URL:}
+
+management:
+  endpoints:
+    web:
+      base-path: /engine/v1/actuator
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+# Identity provider settings have no defaults on purpose: the engine refuses to start without
+# at least one issuer. Example (Keycloak):
+#   CURF_ENGINE_SECURITY_ISSUERS_0_ISSUER=https://idp.example/realms/main
+#   CURF_ENGINE_SECURITY_ISSUERS_0_JWKSETURI=https://idp.example/realms/main/protocol/openid-connect/certs
+#   CURF_ENGINE_SECURITY_CLAIMS_ATTRIBUTES_0=agency_code

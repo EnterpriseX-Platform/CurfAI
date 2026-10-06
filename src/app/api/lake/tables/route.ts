@@ -15,14 +15,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { recordAudit } from "@/lib/audit";
-import { createOrReplaceTable, getTable, inferColumns, toSafeTableName } from "@/lib/lake/tables";
-import { lakeFileSize, rejectPathLikeName } from "@/lib/lake/storage";
+import { blockScopedApiKey, requireAdminOrEditor, requireUser, type CurfSessionUser } from "@/lib/auth";
+import { redactSamples } from "@/lib/lake/redaction";
+import { parseSchemaJson } from "@/lib/lake/schemaGovernance";
+import { createOrReplaceTable } from "@/lib/lake/tables";
 import { checkWriteAllowed, getQuotaForTenant, getUsageForTenant } from "@/lib/lake/quota";
-import { bustLakeCacheForTenant } from "@/lib/lake/bust";
-import { ee } from "@/ee";
 import { parseUpload } from "@/lib/lake/parseFile";
+import { newTableNameProblem, registerCreatedTable } from "@/lib/lake/tableRegistration";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,6 +31,9 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB per upload — Phase 1 cap
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // A key scoped to reports has no mandate over tables (lib/lake/tableAccess.ts).
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   const { canRead, loadRoleSlugs } = await import("@/lib/lake/acl");
   const roleSlugs = await loadRoleSlugs(user.id, user.tenantId);
   const viewer = { id: user.id, tenantId: user.tenantId, role: user.role, roleSlugs };
@@ -54,7 +56,9 @@ export async function GET(req: NextRequest) {
       name: t.name,
       sourceKind: t.sourceKind,
       sourceConfig: safeJson(t.sourceConfigJson),
-      schema: safeJson(t.schemaJson) ?? [],
+      // Each column's sample is a value from the table: masked as this
+      // viewer's rows would be, like every other route that lists columns.
+      schema: redactSamples(parseSchemaJson(t.schemaJson), viewer),
       rowCount: t.rowCount,
       sizeBytes: t.sizeBytes,
       ownerUserId: t.ownerUserId,
@@ -109,8 +113,11 @@ export async function POST(req: NextRequest) {
 }
 
 async function postImpl(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Creating a table is authoring: admin/developer, like every other lake
+  // write route and the staged upload routes (viewer and executive are
+  // read-only roles).
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
 
   const contentType = req.headers.get("content-type") ?? "";
 
@@ -231,7 +238,7 @@ async function postImpl(req: NextRequest) {
 // (lib/lake/restPull.ts), which needed the exact same bytes-to-rows logic.
 
 async function persistTable(opts: {
-  user: { id: string; tenantId: string };
+  user: CurfSessionUser;
   req: NextRequest;
   name: string;
   rows: Array<Record<string, unknown>>;
@@ -240,41 +247,12 @@ async function persistTable(opts: {
   columnTypeOverrides?: Record<string, string>;
   columnDateOrders?: Record<string, "mdy" | "dmy">;
 }) {
-  const pathLikeError = rejectPathLikeName(opts.name);
-  if (pathLikeError) return NextResponse.json({ error: pathLikeError }, { status: 400 });
+  const nameProblem = await newTableNameProblem(opts.user, opts.name);
+  if (nameProblem) return NextResponse.json({ error: nameProblem.error }, { status: nameProblem.status });
 
-  // Reject duplicate names early — clearer error than the unique-constraint
-  // violation that would otherwise surface as P2002.
-  const existing = await prisma.lakeTable.findFirst({
-    where: { tenantId: opts.user.tenantId, name: opts.name },
-    select: { id: true },
-  });
-  if (existing) {
-    return NextResponse.json({
-      error: `Table "${opts.name}" already exists. Choose a different name or delete the existing one first.`,
-    }, { status: 409 });
-  }
-
-  // The physical SQLite table name is toSafeTableName(name), which is
-  // many-to-one ("Sales-2024", "Sales 2024" and "Sales_2024" all collapse to
-  // "sales_2024"). createOrReplaceTable DROPs that physical table, so without
-  // this check a low-privileged user could create a colliding catalog name
-  // and destroy — then shadow — another table whose ACL they can't touch.
-  const safeName = toSafeTableName(opts.name);
-  const siblings = await prisma.lakeTable.findMany({
-    where: { tenantId: opts.user.tenantId },
-    select: { name: true },
-  });
-  const collision = siblings.find((s: any) => toSafeTableName(s.name) === safeName);
-  if (collision) {
-    return NextResponse.json({
-      error: `Table name "${opts.name}" collides with existing table "${collision.name}" (both map to the same storage name). Pick a more distinct name.`,
-    }, { status: 409 });
-  }
-
-  // Write to disk first; Prisma row last so we don't have an orphan
-  // catalog row pointing at a non-existent table on failure.
-  const result = createOrReplaceTable({
+  // Write to disk first; the catalog row last (registerCreatedTable) so a
+  // failed write never leaves a catalog row pointing at nothing.
+  const result = await createOrReplaceTable({
     tenantId: opts.user.tenantId,
     tableName: opts.name,
     rows: opts.rows,
@@ -284,68 +262,15 @@ async function persistTable(opts: {
     columnDateOrders: opts.columnDateOrders,
   });
 
-  const sizeBytes = lakeFileSize(opts.user.tenantId);
-  const created = await prisma.lakeTable.create({
-    data: {
-      tenantId: opts.user.tenantId,
-      name: opts.name,
-      sourceKind: opts.sourceKind,
-      sourceConfigJson: opts.sourceConfig ? JSON.stringify(opts.sourceConfig) : null,
-      schemaJson: JSON.stringify(result.columns),
-      rowCount: result.rowCount,
-      sizeBytes,
-      createdById: opts.user.id,
-    },
-  });
-
-  // Ensure a single "Curf Tables" DataSource row exists for this tenant.
-  // The designer's data picker discovers lake-backed tables through this
-  // DataSource — kind=lake routes through the tenant's per-tenant lake
-  // SQLite file in the runner. Idempotent: upsert on (tenantId, name).
-  try {
-    await prisma.dataSource.upsert({
-      where: { tenantId_name: { tenantId: opts.user.tenantId, name: "Curf Tables" } },
-      update: {},
-      create: {
-        tenantId: opts.user.tenantId,
-        name: "Curf Tables",
-        kind: "lake",
-        // The runner ignores the connection field for kind=lake (it derives
-        // the file path from tenantId), but we set it for human-readable
-        // debugging in the connections list.
-        connection: "lake://" + opts.user.tenantId,
-      },
-    });
-  } catch (e) {
-    // Non-fatal — the lake table is already saved on disk; the user can
-    // still reference it directly via SQL once we surface it in the picker.
-    console.warn("[lake] failed to upsert Curf Tables DataSource:", e);
-  }
-
-  // Vector-DB: enqueue each column for semantic search ("Find by meaning"
-  // on /tables). Fire-and-forget — the helper handles the CURF_VECTOR_DB
-  // gate internally and never throws to the caller. Wrapping in setImmediate
-  // so the user-visible response isn't waiting on N upserts to the queue.
-  setImmediate(() => {
-    void ee.vectorStore?.enqueueSchemaColEmbedBatch({
-      tenantId: opts.user.tenantId,
-      tableId: created.id,
-      columnNames: result.columns.map((c) => c.name),
-    });
-  });
-
-  recordAudit({
-    user: opts.user as any,
-    kind: "lake.table.create",
-    target: created.id,
+  const created = await registerCreatedTable({
+    user: opts.user,
     req: opts.req,
-    meta: { name: opts.name, sourceKind: opts.sourceKind, rows: result.rowCount },
+    name: opts.name,
+    sourceKind: opts.sourceKind,
+    sourceConfig: opts.sourceConfig,
+    columns: result.columns,
+    rowCount: result.rowCount,
   });
-
-  // Drop any cached query results that read from this tenant's lake source.
-  // Fire-and-forget — bust failure shouldn't block the response, the 30s
-  // TTL still catches us as a fallback.
-  setImmediate(() => { void bustLakeCacheForTenant(opts.user.tenantId); });
 
   return NextResponse.json({
     table: {

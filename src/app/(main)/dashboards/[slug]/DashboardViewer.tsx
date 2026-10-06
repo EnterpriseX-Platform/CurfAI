@@ -26,18 +26,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatValue } from "@/components/blocks/charts/shared";
 import { isIdentifierLabel } from "@/lib/reporting/format";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { ReportDocument } from "@/components/reports/ReportDocument";
+import { ReportBlock, ReportDocument } from "@/components/reports/ReportDocument";
 import { Pause, Play, ChevronLeft, ChevronRight, Maximize2, X as CloseIcon, Sparkles, Eye, ShoppingCart, MessageCircle, Banknote, TrendingUp, Users, GripVertical, Pencil, Check } from "lucide-react";
 import { useRealtimeEvents, LiveBadge } from "@/components/realtime/LiveIndicator";
-import { BlockRegistry } from "@/components/blocks";
 import { useT } from "@/lib/i18n/LocaleContext";
-import type { Block, Report } from "@/lib/reporting/schema";
+import type { Block } from "@/lib/reporting/schema";
+import type { Dataset } from "@/lib/reporting/interpolate";
+import { chartAxes, extractTable, slotChart, stripTables, withoutAiCaption, type SlotChart } from "./dashboardSlots";
+import { AiNotice } from "@/components/common/AiNotice";
 import { DrillThroughContext, type DrillThroughHandler } from "@/components/providers/drill-through-context";
 import { OperateActionsProvider } from "@/components/providers/OperateActionsProvider";
 import { DrillBreadcrumbBar, type DrillBreadcrumbStep } from "@/components/blocks/DrillBreadcrumbBar";
 import { AppShell } from "@/components/layout/AppShell";
 import { useToast } from "@/lib/toast";
 import { resolveTheme } from "@/lib/reporting/themes";
+import { DrillPanel, useDrillRows } from "@/components/reports/DrillPanel";
+import { blockDrill } from "@/lib/reporting/drill";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 
@@ -88,7 +92,7 @@ type DashboardPayload = {
   interactive?: boolean;
   slots: Slot[];
   topKpis?: any[];
-  /** Tenant default currency for the top-KPI strip. Falls back to "USD". */
+  /** Tenant default currency for the top-KPI strip. Falls back to DEFAULT_CURRENCY. */
   currency?: string;
   /** reportId -> {x,y,w,h} on a 12-col grid. Only read when layout === "custom". */
   slotLayout?: Record<string, { x: number; y: number; w: number; h: number }>;
@@ -115,154 +119,6 @@ const GEO_DRILL_ORDER = ["region", "province", "district"];
 function geoDrillRank(param: string): number {
   const i = GEO_DRILL_ORDER.indexOf(param);
   return i === -1 ? GEO_DRILL_ORDER.length : i;
-}
-
-// --- Widget Extraction Logic ---
-// We prioritize finding high-value visual blocks for the dashboard.
-const VISUAL_KINDS = new Set(["chart", "progress", "pivot", "heatmap", "map", "funnel", "cohort_retention"]);
-
-function extractWidget(reportDef: Report | undefined | null): Block | null {
-  if (!reportDef || !reportDef.pages) return null;
-
-  for (const page of reportDef.pages) {
-    if (!page.blocks) continue;
-    // Sort visually (top->bottom, left->right) just like ReportDocument does
-    const sorted = [...page.blocks].sort((a, b) => (a.y - b.y) || (a.x - b.x));
-
-    for (const block of sorted) {
-      if (VISUAL_KINDS.has(block.type)) {
-        return block; // Found a high-value visual widget!
-      }
-    }
-  }
-
-  return null; // Return null if no chart found, so we can try auto-charting
-}
-
-function extractTable(reportDef: Report | undefined | null): Block | null {
-  if (!reportDef || !reportDef.pages) return null;
-  for (const page of reportDef.pages) {
-    if (!page.blocks) continue;
-    const sorted = [...page.blocks].sort((a, b) => (a.y - b.y) || (a.x - b.x));
-    for (const block of sorted) {
-      if (block.type === "table") return block;
-    }
-  }
-  return null;
-}
-
-/**
- * Dashboards show only KPI/chart/visual blocks, never raw data tables —
- * a wall display or drill-down view is for reading a shape at a glance,
- * not scrolling a grid. Returns a shallow-cloned report with every page's
- * `table` blocks removed; every other block type passes through untouched.
- */
-function stripTables(reportDef: Report | undefined | null): any {
-  if (!reportDef?.pages) return reportDef;
-  return {
-    ...reportDef,
-    pages: reportDef.pages.map((page) => {
-      const original = page.blocks ?? [];
-      const kept = original.filter((b) => b.type !== "table");
-      if (kept.length === original.length) return { ...page, blocks: kept };
-
-      // ReportDocument places every block at an absolute CSS grid row
-      // (gridRow: block.y+1 / span block.h) — removing a table without
-      // re-flowing the blocks below it leaves a blank gap exactly the
-      // table's height. Compact: a row collapses only if no *kept* block
-      // still spans it (a block sitting beside the table keeps its row).
-      const maxRow = original.reduce((m, b) => Math.max(m, b.y + b.h), 0);
-      const occupied = new Array(maxRow).fill(false);
-      for (const b of kept) {
-        for (let r = b.y; r < b.y + b.h; r++) occupied[r] = true;
-      }
-      const rowMap = new Array(maxRow);
-      let cursor = 0;
-      for (let r = 0; r < maxRow; r++) {
-        rowMap[r] = cursor;
-        if (occupied[r]) cursor++;
-      }
-      return { ...page, blocks: kept.map((b) => ({ ...b, y: rowMap[b.y] })) };
-    }),
-  };
-}
-
-function synthesizeChart(dataset: Record<string, unknown[]> | undefined): { block: Block, newData: any[] } | null {
-  if (!dataset) return null;
-  const queryIds = Object.keys(dataset);
-  if (queryIds.length === 0) return null;
-
-  const queryId = queryIds[0];
-  const data = dataset[queryId];
-
-  if (!data || !Array.isArray(data) || data.length === 0) return null;
-
-  const firstRow = data[0] as Record<string, unknown>;
-  const keys = Object.keys(firstRow);
-
-  const stringCols = keys.filter(k => typeof firstRow[k] === "string");
-  // Don't treat ID columns as metrics to plot
-  const numberCols = keys.filter(k => (typeof firstRow[k] === "number" || typeof firstRow[k] === "bigint") && !/id$/i.test(k));
-
-  if (stringCols.length > 0 && numberCols.length > 0) {
-    // We have both strings and numbers, plot them directly
-    return {
-      block: {
-        type: "chart",
-        id: "auto_chart_" + queryId,
-        x: 0, y: 0, w: 12, h: 8,
-        config: {
-          queryId,
-          chartType: "bar",
-          xField: stringCols[0],
-          yFields: [numberCols[0]],
-        },
-      } as any,
-      newData: data
-    };
-  } else if (stringCols.length > 0) {
-    // Only strings: count frequencies of the first string column
-    // Skip 'id' columns if possible
-    const col = stringCols.find(c => !/id$/i.test(c)) || stringCols[0];
-    const counts: Record<string, number> = {};
-    for (const row of data) {
-      const val = String((row as any)[col]);
-      counts[val] = (counts[val] || 0) + 1;
-    }
-    const aggregated = Object.entries(counts).map(([k, v]) => ({ [col]: k, count: v }));
-    return {
-      block: {
-        type: "chart",
-        id: "auto_chart_" + queryId,
-        x: 0, y: 0, w: 12, h: 8,
-        config: {
-          queryId,
-          chartType: "bar",
-          xField: col,
-          yFields: ["count"],
-        },
-      } as any,
-      newData: aggregated
-    };
-  } else if (numberCols.length > 0) {
-    // Only numbers: plot them against row index
-    const newData = data.map((row, i) => ({ ...(row as Record<string, any>), index: `Row ${i + 1}` }));
-    return {
-      block: {
-        type: "chart",
-        id: "auto_chart_" + queryId,
-        x: 0, y: 0, w: 12, h: 8,
-        config: {
-          queryId,
-          chartType: "line",
-          xField: "index",
-          yFields: [numberCols[0]],
-        },
-      } as any,
-      newData
-    };
-  }
-  return null; // Return null if no chart found, so we can try auto-charting
 }
 
 // --- AI Explanation Widget ---
@@ -308,9 +164,12 @@ function AiExplanationWidget({ reportName, dataset }: { reportName: string, data
           <div className="h-3 bg-muted rounded w-[70%]"></div>
         </div>
       ) : (
-        <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap flex-1 overflow-y-auto pr-2">
-          {explanation}
-        </p>
+        <div className="flex flex-1 flex-col gap-2 overflow-y-auto pr-2">
+          <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+            {explanation}
+          </p>
+          {explanation && <AiNotice />}
+        </div>
       )}
     </div>
   );
@@ -464,19 +323,26 @@ export function DashboardViewer({
     return slotOverrides[slot.id]?.provenance ?? slot.rendered?.provenance;
   }
 
-  function findDrillParam(reportDef: any, blockId: string): string | null {
-    for (const page of reportDef?.pages ?? []) {
-      for (const block of page.blocks ?? []) {
-        if (block.id !== blockId) continue;
-        return (block.config as any)?.drillParam ?? null;
-      }
-    }
-    return null;
-  }
+  // A block whose drill shows the rows behind a value opens the drill panel,
+  // with the slot's filters and whatever it's drilled into riding along.
+  const drillRows = useDrillRows();
 
   function openDrill(slotId: string, reportDef: any, blockId: string, value: unknown) {
-    const drillParam = findDrillParam(reportDef, blockId);
-    if (!drillParam) return; // no drillParam configured on this block -> no interaction
+    const block = (reportDef?.pages ?? []).flatMap((p: any) => p.blocks ?? []).find((b: any) => b.id === blockId);
+    const how = block && reportDef ? blockDrill({ parameters: reportDef.parameters ?? [] }, block) : null;
+    if (how?.kind === "rows") {
+      const slot = dashboard.slots.find((s) => s.id === slotId);
+      const drilled = Object.fromEntries((drillMap[slotId] ?? []).map((st) => [st.param, st.value]));
+      void drillRows.open({
+        reportId: slotId, blockId, value, params: { ...(slot?.rendered?.params ?? {}), ...drilled },
+        reportCurrency: reportDef.currency ?? null, tenantCurrency: dashboard.currency ?? null, dateEra: reportDef.dateEra ?? null,
+      });
+      return;
+    }
+    // A dashboard binds a drillParam its report doesn't declare too (geography drills
+    // carried across slots — see the propagation below), so it isn't held to blockDrill's check.
+    const drillParam = how?.kind === "filter" ? how.param : ((block?.config as any)?.drillParam ?? null);
+    if (!drillParam) return; // no drill configured on this block -> no interaction
     // An empty-string value means "clear this dimension" rather than "drill
     // into the empty string" — no real drill value is ever "", and every
     // report's own SQL already treats :param = '' as "no filter" (see the
@@ -589,6 +455,37 @@ export function DashboardViewer({
     return interactive ? drillHandlerFor(slotId, reportDef) : null;
   }
 
+  // Every block a card shows goes through ReportBlock, so it keeps its
+  // report's theme, currency, date style and language, exactly as in the
+  // full report. A slot here always has a rendered report.
+  function slotBlock(slot: Slot, block: Block, dataset: Dataset | undefined, opts: { bare?: boolean } = {}) {
+    const rendered = slot.rendered!;
+    return (
+      <DrillThroughContext.Provider value={drillProviderValue(slot.id, rendered.definition)}>
+        <ReportBlock
+          block={block} report={rendered.definition} dataset={(dataset ?? {}) as Dataset}
+          params={rendered.params} provenance={effectiveProvenance(slot) as any}
+          print={!interactive} reportDbId={slot.id} bare={opts.bare}
+          locale={locale} tenantCurrency={dashboard.currency}
+        />
+      </DrillThroughContext.Provider>
+    );
+  }
+
+  // Under a card's name: that its chart was drawn from the rows, or the chart's axes.
+  function chartCaption(chart: SlotChart | null) {
+    if (chart?.auto) {
+      return (
+        <span className="mt-0.5 flex items-center gap-1 text-xs text-primary">
+          <Sparkles className="h-3 w-3" /> {t("dashboardViewer.autoGeneratedInsight")}
+        </span>
+      );
+    }
+    const axes = chartAxes(chart?.block, t);
+    if (!axes.x && !axes.y) return null;
+    return <span className="mt-0.5 text-xs text-muted-foreground">{[axes.x, axes.y].filter(Boolean).join(" • ")}</span>;
+  }
+
   const isGrid = dashboard.layout === "grid_2x2" || dashboard.layout === "grid_2x1";
   const maxSlots = dashboard.layout === "grid_2x2" ? 4 : (dashboard.layout === "grid_2x1" ? 2 : 1);
   const totalSlots = dashboard.slots.length;
@@ -665,20 +562,8 @@ export function DashboardViewer({
   // ===========================================================================
   if (interactive) {
     function renderGridCell(slot: Slot, i: number, opts?: { heightPx?: number; showDragHandle?: boolean }) {
-      let block = extractWidget(slot.rendered?.definition);
-      let isAutoChart = false;
-      let customData: any = null;
-
-      if (!block && slot.rendered?.dataset) {
-        const synthesized = synthesizeChart(slot.rendered.dataset as Record<string, unknown[]>);
-        if (synthesized) {
-          block = synthesized.block;
-          customData = synthesized.newData;
-          isAutoChart = true;
-        }
-      }
-
-      const BlockComponent = block ? (BlockRegistry as any)[block.type]?.Component : null;
+      // Drilled-in rows, when this card has been drilled into.
+      const chart = slot.rendered ? slotChart(slot.rendered.definition, effectiveDataset(slot) as Dataset) : null;
       const breadcrumb = drillMap[slot.id] ?? [];
       const bodyHeight = opts?.heightPx ?? 360;
       const showDragHandle = opts?.showDragHandle ?? false;
@@ -707,27 +592,12 @@ export function DashboardViewer({
                     {t("drillHierarchy.exit")}
                   </button>
                 </span>
-              ) : (
-                <>
-                  {isAutoChart && (
-                    <span className="mt-0.5 flex items-center gap-1 text-xs text-primary">
-                      <Sparkles className="h-3 w-3" /> {t("dashboardViewer.autoGeneratedInsight")}
-                    </span>
-                  )}
-                  {!isAutoChart && block?.type === "chart" && (
-                    <span className="mt-0.5 text-xs text-muted-foreground">
-                      {block.config?.xField && t("dashboardViewer.xAxisLabel").replace("{field}", block.config.xField)}
-                      {block.config?.xField && block.config?.yFields?.length ? " • " : ""}
-                      {block.config?.yFields?.length ? t("dashboardViewer.yAxisLabel").replace("{fields}", block.config.yFields.join(", ")) : ""}
-                    </span>
-                  )}
-                </>
-              )}
+              ) : chartCaption(chart)}
             </div>
             <LiveBadge status={liveStatus} />
           </div>
 
-          {slot.rendered && block && BlockComponent ? (
+          {slot.rendered && chart ? (
             // A fixed pixel height (not h-full/flex-1 stretched to fit a
             // squeezed viewport) so ResponsiveContainer always gets a real,
             // non-collapsing size — a percentage-based ancestor chain here
@@ -735,21 +605,10 @@ export function DashboardViewer({
             // render nothing but its legend. In "custom" layout this is
             // driven by the grid item's own resized height instead of the
             // fixed 360px default.
-            <div className="flex-1 overflow-hidden p-5" style={{ height: bodyHeight }} data-block-id={block.id}>
-              <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                <BlockComponent
-                  block={block}
-                  report={slot.rendered.definition}
-                  dataset={customData ? { [(block.config as any).queryId]: customData } : (effectiveDataset(slot) as any)}
-                  provenance={effectiveProvenance(slot)}
-                  print={false}
-                  params={{}}
-                  reportDbId={slot.id}
-                  bare
-                />
-              </DrillThroughContext.Provider>
+            <div className="flex-1 overflow-hidden p-5" style={{ height: bodyHeight }} data-block-id={chart.block.id}>
+              {slotBlock(slot, chart.block, chart.dataset, { bare: true })}
             </div>
-          ) : slot.rendered && !block ? (
+          ) : slot.rendered ? (
             <div className="flex-1 overflow-y-auto p-5" style={{ height: bodyHeight }}>
               <AiExplanationWidget reportName={slot.name} dataset={slot.rendered.dataset} />
             </div>
@@ -774,95 +633,47 @@ export function DashboardViewer({
         );
       }
 
+      // Drilled-in data (effectiveDataset), not the frozen slot.rendered
+      // snapshot from the first page load: table_chart once read the
+      // snapshot, and drilling into its chart kept showing pre-drill data.
+      const liveDataset = effectiveDataset(slot) as Dataset;
       let templateContent: React.ReactNode = null;
       if (dashboard.layout === "table_only") {
         const tableBlock = extractTable(slot.rendered.definition);
-        const BlockComponent = tableBlock ? (BlockRegistry as any)[tableBlock.type]?.Component : null;
-        templateContent = tableBlock && BlockComponent ? (
+        templateContent = tableBlock ? (
           <div className="rounded-xl border bg-card p-4 shadow-sm" data-block-id={tableBlock.id}>
-            <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-              <BlockComponent
-                block={tableBlock} report={slot.rendered.definition}
-                dataset={effectiveDataset(slot) as any} provenance={effectiveProvenance(slot) as any}
-                print={false} params={{}} reportDbId={slot.id}
-              />
-            </DrillThroughContext.Provider>
+            {slotBlock(slot, tableBlock, liveDataset)}
           </div>
         ) : (
           <div className="grid min-h-[200px] place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.noTableFound")}</p></div>
         );
       } else if (dashboard.layout === "table_chart") {
-        // Drilled-in data (effectiveDataset/effectiveProvenance), not the
-        // frozen slot.rendered snapshot from initial page load — this
-        // layout used the static snapshot unconditionally until it was
-        // found that drilling into a chart on this template silently kept
-        // showing pre-drill data forever, unlike the default template.
-        const liveDataset = effectiveDataset(slot);
-        const liveProvenance = effectiveProvenance(slot);
-        const chartBlock = extractWidget(slot.rendered.definition);
+        const chart = slotChart(slot.rendered.definition, liveDataset);
         const tableBlock = extractTable(slot.rendered.definition);
-        let customData = null;
-        let finalChartBlock = chartBlock;
-        if (!chartBlock && liveDataset) {
-          const synthesized = synthesizeChart(liveDataset as any);
-          if (synthesized) { finalChartBlock = synthesized.block; customData = synthesized.newData; }
-        }
-        const ChartComponent = finalChartBlock ? (BlockRegistry as any)[finalChartBlock.type]?.Component : null;
-        const TableComponent = tableBlock ? (BlockRegistry as any)[tableBlock.type]?.Component : null;
-        templateContent = finalChartBlock && tableBlock && ChartComponent && TableComponent ? (
+        templateContent = chart && tableBlock ? (
           <div className="flex flex-col gap-4 md:flex-row">
-            <div className="h-[420px] w-full flex-shrink-0 rounded-xl border bg-card p-4 shadow-sm md:w-[42%]" data-block-id={finalChartBlock.id}>
-              <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                <ChartComponent
-                  block={finalChartBlock} report={slot.rendered.definition}
-                  dataset={customData ? { [(finalChartBlock.config as any).queryId]: customData } : liveDataset}
-                  provenance={liveProvenance} print={false} params={{}} reportDbId={slot.id}
-                  bare
-                />
-              </DrillThroughContext.Provider>
+            <div className="h-[420px] w-full flex-shrink-0 rounded-xl border bg-card p-4 shadow-sm md:w-[42%]" data-block-id={chart.block.id}>
+              {slotBlock(slot, chart.block, chart.dataset, { bare: true })}
             </div>
             <div className="h-[420px] flex-1 overflow-y-auto rounded-xl border bg-card p-4 shadow-sm" data-block-id={tableBlock.id}>
-              <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                <TableComponent
-                  block={tableBlock} report={slot.rendered.definition}
-                  dataset={liveDataset as any} provenance={liveProvenance as any}
-                  print={false} params={{}} reportDbId={slot.id}
-                />
-              </DrillThroughContext.Provider>
+              {slotBlock(slot, tableBlock, liveDataset)}
             </div>
           </div>
         ) : (
           <div className="grid min-h-[200px] place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.chartAndTableRequired")}</p></div>
         );
       } else if (dashboard.layout === "chart_only") {
-        // Same fix as table_chart above: read the drilled dataset, not the
-        // frozen initial snapshot.
-        const liveDataset = effectiveDataset(slot);
-        const liveProvenance = effectiveProvenance(slot);
-        const chartBlock = extractWidget(slot.rendered.definition);
-        let customData = null;
-        let finalChartBlock = chartBlock ? JSON.parse(JSON.stringify(chartBlock)) : null;
-        if (!finalChartBlock && liveDataset) {
-          const synthesized = synthesizeChart(liveDataset as any);
-          if (synthesized) { finalChartBlock = synthesized.block; customData = synthesized.newData; }
-        }
-        if (finalChartBlock?.config) finalChartBlock.config.showAiCaption = false;
-        const ChartComponent = finalChartBlock ? (BlockRegistry as any)[finalChartBlock.type]?.Component : null;
-        const xDesc = finalChartBlock?.config?.xField ? t("dashboardViewer.xAxisLabel").replace("{field}", finalChartBlock.config.xField) : "";
-        const yDesc = finalChartBlock?.config?.yFields?.length ? t("dashboardViewer.yAxisLabel").replace("{fields}", finalChartBlock.config.yFields.join(", ")) : "";
-        templateContent = finalChartBlock && ChartComponent ? (
-          <div className="flex h-[480px] flex-col gap-4 rounded-xl border bg-card p-8 shadow-sm" data-block-id={finalChartBlock.id}>
+        const chart = slotChart(slot.rendered.definition, liveDataset);
+        const axes = chartAxes(chart?.block, t);
+        templateContent = chart ? (
+          <div className="flex h-[480px] flex-col gap-4 rounded-xl border bg-card p-8 shadow-sm" data-block-id={chart.block.id}>
             <div className="min-h-0 flex-1">
-              <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                <ChartComponent block={finalChartBlock} report={slot.rendered.definition}
-                  dataset={customData ? { [finalChartBlock.config.queryId]: customData } : liveDataset}
-                  provenance={liveProvenance} print={false} params={{}} reportDbId={slot.id} bare />
-              </DrillThroughContext.Provider>
+              {slotBlock(slot, withoutAiCaption(chart.block), chart.dataset, { bare: true })}
             </div>
-            {(xDesc || yDesc) && (
+            {(axes.x || axes.y) && (
               <div className="flex items-center justify-center gap-6 border-t pt-4 text-sm text-muted-foreground">
-                {xDesc && <span className="rounded-full bg-muted px-3 py-1">{xDesc}</span>}
-                {yDesc && <span className="rounded-full bg-muted px-3 py-1">{yDesc}</span>}
+                {axes.x && <span className="rounded-full bg-muted px-3 py-1">{axes.x}</span>}
+                {axes.y && <span className="rounded-full bg-muted px-3 py-1">{axes.y}</span>}
               </div>
             )}
           </div>
@@ -1038,7 +849,9 @@ export function DashboardViewer({
     // unattended wall display shouldn't show a "raise a request" button,
     // and /api/operate/templates already requires a session regardless.
     // No appId: a Dashboard isn't tied to an Analytic App.
-    return hideExit ? body : (
+    // The rows behind a click (a block's drilldown) slide out over the page.
+    const drillPanel = <DrillPanel state={drillRows.state} onClose={drillRows.close} />;
+    return hideExit ? <>{body}{drillPanel}</> : (
       <OperateActionsProvider>
         <AppShell
           breadcrumbs={[
@@ -1057,6 +870,7 @@ export function DashboardViewer({
         >
           {body}
         </AppShell>
+        {drillPanel}
       </OperateActionsProvider>
     );
   }
@@ -1136,63 +950,28 @@ export function DashboardViewer({
           <TopKpiBar topKpis={dashboard.topKpis as any} currency={dashboard.currency} />
           <div className={`grid flex-1 overflow-hidden ${gridCols} ${gridRows} bg-gradient-to-br from-muted to-muted/50   gap-6 p-6`}>
             {gridSlots.map((slot, i) => {
-              let block = extractWidget(slot.rendered?.definition);
-              let isAutoChart = false;
-              let customData: any = null;
-
-              // If no explicit visual widget, try to synthesize one
-              if (!block && slot.rendered?.dataset) {
-                const synthesized = synthesizeChart(slot.rendered.dataset as Record<string, unknown[]>);
-                if (synthesized) {
-                  block = synthesized.block;
-                  customData = synthesized.newData;
-                  isAutoChart = true;
-                }
-              }
-
-              const BlockComponent = block ? (BlockRegistry as any)[block.type]?.Component : null;
+              const chart = slot.rendered ? slotChart(slot.rendered.definition, effectiveDataset(slot) as Dataset) : null;
 
               return (
                 <div key={slot.id + "_" + i} className="relative bg-background flex flex-col rounded-2xl border shadow-sm hover:shadow-md transition-shadow duration-300 overflow-hidden ring-1 ring-black/5 dark:ring-white/5">
                   <div className="flex-none px-6 py-4 flex items-center justify-between border-b bg-muted/20 dark:bg-muted/10 backdrop-blur-sm">
                     <div className="flex flex-col">
                       <span className="font-semibold text-foreground truncate pr-4">{slot.name}</span>
-                      {isAutoChart && (
-                        <span className="text-xs text-primary mt-0.5 flex items-center gap-1">
-                          <Sparkles className="w-3 h-3" /> {t("dashboardViewer.autoGeneratedInsight")}
-                        </span>
-                      )}
-                      {!isAutoChart && block?.type === "chart" && (
-                        <span className="text-xs text-muted-foreground mt-0.5">
-                          {block.config?.xField && t("dashboardViewer.xAxisLabel").replace("{field}", block.config.xField)}
-                          {block.config?.xField && block.config?.yFields?.length ? " • " : ""}
-                          {block.config?.yFields?.length ? t("dashboardViewer.yAxisLabel").replace("{fields}", block.config.yFields.join(", ")) : ""}
-                        </span>
-                      )}
+                      {chartCaption(chart)}
                     </div>
                     <LiveBadge status={liveStatus} />
                   </div>
 
                   {/* Grid Slot Content */}
-                  {slot.rendered && block && BlockComponent ? (
+                  {slot.rendered && chart ? (
                     <div className="flex-1 relative overflow-hidden flex flex-col">
                       <div className="flex-1 relative p-5">
-                        <div className="w-full h-full" data-block-id={block.id}>
-                          <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                            <BlockComponent
-                              block={block}
-                              report={slot.rendered.definition}
-                              dataset={customData ? { [(block.config as any).queryId]: customData } : slot.rendered.dataset}
-                              provenance={slot.rendered.provenance}
-                              print={!interactive}
-                              params={{}}
-                              reportDbId={slot.id}
-                            />
-                          </DrillThroughContext.Provider>
+                        <div className="w-full h-full" data-block-id={chart.block.id}>
+                          {slotBlock(slot, chart.block, chart.dataset)}
                         </div>
                       </div>
                     </div>
-                  ) : slot.rendered && !block ? (
+                  ) : slot.rendered ? (
                     <div className="flex-1 p-5 relative overflow-y-auto">
                       <AiExplanationWidget reportName={slot.name} dataset={slot.rendered.dataset} />
                     </div>
@@ -1277,25 +1056,15 @@ export function DashboardViewer({
 
                 let templateContent = null;
                 if (slot.rendered) {
+                const dataset = effectiveDataset(slot) as Dataset;
                 if (dashboard.layout === "table_only") {
                   const tableBlock = extractTable(slot.rendered.definition);
-                  const BlockComponent = tableBlock ? (BlockRegistry as any)[tableBlock.type]?.Component : null;
-                  templateContent = tableBlock && BlockComponent ? (
+                  templateContent = tableBlock ? (
                     <div className="absolute inset-0 flex flex-col">
                       <div className="h-[88px] flex-shrink-0" />
                       <div className="flex-1 px-8 pb-6 overflow-hidden">
                         <div className="h-full bg-card rounded-xl border shadow-sm p-4 overflow-y-auto" data-block-id={tableBlock.id}>
-                          <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                            <BlockComponent
-                              block={tableBlock}
-                              report={slot.rendered.definition}
-                              dataset={slot.rendered.dataset}
-                              provenance={slot.rendered.provenance}
-                              print={!interactive}
-                              params={{}}
-                              reportDbId={slot.id}
-                            />
-                          </DrillThroughContext.Provider>
+                          {slotBlock(slot, tableBlock, dataset)}
                         </div>
                       </div>
                     </div>
@@ -1303,23 +1072,9 @@ export function DashboardViewer({
                     <div className="grid h-full place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.noTableFound")}</p></div>
                   );
                 } else if (dashboard.layout === "table_chart") {
-                  const chartBlock = extractWidget(slot.rendered.definition);
+                  const chart = slotChart(slot.rendered.definition, dataset);
                   const tableBlock = extractTable(slot.rendered.definition);
-
-                  let customData = null;
-                  let finalChartBlock = chartBlock;
-                  if (!chartBlock && slot.rendered.dataset) {
-                    const synthesized = synthesizeChart(slot.rendered.dataset as any);
-                    if (synthesized) {
-                      finalChartBlock = synthesized.block;
-                      customData = synthesized.newData;
-                    }
-                  }
-
-                  const ChartComponent = finalChartBlock ? (BlockRegistry as any)[finalChartBlock.type]?.Component : null;
-                  const TableComponent = tableBlock ? (BlockRegistry as any)[tableBlock.type]?.Component : null;
-
-                  templateContent = finalChartBlock && tableBlock && ChartComponent && TableComponent ? (
+                  templateContent = chart && tableBlock ? (
                     <div className="absolute inset-0 flex flex-col">
                       {/* spacer for progress bar + title overlay */}
                       <div className="h-[88px] flex-shrink-0" />
@@ -1327,20 +1082,10 @@ export function DashboardViewer({
                         {/* Chart panel — fills remaining height, recharts gets real pixel dimensions */}
                         <div
                           className="w-[42%] flex-shrink-0 bg-card rounded-xl border shadow-sm p-4 flex flex-col overflow-hidden"
-                          data-block-id={finalChartBlock.id}
+                          data-block-id={chart.block.id}
                         >
                           <div style={{ flex: 1, minHeight: 0 }}>
-                            <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                              <ChartComponent
-                                block={finalChartBlock}
-                                report={slot.rendered.definition}
-                                dataset={customData ? { [(finalChartBlock.config as any).queryId]: customData } : slot.rendered.dataset}
-                                provenance={slot.rendered.provenance}
-                                print={!interactive}
-                                params={{}}
-                                reportDbId={slot.id}
-                              />
-                            </DrillThroughContext.Provider>
+                            {slotBlock(slot, chart.block, chart.dataset)}
                           </div>
                         </div>
                         {/* Table panel — scrollable internally */}
@@ -1348,17 +1093,7 @@ export function DashboardViewer({
                           className="flex-1 bg-card rounded-xl border shadow-sm p-4 overflow-y-auto"
                           data-block-id={tableBlock.id}
                         >
-                          <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                            <TableComponent
-                              block={tableBlock}
-                              report={slot.rendered.definition}
-                              dataset={slot.rendered.dataset}
-                              provenance={slot.rendered.provenance}
-                              print={!interactive}
-                              params={{}}
-                              reportDbId={slot.id}
-                            />
-                          </DrillThroughContext.Provider>
+                          {slotBlock(slot, tableBlock, dataset)}
                         </div>
                       </div>
                     </div>
@@ -1393,31 +1128,26 @@ export function DashboardViewer({
                 let templateContent = null;
                 if (slot.rendered) {
                   if (dashboard.layout === "chart_only") {
-                    const chartBlock = extractWidget(slot.rendered.definition);
-                    let customData = null;
-                    let finalChartBlock = chartBlock ? JSON.parse(JSON.stringify(chartBlock)) : null;
-                    if (!finalChartBlock && slot.rendered.dataset) {
-                      const synthesized = synthesizeChart(slot.rendered.dataset as any);
-                      if (synthesized) { finalChartBlock = synthesized.block; customData = synthesized.newData; }
-                    }
-                    if (finalChartBlock?.config) finalChartBlock.config.showAiCaption = false;
-                    const ChartComponent = finalChartBlock ? (BlockRegistry as any)[finalChartBlock.type]?.Component : null;
-                    const xDesc = finalChartBlock?.config?.xField ? t("dashboardViewer.xAxisLabel").replace("{field}", finalChartBlock.config.xField) : "";
-                    const yDesc = finalChartBlock?.config?.yFields?.length ? t("dashboardViewer.yAxisLabel").replace("{fields}", finalChartBlock.config.yFields.join(', ')) : "";
-                    templateContent = finalChartBlock && ChartComponent ? (
-                      <main className="mx-auto max-w-5xl px-8 pb-12 pt-24 h-full flex flex-col">
-                        <div className="flex-1 bg-card rounded-xl border shadow-sm p-8 overflow-hidden flex flex-col gap-4" data-block-id={finalChartBlock.id}>
+                    const chart = slotChart(slot.rendered.definition, effectiveDataset(slot) as Dataset);
+                    const axes = chartAxes(chart?.block, t);
+                    // A definite height, not h-full: the ACTIVE carousel slot
+                    // sits in normal flow with auto height (so a tall report
+                    // slide can scroll), which made h-full resolve to nothing
+                    // and the flex-1/min-h-0 chart region below collapse to
+                    // 0px — the chart never drew, leaving only its header and
+                    // axis chips (S-09). table_chart avoids this with its own
+                    // fixed-height absolute layout; this is the chart-only
+                    // equivalent.
+                    templateContent = chart ? (
+                      <main className="mx-auto flex h-[85vh] min-h-[480px] max-w-5xl flex-col px-8 pb-12 pt-24">
+                        <div className="flex-1 bg-card rounded-xl border shadow-sm p-8 overflow-hidden flex flex-col gap-4" data-block-id={chart.block.id}>
                           <div className="flex-1 min-h-0">
-                            <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
-                              <ChartComponent block={finalChartBlock} report={slot.rendered.definition}
-                                dataset={customData ? { [finalChartBlock.config.queryId]: customData } : slot.rendered.dataset}
-                                provenance={slot.rendered.provenance} print={!interactive} params={{}} reportDbId={slot.id} />
-                            </DrillThroughContext.Provider>
+                            {slotBlock(slot, withoutAiCaption(chart.block), chart.dataset)}
                           </div>
-                          {(xDesc || yDesc) && (
+                          {(axes.x || axes.y) && (
                             <div className="mt-4 pt-4 border-t flex items-center justify-center gap-6 text-sm text-muted-foreground">
-                              {xDesc && <span className="bg-muted px-3 py-1 rounded-full">{xDesc}</span>}
-                              {yDesc && <span className="bg-muted px-3 py-1 rounded-full">{yDesc}</span>}
+                              {axes.x && <span className="bg-muted px-3 py-1 rounded-full">{axes.x}</span>}
+                              {axes.y && <span className="bg-muted px-3 py-1 rounded-full">{axes.y}</span>}
                             </div>
                           )}
                         </div>

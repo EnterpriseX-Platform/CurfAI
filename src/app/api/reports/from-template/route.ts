@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser, tenantWhere, blockScopedApiKey } from "@/lib/auth";
+import { canBuild } from "@/lib/roles";
 import { recordAudit } from "@/lib/audit";
+import { appBase } from "@/lib/http/appBase";
 import { getTemplate } from "@/lib/templates/registry";
-
-function appBase(req: NextRequest): string {
-  const proto = req.headers.get("x-forwarded-proto");
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-  if (proto && host) return `${proto}://${host}`;
-  return process.env.NEXTAUTH_URL ?? new URL(req.url).origin;
-}
 
 export async function POST(req: NextRequest) {
   const user = await requireUser(req);
@@ -19,6 +14,8 @@ export async function POST(req: NextRequest) {
   // creating a brand-new one from a template is outside that mandate.
   const scopeBlock = blockScopedApiKey(user);
   if (scopeBlock) return scopeBlock;
+  // Creating a report — the same rule as POST /api/reports.
+  if (!canBuild(user.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await req.formData().catch(() => null);
   const slug = (body?.get("slug") ?? "").toString();

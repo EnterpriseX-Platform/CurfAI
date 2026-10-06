@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser, requireReportInScope } from "@/lib/auth";
+import { requireUser, requireReportInScope, type CurfSessionUser } from "@/lib/auth";
+import { ReportSchema } from "@/lib/reporting/schema";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { visibleReport, hiddenBlockIds } from "@/lib/reporting/visibleReport";
 import { recordAudit } from "@/lib/audit";
 import { dispatchDelivery, type DeliveryConfig, type Rendered } from "@/lib/delivery/dispatch";
 import { emitWebhook } from "@/lib/webhooks";
+import { appBase } from "@/lib/http/appBase";
 
 /**
  * GET  /api/reports/:id/comments   — list comments on this report
@@ -26,7 +30,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (scopeBlock) return scopeBlock;
   const report = await prisma.report.findFirst({
     where: { id: params.id, tenantId: user.tenantId },
-    select: { id: true },
+    select: { id: true, definition: true },
   });
   if (!report) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -35,8 +39,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     orderBy: { createdAt: "asc" },
     include: { author: { select: { id: true, name: true, email: true } } },
   });
+  // Comments on a block hidden from the caller's roles are about what it
+  // shows, so they're left out with it.
+  const hidden = await hiddenFor(user, report.definition);
   return NextResponse.json({
-    items: rows.map((c: any) => ({
+    items: rows.filter((c: any) => !c.blockId || !hidden.has(c.blockId)).map((c: any) => ({
       id: c.id,
       blockId: c.blockId,
       cellKey: c.cellKey,
@@ -50,6 +57,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       author: c.author ? { id: c.author.id, name: c.author.name, email: c.author.email } : null,
     })),
   });
+}
+
+/** The blocks hidden from `user`'s roles. A definition that no longer parses
+ *  hides nothing it can name. */
+async function hiddenFor(user: CurfSessionUser, rawDefinition: string): Promise<Set<string>> {
+  try {
+    const definition = ReportSchema.parse(JSON.parse(rawDefinition));
+    return hiddenBlockIds(definition, visibleReport(definition, await exportViewer(user)));
+  } catch {
+    return new Set();
+  }
 }
 
 function safeParseJson(s: string | null | undefined): string[] {
@@ -80,6 +98,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     select: {
       id: true,
       name: true,
+      definition: true,
       createdBy: { select: { id: true, email: true, name: true } },
     },
   });
@@ -99,6 +118,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     if (!parent) return NextResponse.json({ error: "Parent comment not found" }, { status: 404 });
     effectiveBlockId = parent.blockId;
+  }
+  // A block hidden from the caller's roles is as missing to comment on (and
+  // to notify people about) as to read comments on.
+  if ((await hiddenFor(user, report.definition)).has(effectiveBlockId)) {
+    return NextResponse.json({ error: "Block not found" }, { status: 404 });
   }
 
   const created = await prisma.comment.create({
@@ -202,7 +226,7 @@ async function notifyNewComment(ctx: {
     const recipients = Array.from(set).filter(Boolean);
     if (recipients.length === 0) return;
 
-    const origin = new URL(ctx.req.url).origin;
+    const origin = appBase(ctx.req);
     const reportUrl = `${origin}/reports/${ctx.reportId}`;
     const config: DeliveryConfig = {
       kind: "email",

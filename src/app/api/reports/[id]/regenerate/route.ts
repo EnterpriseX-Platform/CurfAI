@@ -23,6 +23,8 @@ import { requireUser, requireAdminOrEditor, tenantWhere, requireReportInScope } 
 import { recordAudit } from "@/lib/audit";
 import { ensureLimit } from "@/lib/rateLimit";
 import { callLLM } from "@/lib/llm";
+import { gateGeneratedReport, persistableDefinition } from "@/lib/intelligence/reportGate";
+import { exportViewer } from "@/lib/reporting/exportCaller";
 import { withTenantContext } from "@/lib/rls";
 
 const Schema = z.object({
@@ -172,7 +174,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       raw: JSON.stringify(refined).slice(0, 1000),
     }, { status: 422 });
   }
-  const newDef = validated.data;
+  // The model rewrote the definition — its words and its queries — so it
+  // passes the same pre-publish gate as a newly generated report
+  // (lib/intelligence/reportGate.ts). One that fails isn't saved; the
+  // report keeps its current version.
+  const firstText = validated.data.pages.flatMap((p) => p.blocks).find((b) => b.type === "text");
+  const gate = await gateGeneratedReport({
+    report: validated.data, tenantId: user.tenantId, viewer: await exportViewer(user), userId: user.id,
+    authored: "ai",
+    prompt: [`Revise the report "${report.name}" to address its reviewers' comments.`, parsed.data.extraPrompt].filter(Boolean).join(" "),
+    caption: (firstText?.config as any)?.text,
+  });
+  if (gate.verdict === "fail") {
+    return NextResponse.json({
+      error: "The regenerated report didn't pass its checks — the current version is unchanged",
+      checks: gate.checks.filter((c) => c.status !== "pass"),
+    }, { status: 422 });
+  }
+  const newDef = gate.report;
 
   // ---- Persist (with rollback safety) ----
   // Snapshot the current def as a ReportVersion BEFORE updating, so the
@@ -195,7 +214,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const updated = await tx.report.update({
       where: { id: report.id },
       data: {
-        definition: JSON.stringify(newDef),
+        definition: persistableDefinition(gate),
         version: nextVersion,
         // Refresh name/description if the LLM tweaked them.
         name: newDef.name ?? report.name,

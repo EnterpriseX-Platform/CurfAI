@@ -81,7 +81,7 @@ export function hashQueryDef(ds: DataSourceDef, params: Record<string, unknown>)
     if (k in params) bound[k] = params[k];
   }
 
-  const canonical = JSON.stringify({
+  const fields: Record<string, unknown> = {
     sql: (ds.sql ?? "").replace(/\s+/g, " ").trim().toLowerCase(),
     method: ds.method ?? null,
     path: ds.path ?? null,
@@ -89,7 +89,16 @@ export function hashQueryDef(ds: DataSourceDef, params: Record<string, unknown>)
     jsonPath: ds.jsonPath ?? null,
     headers: ds.headers ?? null,
     params: bound,
-  });
+  };
+  // An engine query has no SQL, so what it asks for (the view, columns, filters…) is its identity. Added only
+  // when present: every other kind keeps exactly the hash it always had (the engine's parity tests pin them).
+  if (ds.engine) {
+    for (const [, name] of JSON.stringify(ds.engine).matchAll(/"\$param":"([^"]+)"/g)) {
+      if (name in params) bound[name] = params[name];
+    }
+    fields.engine = ds.engine;
+  }
+  const canonical = JSON.stringify(fields);
   return "sha256:" + createHash("sha256").update(canonical).digest("hex").slice(0, 24);
 }
 

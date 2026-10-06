@@ -2,12 +2,15 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Globe } from "lucide-react";
 import { prisma } from "@/lib/db";
+import { pinRequestDbContext, withSystemDbContext } from "@/lib/dbContext";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReportWithProof, ANONYMOUS_VIEWER } from "@/lib/reporting/runner";
+import { visibleReport } from "@/lib/reporting/visibleReport";
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { localizeReport } from "@/lib/reporting/localize";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { CurfLogo } from "@/components/common/CurfLogo";
+import { hashInviteToken } from "@/lib/invites";
 
 /**
  * Auth-free public view of a report, unlocked by a PublicShareToken. The
@@ -21,10 +24,14 @@ import { CurfLogo } from "@/components/common/CurfLogo";
 export const dynamic = "force-dynamic";
 
 export default async function PublicSharePage({ params }: { params: { token: string } }) {
-  const share = await prisma.publicShareToken.findUnique({
-    where: { token: params.token },
-  });
+  // The token is the credential and says whose report this is: look it up
+  // across workspaces, then render as that workspace — also when the
+  // visitor is signed in to a different one (row-level security, BE-TEN-03).
+  const share = await withSystemDbContext(() => prisma.publicShareToken.findUnique({
+    where: { tokenHash: hashInviteToken(params.token) },
+  }));
   if (!share) notFound();
+  pinRequestDbContext({ tenantId: share.tenantId, userId: "public", role: "viewer" });
   if (share.expiresAt && new Date(share.expiresAt) < new Date()) {
     return (
       <ExpiredShell expiredAt={new Date(share.expiresAt)} />
@@ -41,7 +48,9 @@ export default async function PublicSharePage({ params }: { params: { token: str
     select: { currency: true },
   }).catch(() => null);
 
-  const def = ReportSchema.parse(JSON.parse(report.definition));
+  // Nobody is signed in here, so a block the author gated to a role isn't
+  // shown, and neither are the rows of a query only such blocks use.
+  const def = visibleReport(ReportSchema.parse(JSON.parse(report.definition)), ANONYMOUS_VIEWER);
   const locale = serverLocale();
   const localized = localizeReport(def, locale);
   // Public shares don't accept parameters via URL (design choice - keeps the
@@ -50,7 +59,7 @@ export default async function PublicSharePage({ params }: { params: { token: str
   for (const p of def.parameters) pvals[p.name] = p.default ?? "";
   // Auth-free public view — nobody is authenticated here, so any
   // sensitivity-tagged lake column redacts by default (see ANONYMOUS_VIEWER).
-  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, viewer: ANONYMOUS_VIEWER });
+  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, tenantId: share.tenantId, viewer: ANONYMOUS_VIEWER });
 
   return (
     <div className="min-h-screen bg-background">
@@ -75,9 +84,15 @@ export default async function PublicSharePage({ params }: { params: { token: str
             what carries nameI18n. Using report.name here left the heading in
             English while the report under it rendered Thai — the exact
             "shared link shows English" complaint this closes. */}
-        <h1 className="mb-1 text-2xl font-semibold tracking-tight">{localized.name}</h1>
-        {localized.description && (
-          <p className="mb-6 text-sm text-muted-foreground">{localized.description}</p>
+        {/* A report that opens with its own Title block already says its name —
+            the page heading would print it twice. */}
+        {!localized.pages[0]?.blocks.some((b) => b.type === "title") && (
+          <>
+            <h1 className="mb-1 text-2xl font-semibold tracking-tight">{localized.name}</h1>
+            {localized.description && (
+              <p className="mb-6 text-sm text-muted-foreground">{localized.description}</p>
+            )}
+          </>
         )}
         <ReportDocument report={localized} dataset={dataset} params={pvals} provenance={provenance} tenantCurrency={tenantRow?.currency ?? null} locale={locale} />
       </main>

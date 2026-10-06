@@ -7,10 +7,10 @@
  *   - report run latency (Histogram, labelled by tenant) — wired into
  *     runReportWithProof(), the single execution core every report-running
  *     route/page ultimately calls (src/lib/reporting/runner.ts).
- *   - report queue depth (Gauge, labelled by kind: pdf|xlsx|docx|csv) —
- *     DEFINED BUT NOT WIRED. There is no real export-queue concept in the
- *     codebase yet (exports run synchronously, not through a job queue);
- *     wire this once one exists instead of setting it from a fake source.
+ *   - report queue depth (Gauge, labelled by kind: pdf|xlsx) — exports
+ *     waiting for a headless-browser page, set by the shared capture
+ *     limiter (src/lib/reporting/renderers/headlessBrowser.ts). docx and
+ *     csv never open a browser, so they never queue.
  *
  * Scrape the registry at /api/observability/prometheus — see
  * src/app/api/observability/prometheus/route.ts. (Not /api/metrics — that

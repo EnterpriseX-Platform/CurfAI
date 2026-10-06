@@ -58,3 +58,51 @@ export function kpiDelta(value: number, compare: number | undefined): number | u
   if (compare == null || !Number.isFinite(compare) || compare === 0 || !Number.isFinite(value)) return undefined;
   return (value - compare) / compare;
 }
+
+/**
+ * The KPI's plan: a column on the same row (a budget joined in the query —
+ * plans change month to month) wins over a fixed number typed in the
+ * designer. Undefined when neither is set or the column isn't a number.
+ */
+export function pickKpiPlan(
+  rows: ReadonlyArray<Record<string, unknown>>,
+  cfg: { plan?: number; planField?: string; aggregate?: KpiValueConfig["aggregate"] },
+): number | undefined {
+  if (cfg.planField) {
+    const n = computeKpiValue({ valueField: cfg.planField, aggregate: cfg.aggregate === "count" ? undefined : cfg.aggregate }, rows);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return cfg.plan != null && Number.isFinite(cfg.plan) ? cfg.plan : undefined;
+}
+
+export type KpiVsPlan = { state: "ahead" | "behind" | "on"; text: string };
+
+/**
+ * Where the number stands against plan, the way an executive says it:
+ * "4.1% behind plan", or for a rate "0.3 pts ahead of plan". Which side is
+ * ahead follows the metric's good direction — a return rate under its plan
+ * is ahead. Within half a percent (a twentieth of a point for a rate) it's
+ * on plan. `pts` is the unit word in the reader's language.
+ */
+export function kpiVsPlan(
+  value: number | null | undefined,
+  target: number | null | undefined,
+  format: string | null | undefined,
+  goodDirection: "up" | "down" | null | undefined,
+  pts = "pts",
+): KpiVsPlan | undefined {
+  if (value == null || target == null || !Number.isFinite(value) || !Number.isFinite(target)) return undefined;
+  let gap: number; let text: string;
+  if (format === "percent") {
+    gap = (value - target) * 100;
+    if (Math.abs(gap) < 0.05) return { state: "on", text: "" };
+    text = `${Math.abs(gap).toFixed(1)} ${pts}`;
+  } else {
+    if (target === 0) return undefined;
+    gap = (value - target) / Math.abs(target);
+    if (Math.abs(gap) < 0.005) return { state: "on", text: "" };
+    text = `${Math.abs(gap * 100).toFixed(1)}%`;
+  }
+  const above = gap > 0;
+  return { state: above === ((goodDirection ?? "up") === "up") ? "ahead" : "behind", text };
+}

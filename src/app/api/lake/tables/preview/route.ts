@@ -14,16 +14,14 @@
  * CPU/memory even without a disk write.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
-import { inferColumns } from "@/lib/lake/tables";
-import { detectDateOrder } from "@/lib/lake/valueClean";
+import { blockScopedApiKey, requireUser } from "@/lib/auth";
 import { parseUploadWithMeta } from "@/lib/lake/parseFile";
+import { buildUploadPreview } from "@/lib/lake/uploadPreview";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // Mirrors POST /api/lake/tables's own Phase 1 cap.
-const SAMPLE_ROWS = 20;
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,6 +36,8 @@ export async function POST(req: NextRequest) {
 async function previewImpl(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
 
   const contentType = req.headers.get("content-type") ?? "";
   if (!contentType.startsWith("multipart/form-data")) {
@@ -73,29 +73,12 @@ async function previewImpl(req: NextRequest) {
     return NextResponse.json({ error: `Parse failed: ${e?.message ?? e}` }, { status: 400 });
   }
 
-  const { rows, sheets } = parsed;
-  const columns = inferColumns(rows);
-
-  // Date columns whose values prove nothing about day/month order. The
-  // detected order on those is a fallback, not a reading of the data, so
-  // the dialog asks rather than letting it ride.
-  const ambiguousDateColumns = columns
-    .filter((c) => c.type === "date")
-    .filter((c) => detectDateOrder(rows.map((r) => r[c.name]).filter((v): v is string => typeof v === "string")).ambiguous)
-    .map((c) => c.name);
-  const base = filename.replace(/\.[^.]+$/, "");
-  // One table per sheet, so a multi-sheet workbook needs the sheet in the
-  // name — otherwise importing a second sheet proposes a name that already
-  // exists and silently replaces the first import.
-  const suggestedName = sheets.length > 1 && parsed.sheet ? `${base}_${parsed.sheet}` : base;
-
-  return NextResponse.json({
-    suggestedName,
-    columns,
-    sampleRows: rows.slice(0, SAMPLE_ROWS),
-    rowCount: rows.length,
-    sheets,
+  return NextResponse.json(buildUploadPreview({
+    filename,
+    rows: parsed.rows,
+    rowCount: parsed.rows.length,
+    rowCountIsEstimate: false,
+    sheets: parsed.sheets,
     sheet: parsed.sheet,
-    ambiguousDateColumns,
-  });
+  }));
 }

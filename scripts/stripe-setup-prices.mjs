@@ -13,7 +13,7 @@
  * that key instead of creating a duplicate, so it's safe to run again
  * after a partial failure or just to print the ids again.
  *
- * The four amounts below are asserted against src/lib/billing.ts's PLANS
+ * The four amounts below are asserted against src/lib/plans.ts's PLANS
  * array before anything is created — if pricing changes there and this
  * script isn't updated to match, it refuses to run rather than create a
  * price at the wrong amount.
@@ -34,11 +34,11 @@ const PRICES = [
 ];
 
 // ── Guard: these amounts must match the app's own source of truth ──────
-function assertMatchesBillingTs() {
-  const billingSrc = readFileSync(path.join(repoRoot, "src/lib/billing.ts"), "utf8");
+function assertMatchesPlansTs() {
+  const plansSrc = readFileSync(path.join(repoRoot, "src/lib/plans.ts"), "utf8");
   const seatsBlock = (tier) => {
-    const m = billingSrc.match(new RegExp(`tier: "${tier}",[\\s\\S]*?seats: \\{ editorUsd: (\\d+), viewerUsd: (\\d+)`));
-    if (!m) throw new Error(`Could not find a seats block for tier "${tier}" in src/lib/billing.ts — has PLANS changed shape? Update this script.`);
+    const m = plansSrc.match(new RegExp(`tier: "${tier}",[\\s\\S]*?seats: \\{ editorUsd: (\\d+), viewerUsd: (\\d+)`));
+    if (!m) throw new Error(`Could not find a seats block for tier "${tier}" in src/lib/plans.ts — has PLANS changed shape? Update this script.`);
     return { editorUsd: Number(m[1]), viewerUsd: Number(m[2]) };
   };
   for (const tier of ["growth", "business"]) {
@@ -48,15 +48,15 @@ function assertMatchesBillingTs() {
       const got = kind === "editor" ? actual.editorUsd : actual.viewerUsd;
       if (got !== expected) {
         throw new Error(
-          `src/lib/billing.ts now says ${tier} ${kind} = $${got}, but this script has $${expected}. ` +
+          `src/lib/plans.ts now says ${tier} ${kind} = $${got}, but this script has $${expected}. ` +
           `Pricing has moved since this script was written — update the PRICES table above before running.`,
         );
       }
     }
   }
-  console.log("✓ Amounts match src/lib/billing.ts's PLANS.\n");
+  console.log("✓ Amounts match src/lib/plans.ts's PLANS.\n");
 }
-assertMatchesBillingTs();
+assertMatchesPlansTs();
 
 if (dryRun) {
   console.log("--dry-run: would create/verify these prices —");

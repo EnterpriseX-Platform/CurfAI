@@ -92,7 +92,8 @@ export type ChartPurpose = "composition" | "comparison" | "distribution" | "rela
 export type ChartTypeValue =
   | "bar" | "line" | "area" | "pie" | "donut" | "combo"
   | "treemap" | "funnel" | "scatter" | "radar" | "gauge" | "waterfall" | "bullet"
-  | "sunburst" | "sankey" | "streamgraph";
+  | "sunburst" | "sankey" | "streamgraph"
+  | "boxplot" | "network" | "chord" | "parallel" | "radial" | "scatter3d";
 
 export type ChartFieldConfig = {
   xField?: string;
@@ -102,9 +103,15 @@ export type ChartFieldConfig = {
   hierarchyFields?: string[];
   /** Sankey only — see ChartConfigSchema.targetField. */
   targetField?: string;
+  /** 3D scatter only — see ChartConfigSchema.zField. */
+  zField?: string;
 };
 
-export type EligibilityResult = { eligible: boolean; reason?: string };
+/**
+ * `reasonKey` is a lib/i18n/dict.ts key (chartEligibility.*): the pickers show
+ * t(reasonKey); server-side text (Master Builder) resolves DICT.en.
+ */
+export type EligibilityResult = { eligible: true } | { eligible: false; reasonKey: string };
 
 function isNumericField(profiles: Record<string, ColumnProfile>, field: string | undefined): boolean {
   if (!field) return false;
@@ -128,14 +135,14 @@ export function checkChartTypeEligibility(
   profiles: Record<string, ColumnProfile>,
 ): EligibilityResult {
   if (Object.keys(profiles).length === 0) {
-    return { eligible: false, reason: "ยังไม่มีข้อมูลจาก query นี้ให้แสดงผล" };
+    return { eligible: false, reasonKey: "chartEligibility.noData" };
   }
 
-  const needsX = () => (config.xField ? null : { eligible: false as const, reason: "ต้องเลือกคอลัมน์สำหรับแกน X ก่อน" });
+  const needsX = () => (config.xField ? null : { eligible: false as const, reasonKey: "chartEligibility.needsX" });
   const needsNumericY = () =>
     hasAnyNumericYField(profiles, config.yFields)
       ? null
-      : { eligible: false as const, reason: "ต้องมีอย่างน้อย 1 คอลัมน์ตัวเลขในแกน Y" };
+      : { eligible: false as const, reasonKey: "chartEligibility.needsNumericY" };
 
   switch (type) {
     case "bar":
@@ -153,9 +160,16 @@ export function checkChartTypeEligibility(
     case "streamgraph":
       return needsX() ?? needsNumericY() ?? { eligible: true };
 
+    case "scatter3d":
+      // Three measures: x, the first yField, and zField, all numeric.
+      if (!isNumericField(profiles, config.xField) || !isNumericField(profiles, config.zField)) {
+        return { eligible: false, reasonKey: "chartEligibility.needsThreeNumeric" };
+      }
+      return needsNumericY() ?? { eligible: true };
+
     case "scatter": {
       if (!isNumericField(profiles, config.xField)) {
-        return { eligible: false, reason: "แกน X ของ Scatter ต้องเป็นคอลัมน์ตัวเลข" };
+        return { eligible: false, reasonKey: "chartEligibility.scatterNumericX" };
       }
       return needsNumericY() ?? { eligible: true };
     }
@@ -166,15 +180,32 @@ export function checkChartTypeEligibility(
       // clears, so Sunburst is usable immediately without a dedicated
       // multi-level editor (see hierarchyFields' doc comment in schema.ts).
       const hasLevels = (config.hierarchyFields?.length ?? 0) > 0 || !!config.xField;
-      if (!hasLevels) return { eligible: false, reason: "ต้องเลือกคอลัมน์สำหรับจัดกลุ่มก่อน" };
+      if (!hasLevels) return { eligible: false, reasonKey: "chartEligibility.needsGrouping" };
       return needsNumericY() ?? { eligible: true };
     }
 
     case "sankey": {
       if (!config.xField || !config.targetField) {
-        return { eligible: false, reason: "ต้องเลือกคอลัมน์ต้นทาง (source) และปลายทาง (target) ก่อน" };
+        return { eligible: false, reasonKey: "chartEligibility.needsSourceTarget" };
       }
       return needsNumericY() ?? { eligible: true };
+    }
+
+    case "boxplot":
+    case "radial":
+      return needsX() ?? needsNumericY() ?? { eligible: true };
+
+    case "network":
+    case "chord":
+      // The weight may be a count of rows, so any yField will do.
+      if (!config.xField || !config.targetField) {
+        return { eligible: false, reasonKey: "chartEligibility.needsSourceTarget" };
+      }
+      return { eligible: true };
+
+    case "parallel": {
+      const numeric = (config.yFields ?? []).filter((f) => isNumericField(profiles, f)).length;
+      return numeric >= 2 ? { eligible: true } : { eligible: false, reasonKey: "chartEligibility.needsTwoNumeric" };
     }
 
     case "gauge":
@@ -184,7 +215,7 @@ export function checkChartTypeEligibility(
       const first = config.yFields?.[0];
       return isNumericField(profiles, first)
         ? { eligible: true }
-        : { eligible: false, reason: "ต้องมีคอลัมน์ตัวเลข 1 ค่าสำหรับแสดงเป็นมาตรวัด" };
+        : { eligible: false, reasonKey: "chartEligibility.needsSingleNumeric" };
     }
 
     default:
@@ -192,50 +223,63 @@ export function checkChartTypeEligibility(
   }
 }
 
+/**
+ * Display names live in lib/i18n/dict.ts, not here: chartType.<value> for the
+ * type and chartPurpose.<purpose> for its group heading, in all three locales
+ * (chartCompatibility.test.ts checks). A new chart type needs both.
+ */
 export type ChartTypeMeta = {
   value: ChartTypeValue;
-  labelEn: string;
-  labelTh: string;
   purpose: ChartPurpose;
-  purposeLabelTh: string;
-  purposeLabelEn: string;
   /** One-line "when to use" guidance — also fed to Master Builder / AutoCurf prompts. */
   whenToUse: string;
 };
 
 export const CHART_TYPE_META: ChartTypeMeta[] = [
-  { value: "bar", labelEn: "Bar", labelTh: "แท่ง", purpose: "comparison", purposeLabelTh: "เปรียบเทียบ/จัดอันดับ", purposeLabelEn: "Comparison & Ranking",
+  { value: "bar", purpose: "comparison",
     whenToUse: "Compare a numeric value across categories, or rank them." },
-  { value: "line", labelEn: "Line", labelTh: "เส้น", purpose: "trend", purposeLabelTh: "แนวโน้มตามเวลา", purposeLabelEn: "Trend Over Time",
+  { value: "line", purpose: "trend",
     whenToUse: "Show how a numeric value changes over time or an ordered sequence." },
-  { value: "area", labelEn: "Area", labelTh: "พื้นที่", purpose: "trend", purposeLabelTh: "แนวโน้มตามเวลา", purposeLabelEn: "Trend Over Time",
+  { value: "area", purpose: "trend",
     whenToUse: "Trend over time with emphasis on cumulative volume under the line." },
-  { value: "combo", labelEn: "Combo (bar + line)", labelTh: "แท่ง+เส้นผสม", purpose: "trend", purposeLabelTh: "แนวโน้มตามเวลา", purposeLabelEn: "Trend Over Time",
+  { value: "combo", purpose: "trend",
     whenToUse: "Two related measures on different scales over time, e.g. revenue (bars) and margin % (line)." },
-  { value: "pie", labelEn: "Pie", labelTh: "วงกลม", purpose: "composition", purposeLabelTh: "สัดส่วน/องค์ประกอบ", purposeLabelEn: "Composition",
+  { value: "pie", purpose: "composition",
     whenToUse: "A few categories (ideally ≤ 6) that sum to a meaningful whole." },
-  { value: "donut", labelEn: "Donut", labelTh: "โดนัท", purpose: "composition", purposeLabelTh: "สัดส่วน/องค์ประกอบ", purposeLabelEn: "Composition",
+  { value: "donut", purpose: "composition",
     whenToUse: "Same as Pie, with the center free for a total/KPI label." },
-  { value: "treemap", labelEn: "Treemap", labelTh: "ทรีแมป", purpose: "composition", purposeLabelTh: "สัดส่วน/องค์ประกอบ", purposeLabelEn: "Composition",
+  { value: "treemap", purpose: "composition",
     whenToUse: "Composition across many categories (more than a pie can read) sized by a numeric value." },
-  { value: "sunburst", labelEn: "Sunburst", labelTh: "ซันเบิร์สต์ (Sunburst)", purpose: "composition", purposeLabelTh: "สัดส่วน/องค์ประกอบ", purposeLabelEn: "Composition",
+  { value: "sunburst", purpose: "composition",
     whenToUse: "Composition with nested levels, e.g. region -> country -> city — like a Donut that can go multiple rings deep." },
-  { value: "funnel", labelEn: "Funnel", labelTh: "กรวย", purpose: "flow", purposeLabelTh: "กระบวนการ/การไหล", purposeLabelEn: "Process & Flow",
+  { value: "funnel", purpose: "flow",
     whenToUse: "An ordered process with drop-off at each stage, e.g. a conversion funnel." },
-  { value: "waterfall", labelEn: "Waterfall", labelTh: "สะพาน (Waterfall)", purpose: "flow", purposeLabelTh: "กระบวนการ/การไหล", purposeLabelEn: "Process & Flow",
+  { value: "waterfall", purpose: "flow",
     whenToUse: "A running total bridged by sequential positive/negative deltas, e.g. a P&L bridge." },
-  { value: "sankey", labelEn: "Sankey", labelTh: "แซนคีย์ (Sankey)", purpose: "flow", purposeLabelTh: "กระบวนการ/การไหล", purposeLabelEn: "Process & Flow",
+  { value: "sankey", purpose: "flow",
     whenToUse: "Flow of a quantity between stages, e.g. budget by department or a multi-step customer path — needs a source and a target column." },
-  { value: "streamgraph", labelEn: "Streamgraph", labelTh: "สายธาร (Streamgraph)", purpose: "trend", purposeLabelTh: "แนวโน้มตามเวลา", purposeLabelEn: "Trend Over Time",
+  { value: "streamgraph", purpose: "trend",
     whenToUse: "Like a stacked area chart but flowing/organic — shows how the mix of several series shifts over time." },
-  { value: "scatter", labelEn: "Scatter", labelTh: "กระจาย (Scatter)", purpose: "relationship", purposeLabelTh: "ความสัมพันธ์ระหว่างตัวแปร", purposeLabelEn: "Relationship & Correlation",
+  { value: "scatter", purpose: "relationship",
     whenToUse: "Whether two numeric measures correlate; add a size field for a bubble chart." },
-  { value: "radar", labelEn: "Radar", labelTh: "เรดาร์ (Radar)", purpose: "comparison", purposeLabelTh: "เปรียบเทียบ/จัดอันดับ", purposeLabelEn: "Comparison & Ranking",
+  { value: "radar", purpose: "comparison",
     whenToUse: "Compare 2+ entities across several dimensions at once, e.g. products scored on quality/price/support." },
-  { value: "gauge", labelEn: "Gauge", labelTh: "มาตรวัด", purpose: "comparison", purposeLabelTh: "เปรียบเทียบ/จัดอันดับ", purposeLabelEn: "Comparison & Ranking",
+  { value: "gauge", purpose: "comparison",
     whenToUse: "One KPI value against a target/zone band, at a glance." },
-  { value: "bullet", labelEn: "Bullet", labelTh: "แท่งเทียบเป้า (Bullet)", purpose: "comparison", purposeLabelTh: "เปรียบเทียบ/จัดอันดับ", purposeLabelEn: "Comparison & Ranking",
+  { value: "bullet", purpose: "comparison",
     whenToUse: "Same as Gauge, in a compact bar — good for stacking several KPIs in a list." },
+  { value: "boxplot", purpose: "distribution",
+    whenToUse: "How a measure spreads within each category — median, quartiles and outliers, e.g. unit cost by work type. Reads raw rows, not totals." },
+  { value: "radial", purpose: "distribution",
+    whenToUse: "A measure round a cycle — hours of the day, days of the week, months — so the busy and quiet stretches read as a clock face." },
+  { value: "parallel", purpose: "relationship",
+    whenToUse: "Every row across 3-7 numeric measures at once, one line each, coloured by a category — spot the rows that are off on several checks together." },
+  { value: "network", purpose: "relationship",
+    whenToUse: "Which items are linked and how tightly — overlapping requests, products bought together — needs a source and a target column." },
+  { value: "scatter3d", purpose: "relationship",
+    whenToUse: "Three measures of the same rows at once, turned in 3D — e.g. cost against reference, readiness and size per request — needs a third numeric column (zField); colour by a category." },
+  { value: "chord", purpose: "flow",
+    whenToUse: "Flows between a handful of groups in both directions, round a circle — e.g. which categories are bought together — needs a source and a target column." },
 ];
 
 const META_BY_VALUE: Record<ChartTypeValue, ChartTypeMeta> = Object.fromEntries(

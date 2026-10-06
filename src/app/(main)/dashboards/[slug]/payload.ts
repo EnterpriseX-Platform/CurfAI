@@ -12,6 +12,8 @@ import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReportWithProof, runSingleQuery, ANONYMOUS_VIEWER, type RunViewer } from "@/lib/reporting/runner";
 import { extractSqlParamNames } from "@/lib/reporting/params";
+import { visibleReport } from "@/lib/reporting/visibleReport";
+import { DEFAULT_CURRENCY } from "@/lib/reporting/currency";
 
 /**
  * Resolve the dashboard's report list into ready-to-render payload. Reports
@@ -24,7 +26,9 @@ import { extractSqlParamNames } from "@/lib/reporting/params";
  * the token-only kiosk display (hallway TV, nobody authenticated) omits it
  * and gets ANONYMOUS_VIEWER, so a sensitivity-tagged column redacts there
  * by default rather than defaulting to fully unredacted for an unattended
- * screen.
+ * screen. It also decides which blocks each report shows: a block gated to
+ * roles the viewer lacks is left out, and so are the rows of a query only
+ * such blocks use.
  */
 export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer = ANONYMOUS_VIEWER) {
   let reportIds: string[] = [];
@@ -39,7 +43,7 @@ export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer
     where: { id: dashboard.tenantId },
     select: { currency: true },
   }).catch(() => null);
-  const currency: string = tenantRow?.currency || "USD";
+  const currency: string = tenantRow?.currency || DEFAULT_CURRENCY;
 
   // Fetch all reports in one query, scope by tenant, then re-order to match
   // the dashboard's preferred sequence (Prisma's findMany doesn't preserve order).
@@ -69,12 +73,12 @@ export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer
       continue;
     }
     try {
-      const def = ReportSchema.parse(JSON.parse(row.definition));
+      const def = visibleReport(ReportSchema.parse(JSON.parse(row.definition)), viewer);
       // Default every parameter — the dashboard viewer doesn't expose a
       // parameter bar, so we render with whatever the report's defaults are.
       const pvals: Record<string, unknown> = {};
       for (const p of def.parameters) pvals[p.name] = p.default ?? "";
-      const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, viewer });
+      const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, tenantId: dashboard.tenantId, viewer });
       slots.push({
         id, name: row.name,
         rendered: { definition: def, dataset, provenance: provenance as any, params: pvals },
@@ -102,7 +106,7 @@ export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer
         // school/affiliation/... on another). GET /api/dashboards/:id/kpis/run
         // re-runs these same queries with real values once the viewer drills in.
         const baseDrillParams = Object.fromEntries(extractSqlParamNames(kpi.query.sql).map((n) => [n, ""]));
-        const rows = await runSingleQuery(kpi.query, baseDrillParams, viewer);
+        const rows = await runSingleQuery(kpi.query, baseDrillParams, viewer, dashboard.tenantId);
         // Get the first value of the first row
         let value = 0;
         if (rows.length > 0) {

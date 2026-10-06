@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { resolveCurrency } from "@/lib/reporting/currency";
+import { resolveDateStyle } from "@/lib/reporting/format";
 import { renderXlsx } from "@/lib/reporting/renderers/xlsx";
+import { browserBusyResponse } from "@/lib/reporting/renderers/headlessBrowser";
 import { parseParams } from "@/lib/reporting/params";
-import { requireUser, requireReportInScope, getUserRoles } from "@/lib/auth";
+import { requireUser, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { exportViewer, forwardedSessionCookie } from "@/lib/reporting/exportCaller";
+import { contentDisposition } from "@/lib/http/contentDisposition";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,16 +26,30 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const url = new URL(req.url);
   const p = parseParams(url, report.parameters);
 
-  const sessionCookie =
-    req.cookies.get("next-auth.session-token") ??
-    req.cookies.get("__Secure-next-auth.session-token");
-  const authCookie = sessionCookie
-    ? sessionCookie.name + "=" + encodeURIComponent(sessionCookie.value)
-    : undefined;
+  const authCookie = forwardedSessionCookie(req);
 
   const tenantRow = await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { currency: true } }).catch(() => null);
-  const viewer = { id: user.id, isAdmin: user.role === "admin", roles: user.viaApiKey ? [] : await getUserRoles() };
-  const buf = await renderXlsx(report, p, { reportId: row.id, authCookie, currency: resolveCurrency((report as any).currency, tenantRow?.currency), viewer });
+  const viewer = await exportViewer(user);
+  let buf: Buffer;
+  try {
+    buf = await renderXlsx(report, p, { reportId: row.id, tenantId: row.tenantId, authCookie, currency: resolveCurrency((report as any).currency, tenantRow?.currency), viewer, dateStyle: resolveDateStyle(req.cookies.get("rd_locale")?.value, req.cookies.get("rd_era")?.value === "ce" ? "ce" : undefined, report.dateEra) });
+  } catch (e: any) {
+    // Busy is "try again", not a failed run. It never started.
+    const busy = browserBusyResponse(e);
+    if (busy) return busy;
+    await prisma.reportRun.create({
+      data: {
+        tenantId: user.tenantId,
+        reportId: row.id,
+        userId: user.viaApiKey ? null : user.id,
+        format: "xlsx",
+        params: JSON.stringify(p),
+        status: "failed",
+        error: e?.message,
+      },
+    });
+    return NextResponse.json({ error: e?.message ?? "Failed" }, { status: 500 });
+  }
   await prisma.reportRun.create({
     data: {
       tenantId: user.tenantId,
@@ -49,11 +67,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="' + slug(row.name) + '.xlsx"',
+      "Content-Disposition": contentDisposition("attachment", row.name, "xlsx"),
     },
   });
-}
-
-function slug(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
 }

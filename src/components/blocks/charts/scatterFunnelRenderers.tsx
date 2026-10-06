@@ -14,7 +14,7 @@ import {
   CartesianGrid, Legend, Tooltip, XAxis, YAxis, ZAxis,
   ScatterChart, Scatter, FunnelChart, Funnel, LabelList,
 } from "recharts";
-import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, GRID_STROKE, LEGEND_STYLE, formatValue, type ChartRenderCtx } from "./shared";
+import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, GRID_STROKE, LEGEND_STYLE, formatValue, type ChartRenderCtx, seriesTooltip } from "./shared";
 
 /**
  * Custom Funnel name label — draws the channel name CENTERED inside its own
@@ -55,8 +55,10 @@ function FunnelCenteredLabel(props: any) {
 
 export function renderScatterChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, cfg, palette, fmt, currency, print, showLegend, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor } = ctx;
-  const yTickFormatter = (v: number) => formatValue(v, fmt, currency);
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
+  const yTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
+  const tooltipFormatter = seriesTooltip(ctx, true);
   // Scatter / bubble. xField = x, yFields[0] = y, optional sizeField
   // drives the bubble size via ZAxis.
   return (
@@ -110,7 +112,9 @@ function funnelSegmentColor(name: unknown, index: number, total: number, ramp: s
 
 export function renderFunnelChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, palette, fmt, currency, print, showDataLabels, ramp, semantic } = ctx;
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
+  const tooltipFormatter = seriesTooltip(ctx, true);
   const rows = data as any[];
   // Funnel. yFields[0] is the stage size; rows render top-to-bottom
   // in the order they arrive (so the SQL author controls ordering).
@@ -133,7 +137,7 @@ export function renderFunnelChart(ctx: ChartRenderCtx): ReactElement {
           // 56px axis gutter; a reader looking at one segment's number wants
           // the real figure ("61,000"), not the axis-oriented "61K".
           <LabelList position="center" dy={9} dataKey={yFields[0]} fill="white" fontSize={11}
-            formatter={(v: any) => formatValue(Number(v), fmt, currency, { compact: false })} />
+            formatter={(v: any) => formatValue(Number(v), fmt, currency, { ...numOpts, compact: false })} />
         )}
       </Funnel>
     </FunnelChart>

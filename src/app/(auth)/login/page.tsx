@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { CurfLogo } from "@/components/common/CurfLogo";
 import { useT } from "@/lib/i18n/LocaleContext";
 import { eeClient } from "@/ee/client";
+import { sameSitePath } from "@/lib/http/safePath";
 
 const IS_COMMUNITY = eeClient.edition === "community";
 
@@ -21,7 +22,10 @@ function LoginForm() {
   const { t } = useT();
   const router = useRouter();
   const sp = useSearchParams();
-  const callbackUrl = sp.get("callbackUrl") ?? "/reports";
+  // "/" decides where a signed-in member lands (src/app/page.tsx) — one
+  // place, instead of login sending people to /reports while "/" sent them to /brief.
+  // Only a path on this site — never another origin after sign-in.
+  const callbackUrl = sameSitePath(sp.get("callbackUrl"));
 
   const [email, setEmail] = useState(IS_DEV ? "admin@curf.local" : "");
   const [password, setPassword] = useState(IS_DEV ? "admin123" : "");

@@ -47,7 +47,9 @@ export type WorkspaceTemplate = {
   /** Materialized views — recomputed on cron, materialised back into the lake. */
   materializedViews: Array<{
     name: string;
-    sql: string;
+    /** A function when the query can't be written once for both lake engines
+     *  (date bucketing can't); the applier passes the tenant's engine. */
+    sql: string | ((engine: "sqlite" | "duckdb") => string);
     cron: string;
     description?: string;
   }>;
@@ -63,14 +65,33 @@ export function b2bSaasTemplate(): WorkspaceTemplate {
       {
         name: "MRR & growth overview",
         description: "Top-line KPIs: total MRR, active subscriptions, churn rate, plus a 6-month MRR trend.",
-        buildDefinition: (lakeDataSourceId: string) => ({
+        buildDefinition: (lakeDataSourceId: string) => {
+          // SQLite's date('now', '-30 day') has no DuckDB equivalent —
+          // DuckDB's date() takes exactly one argument and throws
+          // "Wrong number of arguments" on the modifier-string form
+          // (confirmed against a real DuckDB file: a tenant who applies
+          // this template, then migrates to DuckDB per Phase G, hit
+          // exactly this — the churn KPI broke while the rest of the
+          // report kept working, since runReportWithProof isolates
+          // failures per query). Neither engine's own date-arithmetic
+          // syntax is portable (DuckDB wants INTERVAL, SQLite has no such
+          // type), so — same pattern as duckdbWrite.ts's own timestamp
+          // handling — the cutoff is computed once in JS and baked into
+          // the query as a literal ISO date string; plain string
+          // comparison against the TEXT-stored churned_at/created_at
+          // columns works identically on both engines. Fixed at template-
+          // apply time rather than "live" 30-day-rolling, consistent with
+          // the rest of this template's synthetic data (also generated
+          // once, relative to apply-time, not re-rolled on every view).
+          const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+          return {
           version: 1,
           name: "MRR & growth overview",
           description: "Auto-populated from the B2B SaaS workspace template.",
           parameters: [],
           // Lake stores every column as TEXT (see lib/lake/tables.ts header
           // comment for why). Numeric blocks need actual numbers, so we
-          // CAST AS REAL in the queries — otherwise the chart's xField/
+          // CAST AS DOUBLE in the queries — otherwise the chart's xField/
           // yField bindings see strings and the area chart degenerates
           // to a single tall bar at the left edge.
           dataSources: [
@@ -78,7 +99,7 @@ export function b2bSaasTemplate(): WorkspaceTemplate {
               id: "q_total_mrr",
               name: "Total MRR (latest snapshot)",
               dataSourceId: lakeDataSourceId,
-              sql: `SELECT CAST(total_mrr AS REAL) AS value FROM mrr_snapshots ORDER BY snapshot_date DESC LIMIT 1`,
+              sql: `SELECT CAST(total_mrr AS DOUBLE) AS value FROM mrr_snapshots ORDER BY snapshot_date DESC LIMIT 1`,
             },
             {
               id: "q_active_subs",
@@ -91,20 +112,20 @@ export function b2bSaasTemplate(): WorkspaceTemplate {
               name: "Churn rate (last 30d)",
               dataSourceId: lakeDataSourceId,
               sql: `SELECT
-                CAST((SELECT COUNT(*) FROM subscriptions WHERE status = 'churned' AND churned_at > date('now', '-30 day')) AS REAL) /
-                NULLIF((SELECT COUNT(*) FROM subscriptions WHERE created_at < date('now', '-30 day')), 0) AS value`,
+                CAST((SELECT COUNT(*) FROM subscriptions WHERE status = 'churned' AND churned_at > '${thirtyDaysAgo}') AS DOUBLE) /
+                NULLIF((SELECT COUNT(*) FROM subscriptions WHERE created_at < '${thirtyDaysAgo}'), 0) AS value`,
             },
             {
               id: "q_mrr_trend",
               name: "MRR over time",
               dataSourceId: lakeDataSourceId,
-              sql: `SELECT snapshot_date, CAST(total_mrr AS REAL) AS total_mrr FROM mrr_snapshots ORDER BY snapshot_date ASC`,
+              sql: `SELECT snapshot_date, CAST(total_mrr AS DOUBLE) AS total_mrr FROM mrr_snapshots ORDER BY snapshot_date ASC`,
             },
             {
               id: "q_top_plans",
               name: "Top plans",
               dataSourceId: lakeDataSourceId,
-              sql: `SELECT plan, COUNT(*) AS subscribers, SUM(CAST(monthly_amount AS REAL)) AS mrr
+              sql: `SELECT plan, COUNT(*) AS subscribers, SUM(CAST(monthly_amount AS DOUBLE)) AS mrr
                     FROM subscriptions WHERE status = 'active'
                     GROUP BY plan ORDER BY mrr DESC`,
             },
@@ -189,7 +210,8 @@ export function b2bSaasTemplate(): WorkspaceTemplate {
               ],
             },
           ],
-        }),
+          };
+        },
       },
     ],
     watchers: [
@@ -209,8 +231,11 @@ export function b2bSaasTemplate(): WorkspaceTemplate {
         name: "weekly_signups",
         cron: "0 6 * * 1", // Monday 6am
         description: "Pre-aggregated weekly signup counts; powers the morning Brief.",
-        sql: `SELECT
-                strftime('%Y-W%W', created_at) AS week,
+        // strftime's argument order differs between the engines, and on DuckDB
+        // it needs a real timestamp (the lake stores created_at as TEXT), so
+        // there is no single spelling that binds on both.
+        sql: (engine) => `SELECT
+                ${engine === "duckdb" ? "strftime(CAST(created_at AS TIMESTAMP), '%Y-W%W')" : "strftime('%Y-W%W', created_at)"} AS week,
                 COUNT(*) AS signups
               FROM users
               GROUP BY week

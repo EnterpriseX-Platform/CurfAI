@@ -12,10 +12,15 @@
  * gunzip the relevant backup once, ATTACH it as a sibling DB, and
  * SELECT from it. The temp file is cleaned up on process exit.
  *
- * Snapshot creation: the cron tick mints a `LakeSnapshot` row per
- * table per hour pointing at the most-recent backup for the tenant.
- * If no backup exists for the hour (very young tenant), the snapshot
- * row is skipped — there's nothing to ATTACH against.
+ * Snapshot creation: the cron tick checks every hour, but only mints a
+ * new `LakeSnapshot` row per table when a fresh `LakeBackup` has landed
+ * since the last one (backups are nightly — see BackupsPanel). So the
+ * actual as-of resolution this supports is "as of last night's backup",
+ * not a genuine hourly granularity; readTableAsOf() for two timestamps
+ * on the same day will resolve to the same snapshot and return
+ * identical rows. Real hourly resolution would mean hourly backups,
+ * which is a cost/infra decision, not something this file can fix on
+ * its own — mintBackupSnapshots() just names what it actually does.
  */
 import Database from "better-sqlite3";
 import path from "node:path";
@@ -25,6 +30,7 @@ import zlib from "node:zlib";
 import { prisma } from "@/lib/db";
 import { backupPath } from "./backup";
 import { toSafeTableName } from "./storage";
+import { ee } from "@/ee";
 
 /** In-process cache: backupId → gunzipped temp file path. */
 const GUNZIP_CACHE = new Map<string, string>();
@@ -110,10 +116,18 @@ export async function readTableAsOf(opts: {
   if (!snap) return null;
   const dbPath = await ensureGunzippedAsync(opts.tenantId, snap.backupId);
 
-  const safe = toSafeTableName(opts.tableName);
   const limit = Math.min(5000, Math.max(1, opts.limit ?? 100));
   const offset = Math.max(0, opts.offset ?? 0);
 
+  // A backup taken on a paid lake engine is a .duckdb snapshot — see
+  // ee.lake.readTableAsOfFromSnapshotIfPaidEngine's doc comment.
+  const paidRead = await ee.lake?.readTableAsOfFromSnapshotIfPaidEngine(opts.tenantId, dbPath, opts.tableName, limit, offset);
+  if (paidRead !== undefined) {
+    if (!paidRead) return null;
+    return { rows: paidRead.rows, rowCount: paidRead.rowCount, asOf: opts.asOf, resolvedAt: snap.createdAt };
+  }
+
+  const safe = toSafeTableName(opts.tableName);
   const db = new Database(dbPath, { readonly: true });
   try {
     // Defensive: confirm the table exists in the snapshot before SELECT.
@@ -136,11 +150,13 @@ export async function readTableAsOf(opts: {
 
 /**
  * Mint a LakeSnapshot row per table for this tenant, pointing at the
- * most-recent LakeBackup. Called by the cron tick once per hour.
- * Skips tables that already have a snapshot pointing at the same
- * backupId (idempotent within the same backup window).
+ * most-recent LakeBackup. Called by the cron tick every hour, but only
+ * does real work the first time it runs after a new backup lands — the
+ * idempotency check below means the other ~23 hourly calls between
+ * backups are no-ops. The resolution readTableAsOf() gets is therefore
+ * "as of the last backup", not per-hour.
  */
-export async function mintHourlySnapshots(tenantId: string): Promise<{ created: number }> {
+export async function mintBackupSnapshots(tenantId: string): Promise<{ created: number }> {
   const recentBackup = await prisma.lakeBackup.findFirst({
     where: { tenantId },
     orderBy: { createdAt: "desc" },

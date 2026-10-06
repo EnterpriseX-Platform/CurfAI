@@ -12,6 +12,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { withSystemDbContext } from "@/lib/dbContext";
 import { recordAudit } from "@/lib/audit";
 import { provisionStarterPack } from "@/lib/tenant/provision";
 
@@ -78,62 +79,67 @@ export async function POST(req: NextRequest) {
     select: { organizationId: true },
   });
 
-  const slug = await resolveUniqueSlug(slugify(parsed.data.name));
+  // Everything below writes a workspace OTHER than the one this session is
+  // bound to, so none of it could pass that workspace's row-level security
+  // filter (BE-TEN-03). It runs as system work; the checks above are the gate.
+  return withSystemDbContext(async () => {
+    const slug = await resolveUniqueSlug(slugify(parsed.data.name));
 
-  try {
-    const tenant = await prisma.tenant.create({
-      data: {
-        slug,
-        name: parsed.data.name.trim(),
-        webhookSigningSecret: randomBytes(32).toString("hex"),
-        organizationId: activeTenant?.organizationId ?? undefined,
-      },
-    });
-    const member = await prisma.membership.create({
-      data: { userId: user.id, tenantId: tenant.id, role: "admin" },
-    });
+    try {
+      const tenant = await prisma.tenant.create({
+        data: {
+          slug,
+          name: parsed.data.name.trim(),
+          webhookSigningSecret: randomBytes(32).toString("hex"),
+          organizationId: activeTenant?.organizationId ?? undefined,
+        },
+      });
+      const member = await prisma.membership.create({
+        data: { userId: user.id, tenantId: tenant.id, role: "admin" },
+      });
 
-    // Same default role set the signup flow installs.
-    for (const r of [
-      { slug: "analyst",      label: "Analyst",      description: "Full detail." },
-      { slug: "new_hire",     label: "New hire",     description: "Simplified view." },
-      { slug: "finance_lead", label: "Finance lead", description: "Financial KPIs + audit detail." },
-    ]) {
-      await prisma.role.create({
-        data: { tenantId: tenant.id, slug: r.slug, label: r.label, description: r.description },
-      }).catch(() => null);
-    }
-
-    let provisioned: { reportsCreated: number; dataSourcesCreated: number } = {
-      reportsCreated: 0, dataSourcesCreated: 0,
-    };
-    if (parsed.data.starterPack) {
-      try {
-        const r = await provisionStarterPack(tenant.id);
-        provisioned = { reportsCreated: r.reportsCreated, dataSourcesCreated: r.dataSourcesCreated };
-      } catch (e: any) {
-        // Demo content is a nicety — never fail workspace creation over it.
-        console.warn("[workspaces] starter pack failed:", e?.message ?? e);
+      // Same default role set the signup flow installs.
+      for (const r of [
+        { slug: "analyst",      label: "Analyst",      description: "Full detail." },
+        { slug: "new_hire",     label: "New hire",     description: "Simplified view." },
+        { slug: "finance_lead", label: "Finance lead", description: "Financial KPIs + audit detail." },
+      ]) {
+        await prisma.role.create({
+          data: { tenantId: tenant.id, slug: r.slug, label: r.label, description: r.description },
+        }).catch(() => null);
       }
+
+      let provisioned: { reportsCreated: number; dataSourcesCreated: number } = {
+        reportsCreated: 0, dataSourcesCreated: 0,
+      };
+      if (parsed.data.starterPack) {
+        try {
+          const r = await provisionStarterPack(tenant.id);
+          provisioned = { reportsCreated: r.reportsCreated, dataSourcesCreated: r.dataSourcesCreated };
+        } catch (e: any) {
+          // Demo content is a nicety — never fail workspace creation over it.
+          console.warn("[workspaces] starter pack failed:", e?.message ?? e);
+        }
+      }
+
+      recordAudit({
+        tenantId: tenant.id,
+        userId: user.id,
+        userEmail: me.email,
+        kind: "tenant.create",
+        target: tenant.id,
+        req,
+        meta: { workspaceName: tenant.name, slug: tenant.slug, via: "in-app" },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name },
+        membership: { tenantId: tenant.id, userId: user.id, role: member.role },
+        provisioned,
+      });
+    } catch (e: any) {
+      return NextResponse.json({ error: e?.message ?? "Could not create workspace" }, { status: 500 });
     }
-
-    recordAudit({
-      tenantId: tenant.id,
-      userId: user.id,
-      userEmail: me.email,
-      kind: "tenant.create",
-      target: tenant.id,
-      req,
-      meta: { workspaceName: tenant.name, slug: tenant.slug, via: "in-app" },
-    });
-
-    return NextResponse.json({
-      ok: true,
-      tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name },
-      membership: { tenantId: tenant.id, userId: user.id, role: member.role },
-      provisioned,
-    });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Could not create workspace" }, { status: 500 });
-  }
+  });
 }

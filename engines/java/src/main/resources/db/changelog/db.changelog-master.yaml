@@ -1,0 +1,15 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changes/001-audit.yaml
+  - include:
+      file: db/changelog/changes/002-connections.yaml
+  - include:
+      file: db/changelog/changes/003-views.yaml
+  - include:
+      file: db/changelog/changes/004-reports.yaml
+  - include:
+      file: db/changelog/changes/005-exports.yaml
+  - include:
+      file: db/changelog/changes/006-sharing.yaml
+  - include:
+      file: db/changelog/changes/007-schedules.yaml

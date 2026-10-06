@@ -64,8 +64,16 @@ export function ShareButton({ reportId }: { reportId: string }) {
           description = t("shareButton.iframeHint") + description;
           break;
       }
-      await navigator.clipboard.writeText(payload);
-      push({ variant: "success", title, description });
+      // The link exists now either way. If the browser won't let us write to
+      // the clipboard (not focused, not https, an embedding frame), show it
+      // so it can be copied by hand — silence invited a retry, and every
+      // retry mints another public link.
+      try {
+        await navigator.clipboard.writeText(payload);
+        push({ variant: "success", title, description });
+      } catch {
+        push({ title: t("shareButton.copyManually"), description: payload });
+      }
     } finally {
       setBusy(null);
     }

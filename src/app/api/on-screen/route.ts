@@ -19,7 +19,7 @@ import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin, tenantWhere, getUserRoles, blockScopedApiKey } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { writeVisibility, canSeeDataSource, type Visibility } from "@/lib/datasourceAcl";
-import { slugify, pickUniqueOnScreenSlug } from "@/lib/onScreen";
+import { createOnScreenDisplay } from "@/lib/onScreen";
 
 const VisibilityInputSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("tenant") }),
@@ -100,49 +100,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });
   }
 
-  const reportRows = await prisma.report.findMany({
-    where: { id: { in: parsed.data.reportIds }, tenantId: user.tenantId },
-    select: { id: true },
-  });
-  const validIds = new Set(reportRows.map((r) => r.id));
-  const orderedIds = parsed.data.reportIds.filter((id) => validIds.has(id));
-  if (orderedIds.length === 0) {
-    return NextResponse.json({ error: "None of the supplied report IDs belong to this tenant." }, { status: 400 });
-  }
-
-  const baseSlug = parsed.data.slug ?? slugify(parsed.data.name);
-  const slug = await pickUniqueOnScreenSlug(user.tenantId, baseSlug);
-
   const vIn = parsed.data.visibility;
   const visibility: Visibility = !vIn || vIn.mode === "tenant"
     ? { mode: "tenant" }
     : vIn.mode === "owner_only"
       ? { mode: "owner_only", ownerUserId: user.id }
       : { mode: "roles", roles: vIn.roles };
-  const acl = writeVisibility(visibility);
 
   try {
-    const created = await prisma.onScreenDisplay.create({
-      data: {
-        tenantId: user.tenantId,
-        name: parsed.data.name,
-        slug,
-        reportIdsJson: JSON.stringify(orderedIds),
-        rotationSeconds: parsed.data.rotationSeconds,
-        theme: parsed.data.theme,
-        layout: parsed.data.layout,
-        visibleToRolesJson: acl.visibleToRolesJson,
-        ownerUserId: acl.ownerUserId,
-        createdById: user.id,
-      },
+    const created = await createOnScreenDisplay({
+      tenantId: user.tenantId, createdById: user.id, name: parsed.data.name, slug: parsed.data.slug,
+      reportIds: parsed.data.reportIds, rotationSeconds: parsed.data.rotationSeconds,
+      theme: parsed.data.theme, layout: parsed.data.layout, visibility,
     });
+    if (!created) {
+      return NextResponse.json({ error: "None of the supplied report IDs belong to this tenant." }, { status: 400 });
+    }
     recordAudit({
       user, kind: "onScreen.create", target: created.id, req,
       meta: {
         name: parsed.data.name,
-        slug,
-        reportCount: orderedIds.length,
-        droppedIds: parsed.data.reportIds.length - orderedIds.length,
+        slug: created.slug,
+        reportCount: created.reportCount,
+        droppedIds: created.dropped,
         visibility: visibility.mode,
       },
     });

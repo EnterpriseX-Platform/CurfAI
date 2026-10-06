@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { readableDefinition } from "@/lib/reporting/visibleReport";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,6 +36,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   let definition: any = null;
   try { definition = JSON.parse(row.definition); } catch { /* leave null */ }
+  // Blocks gated to roles the caller lacks, and their queries' SQL, stay
+  // out unless the caller can edit the report. Also what MCP get_report and
+  // curf://reports/{id} return, since both call this handler.
+  definition = await readableDefinition(user, definition);
 
   return NextResponse.json({
     id: row.id,

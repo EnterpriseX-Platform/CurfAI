@@ -27,16 +27,52 @@ import fs from "node:fs";
 import os from "node:os";
 import zlib from "node:zlib";
 import { prisma } from "@/lib/db";
-import { tenantLakePath, closeLake, openLake, lakeFileSize, toSafeTableName } from "./storage";
+import { tenantLakePath, closeLake, openLake, lakeFileSize, toSafeTableName, lakeRoot } from "./storage";
 import { createOrReplaceTable, type LakeTableMeta } from "./tables";
+import { mergeGovernanceMetadata, parseSchemaJson } from "./schemaGovernance";
+import { extractFormulas, withFormulas } from "./formulaColumns";
 import { bustLakeCacheForTenant } from "./bust";
+import { reconcileLakeCatalog } from "./catalogReconcile";
 import { ee } from "@/ee";
+import type { Tier } from "@/lib/billing";
 
 const BACKUP_ROOT = process.env.CURF_LAKE_BACKUP_DIR
   ? process.env.CURF_LAKE_BACKUP_DIR
-  : path.join(process.cwd(), "lake", "backups");
+  : path.join(lakeRoot(), "backups");
 
-function tenantBackupDir(tenantId: string): string {
+// E2 Phase E (E2_JOBS_SCOPING_PLAN.md §5) — see Tenant.backupLeasedBy's own
+// schema comment for why this is a small local pair rather than going
+// through lib/cron/leases.ts's generic acquireLeaseOn/releaseLeaseOn:
+// those hardcode the column names `leasedBy`/`leasedUntil`, and Tenant's
+// are deliberately prefixed (`backupLeasedBy`/`backupLeasedUntil`) since
+// Tenant is a shared, heavily-used model and these two columns exist
+// only for this one dedupe. Same conditional-UPDATE algorithm as the
+// generic version, just inlined against the different field names.
+const BACKUP_LEASE_TTL_MS = 5 * 60 * 1000;
+async function acquireBackupLease(tenantId: string, workerId: string): Promise<boolean> {
+  const now = new Date();
+  const until = new Date(now.getTime() + BACKUP_LEASE_TTL_MS);
+  const res = await prisma.tenant.updateMany({
+    where: {
+      id: tenantId,
+      OR: [
+        { backupLeasedBy: null },
+        { backupLeasedUntil: null },
+        { backupLeasedUntil: { lt: now } },
+      ],
+    },
+    data: { backupLeasedBy: workerId, backupLeasedUntil: until },
+  });
+  return res.count === 1;
+}
+async function releaseBackupLease(tenantId: string, workerId: string): Promise<void> {
+  await prisma.tenant.updateMany({
+    where: { id: tenantId, backupLeasedBy: workerId },
+    data: { backupLeasedBy: null, backupLeasedUntil: null },
+  });
+}
+
+export function tenantBackupDir(tenantId: string): string {
   const safe = tenantId.replace(/[^A-Za-z0-9_-]/g, "_");
   return path.join(BACKUP_ROOT, safe);
 }
@@ -51,10 +87,18 @@ function backupFilePath(tenantId: string, backupId: string): string {
  * change ("snapshot before I drop this column"), and aging one of those
  * out automatically would lose the safety net.
  */
-const RETENTION_DAYS: Record<string, number> = {
+/**
+ * Typed by Tier, not Record<string, number>, so adding a tier to
+ * lib/billing.ts fails the build here instead of silently falling through
+ * to the community window. `enterprise` was missing, and the `?? community`
+ * fallback below meant Enterprise tenants aged snapshots out after 30 days
+ * — shorter than Growth (90) and Business (365), the two tiers beneath it.
+ */
+const RETENTION_DAYS: Record<Tier, number> = {
   community: 30,
   growth: 90,
   business: 365,
+  enterprise: 3650,
 };
 
 export type SnapshotResult = {
@@ -77,24 +121,62 @@ export async function snapshotTenant(opts: {
 }): Promise<SnapshotResult> {
   // No lake file yet → nothing to back up. Catalog returns "skipped"
   // so the cron tick can short-circuit cleanly without throwing.
-  const livePath = tenantLakePath(opts.tenantId);
-  if (!fs.existsSync(livePath)) {
+  // A tenant on a paid lake engine (DuckDB) has their live file at a
+  // different path (tenantLakePath() below is SQLite-only, always
+  // .db) — see ee.lake.paidLiveLakeFile's doc comment.
+  const paidLiveFile = await ee.lake?.paidLiveLakeFile(opts.tenantId);
+  const usingPaidEngine = paidLiveFile !== undefined;
+  const liveExists = usingPaidEngine ? paidLiveFile.exists : fs.existsSync(tenantLakePath(opts.tenantId));
+  if (!liveExists) {
     return { backupId: "", sizeBytes: 0, tableCount: 0, skipped: "no-lake-file" };
   }
 
-  if (opts.kind === "auto") {
-    const recent = await prisma.lakeBackup.findFirst({
-      where: { tenantId: opts.tenantId, kind: "auto" },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    });
-    if (recent) {
-      const ageMs = Date.now() - new Date(recent.createdAt).getTime();
-      if (ageMs < 23 * 60 * 60 * 1000) {
-        return { backupId: "", sizeBytes: 0, tableCount: 0, skipped: "too-recent" };
-      }
+  // The 23h "too recent" check below is a soft dedupe on its own — two
+  // concurrent auto-snapshot attempts (the cron sweep and a manual
+  // "Snapshot now" click, or two overlapping cron ticks on different
+  // replicas) could both pass it before either committed a new LakeBackup
+  // row, and both proceed to snapshot. Acquiring the lease FIRST closes
+  // that: only the worker that wins it even runs the check. A worker that
+  // loses the race is treated exactly like "too recent" — someone else is
+  // already handling this tenant's snapshot this cycle. Manual snapshots
+  // (kind !== "auto") skip this entirely — "Manual snapshots always go
+  // through" is unchanged.
+  const leaseWorkerId = opts.kind === "auto" ? `backup-${process.pid}` : null;
+  if (leaseWorkerId) {
+    if (!(await acquireBackupLease(opts.tenantId, leaseWorkerId))) {
+      return { backupId: "", sizeBytes: 0, tableCount: 0, skipped: "too-recent" };
     }
   }
+  try {
+    if (opts.kind === "auto") {
+      const recent = await prisma.lakeBackup.findFirst({
+        where: { tenantId: opts.tenantId, kind: "auto" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+      if (recent) {
+        const ageMs = Date.now() - new Date(recent.createdAt).getTime();
+        if (ageMs < 23 * 60 * 60 * 1000) {
+          return { backupId: "", sizeBytes: 0, tableCount: 0, skipped: "too-recent" };
+        }
+      }
+    }
+    return await snapshotTenantUnleased(opts);
+  } finally {
+    if (leaseWorkerId) await releaseBackupLease(opts.tenantId, leaseWorkerId);
+  }
+}
+
+/** The actual snapshot work, factored out so snapshotTenant's lease wrapper
+ *  above has a single call site to hold for the whole physical write. */
+async function snapshotTenantUnleased(opts: {
+  tenantId: string;
+  kind: "auto" | "manual";
+  createdById?: string | null;
+  restoredFromId?: string | null;
+}): Promise<SnapshotResult> {
+  const paidLiveFile = await ee.lake?.paidLiveLakeFile(opts.tenantId);
+  const usingPaidEngine = paidLiveFile !== undefined;
 
   // Mint the row first so the file path is stable. Roll back if the
   // physical write fails.
@@ -111,20 +193,28 @@ export async function snapshotTenant(opts: {
 
   try {
     fs.mkdirSync(tenantBackupDir(opts.tenantId), { recursive: true });
-    // VACUUM INTO produces a clean copy that's safe to read even with
-    // active WAL transactions on the source. We then gzip + delete the
-    // intermediate .db so we end up with one .db.gz on disk.
     const tmpDbPath = backupFilePath(opts.tenantId, row.id) + ".tmp.db";
     const finalPath = backupFilePath(opts.tenantId, row.id);
-    const live = openLake(opts.tenantId);
-    live.exec(`VACUUM INTO '${tmpDbPath.replace(/'/g, "''")}'`);
-    // Count tables for the UI. __lake_meta lives in the tenant DB; if a
-    // brand-new tenant snapshotted before any tables, the row count is 0.
     let tableCount = 0;
-    try {
-      const cnt = live.prepare("SELECT COUNT(*) as n FROM __lake_meta").get() as { n: number };
-      tableCount = cnt.n;
-    } catch { /* __lake_meta might not exist in pre-bootstrap DBs */ }
+    if (usingPaidEngine) {
+      // DuckDB equivalent of VACUUM INTO — see ee.lake.cloneLakeFileIfPaidEngine's
+      // doc comment. Already resolved usingPaidEngine above, so this call
+      // is guaranteed non-undefined.
+      await ee.lake!.cloneLakeFileIfPaidEngine(opts.tenantId, tmpDbPath);
+      tableCount = (await ee.lake!.countTablesInFileIfPaidEngine(opts.tenantId, tmpDbPath)) ?? 0;
+    } else {
+      // VACUUM INTO produces a clean copy that's safe to read even with
+      // active WAL transactions on the source. We then gzip + delete the
+      // intermediate .db so we end up with one .db.gz on disk.
+      const live = openLake(opts.tenantId);
+      live.exec(`VACUUM INTO '${tmpDbPath.replace(/'/g, "''")}'`);
+      // Count tables for the UI. __lake_meta lives in the tenant DB; if a
+      // brand-new tenant snapshotted before any tables, the row count is 0.
+      try {
+        const cnt = live.prepare("SELECT COUNT(*) as n FROM __lake_meta").get() as { n: number };
+        tableCount = cnt.n;
+      } catch { /* __lake_meta might not exist in pre-bootstrap DBs */ }
+    }
 
     // Gzip the temp DB → final .db.gz. Stream-based so a 1GB DB doesn't
     // blow up RAM. Strong compression (level 9) — the cost is one-time;
@@ -196,9 +286,13 @@ export async function restoreBackup(opts: {
     restoredFromId: opts.backupId,
   });
 
-  // Stage the restore: gunzip into a .db.restore file, validate, then
+  // A tenant on a paid lake engine restores onto their .duckdb path
+  // instead — see ee.lake.paidLiveLakeFile's doc comment.
+  const paidLiveFile = await ee.lake?.paidLiveLakeFile(opts.tenantId);
+  const livePath = paidLiveFile !== undefined ? paidLiveFile.path : tenantLakePath(opts.tenantId);
+
+  // Stage the restore: gunzip into a .restore.tmp file, validate, then
   // atomic rename over the live lake.
-  const livePath = tenantLakePath(opts.tenantId);
   const stagePath = livePath + ".restore.tmp";
   await new Promise<void>((resolve, reject) => {
     const inp = fs.createReadStream(filePath);
@@ -211,22 +305,43 @@ export async function restoreBackup(opts: {
   });
 
   // Validate by opening + checking integrity. Throws if corrupt.
-  const probe = new Database(stagePath, { readonly: true });
-  try {
-    const r = probe.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
-    if (r.integrity_check !== "ok") throw new Error(`Integrity check failed: ${r.integrity_check}`);
-  } finally {
-    probe.close();
+  const paidIntegrity = await ee.lake?.integrityCheckIfPaidEngineFile(opts.tenantId, stagePath);
+  if (paidIntegrity !== undefined) {
+    if (paidIntegrity !== null) throw new Error(`Integrity check failed: ${paidIntegrity}`);
+  } else {
+    const probe = new Database(stagePath, { readonly: true });
+    try {
+      const r = probe.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
+      if (r.integrity_check !== "ok") throw new Error(`Integrity check failed: ${r.integrity_check}`);
+    } finally {
+      probe.close();
+    }
   }
 
-  // Drop the live cached connection so the rename succeeds on Windows
-  // (otherwise EBUSY). Then atomic rename — fs.renameSync is atomic on
-  // the same filesystem on POSIX + Windows.
-  closeLake(opts.tenantId);
-  // On Windows you can't rename onto an existing file in some configs;
-  // unlink first if needed.
-  try { fs.unlinkSync(livePath); } catch { /* not present, fine */ }
-  fs.renameSync(stagePath, livePath);
+  const swapIn = async () => {
+    // Drop the live cached connection so the rename succeeds on Windows
+    // (otherwise EBUSY) — a no-op for a paid-engine tenant, whose
+    // connections aren't cached the way openLake()'s are. Then atomic
+    // rename — fs.renameSync is atomic on the same filesystem on POSIX
+    // and Windows.
+    closeLake(opts.tenantId);
+    // On Windows you can't rename onto an existing file in some configs;
+    // unlink first if needed.
+    try { fs.unlinkSync(livePath); } catch { /* not present, fine */ }
+    fs.renameSync(stagePath, livePath);
+  };
+  // Only the swap holds the file's lock (a paid engine's queue, see
+  // ee.lake.withLiveLakeFileLock): the safety snapshot above and the
+  // integrity check need the file themselves. Between the unlink and the
+  // rename the live path doesn't exist, and an unqueued DuckDB open landing
+  // there would create a fresh empty database over it.
+  if (ee.lake) await ee.lake.withLiveLakeFileLock(opts.tenantId, swapIn);
+  else await swapIn();
+
+  // The swapped-in file may describe a different set of tables than the
+  // catalog does — see catalogReconcile.ts's doc comment. Reconcile before
+  // returning so the UI/API never see a live file and catalog that disagree.
+  await reconcileLakeCatalog(opts.tenantId);
 
   return { ok: true, preRestoreBackupId: safety.backupId };
 }
@@ -283,30 +398,46 @@ export async function restoreTableFromBackup(opts: {
   let sourceKind: LakeTableMeta["sourceKind"] = "manual";
   let sourceConfig: Record<string, unknown> = {};
   try {
-    const snap = new Database(stagePath, { readonly: true });
-    try {
-      const exists = snap.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(safeName);
-      if (!exists) throw new Error(`Table "${opts.tableName}" was not present in this snapshot`);
-      rows = snap.prepare(`SELECT * FROM "${safeName}"`).all() as any[];
+    // A backup taken on a paid lake engine is a .duckdb snapshot — see
+    // ee.lake.readTableFromSnapshotIfPaidEngine's doc comment.
+    const paidRead = await ee.lake?.readTableFromSnapshotIfPaidEngine(opts.tenantId, stagePath, opts.tableName);
+    if (paidRead !== undefined) {
+      rows = paidRead.rows;
+      sourceKind = paidRead.sourceKind;
+      sourceConfig = paidRead.sourceConfig;
+    } else {
+      const snap = new Database(stagePath, { readonly: true });
       try {
-        const meta = snap.prepare(
-          `SELECT source_kind, source_config_json FROM __lake_meta WHERE table_name = ?`,
-        ).get(safeName) as { source_kind: string; source_config_json: string | null } | undefined;
-        if (meta) {
-          sourceKind = (meta.source_kind as LakeTableMeta["sourceKind"]) ?? "manual";
-          if (meta.source_config_json) { try { sourceConfig = JSON.parse(meta.source_config_json); } catch { /* ignore */ } }
-        }
-      } catch { /* __lake_meta absent in a pre-bootstrap snapshot — defaults above are fine */ }
-    } finally {
-      snap.close();
+        const exists = snap.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(safeName);
+        if (!exists) throw new Error(`Table "${opts.tableName}" was not present in this snapshot`);
+        rows = snap.prepare(`SELECT * FROM "${safeName}"`).all() as any[];
+        try {
+          const meta = snap.prepare(
+            `SELECT source_kind, source_config_json FROM __lake_meta WHERE table_name = ?`,
+          ).get(safeName) as { source_kind: string; source_config_json: string | null } | undefined;
+          if (meta) {
+            sourceKind = (meta.source_kind as LakeTableMeta["sourceKind"]) ?? "manual";
+            if (meta.source_config_json) { try { sourceConfig = JSON.parse(meta.source_config_json); } catch { /* ignore */ } }
+          }
+        } catch { /* __lake_meta absent in a pre-bootstrap snapshot — defaults above are fine */ }
+      } finally {
+        snap.close();
+      }
     }
   } finally {
     fs.unlink(stagePath, () => { /* best-effort cleanup */ });
   }
 
-  const result = createOrReplaceTable({
+  // The snapshot's formula columns come back as formulas, not as the values
+  // they had then: left out of the rows, declared again on the new table.
+  const formulas = extractFormulas(sourceConfig);
+  const formulaNames = Object.keys(formulas);
+  if (formulaNames.length > 0) {
+    rows = rows.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !formulaNames.includes(k))));
+  }
+  const result = await createOrReplaceTable({
     tenantId: opts.tenantId, tableName: opts.tableName, rows,
-    sourceKind, sourceConfig,
+    sourceKind, sourceConfig: withFormulas(sourceConfig, {}), formulas,
   });
 
   const sizeBytes = lakeFileSize(opts.tenantId);
@@ -315,9 +446,18 @@ export async function restoreTableFromBackup(opts: {
   });
   let tableId: string;
   if (existing) {
+    // The restored table's columns are re-inferred from the snapshot's rows,
+    // which carry no redaction tags — and the tags an admin set since (or that
+    // the snapshot predates) live in the catalog row, not in the backup.
+    // Overwriting with bare inferred columns silently un-redacted every tagged
+    // column on restore.
     await prisma.lakeTable.update({
       where: { id: existing.id },
-      data: { schemaJson: JSON.stringify(result.columns), rowCount: result.rowCount, sizeBytes },
+      data: {
+        schemaJson: JSON.stringify(mergeGovernanceMetadata(parseSchemaJson(existing.schemaJson), result.columns)),
+        rowCount: result.rowCount,
+        sizeBytes,
+      },
     });
     tableId = existing.id;
   } else {
@@ -344,7 +484,7 @@ export async function restoreTableFromBackup(opts: {
  */
 export async function sweepOldBackups(tenantId: string): Promise<{ deleted: number }> {
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { tier: true } });
-  const tier = (tenant?.tier ?? "community") as keyof typeof RETENTION_DAYS;
+  const tier = (tenant?.tier ?? "community") as Tier;
   const days = RETENTION_DAYS[tier] ?? RETENTION_DAYS.community;
   const cutoff = new Date(Date.now() - days * 86400_000);
   const manualCutoff = new Date(Date.now() - 365 * 86400_000);

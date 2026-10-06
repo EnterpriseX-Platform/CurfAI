@@ -17,6 +17,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReport, ANONYMOUS_VIEWER } from "@/lib/reporting/runner";
+import { visibleReport, dropQueriesOnlyUsedBy } from "@/lib/reporting/visibleReport";
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { verifyEmbedToken } from "@/lib/embed/token";
@@ -59,7 +60,10 @@ export default async function EmbedBlockPage({ params, searchParams }: Props) {
     where: { id: params.reportId, tenantId: tenantId! },
   });
   if (!reportRow) return notFound();
-  const report = ReportSchema.parse(JSON.parse(reportRow.definition));
+  // Anyone with the link loads this, so it renders as nobody: a block the
+  // author limited to certain roles isn't here to find (the embed-token
+  // route refuses to mint one, but a published app's blocks need no token).
+  const report = visibleReport(ReportSchema.parse(JSON.parse(reportRow.definition)), ANONYMOUS_VIEWER);
   const tenantRow = await prisma.tenant.findUnique({
     where: { id: tenantId! },
     select: { currency: true },
@@ -83,26 +87,25 @@ export default async function EmbedBlockPage({ params, searchParams }: Props) {
     else pvals[p.name] = p.default ?? "";
   }
 
+  // 4. Synthesise a single-block "report" so we can reuse ReportDocument.
+  //    This gives us themes, conditional formatting, the whole renderer,
+  //    without forking a second renderer just for embeds. It runs only the
+  //    queries this block needs: the page used to run the whole report and
+  //    ship every query's rows with a one-block embed.
+  const singleBlockReport = dropQueriesOnlyUsedBy(
+    { ...report, pages: [{ ...report.pages[pageIdx], blocks: [block] }] },
+    report.pages.flatMap((pg) => pg.blocks).filter((b) => b !== block),
+  );
+
   let dataset: any = {};
   try {
     // Chromeless public single-block embed — nobody is authenticated here,
     // so any sensitivity-tagged lake column redacts by default (see
     // ANONYMOUS_VIEWER).
-    dataset = await runReport({ report, params: pvals, viewer: ANONYMOUS_VIEWER });
+    dataset = await runReport({ report: singleBlockReport, params: pvals, tenantId: reportRow.tenantId, viewer: ANONYMOUS_VIEWER });
   } catch (e: any) {
     console.warn("[embed] runReport failed:", e?.message);
   }
-
-  // 4. Synthesise a single-block "report" so we can reuse ReportDocument.
-  //    This gives us themes, conditional formatting, the whole renderer,
-  //    without forking a second renderer just for embeds.
-  const singleBlockReport = {
-    ...report,
-    pages: [{
-      ...report.pages[pageIdx],
-      blocks: [block],
-    }],
-  };
 
   return (
     <div
@@ -115,7 +118,7 @@ export default async function EmbedBlockPage({ params, searchParams }: Props) {
       data-curf-block-id={params.blockId}
     >
       <ReportDocument
-        report={singleBlockReport as any}
+        report={singleBlockReport}
         dataset={dataset}
         params={pvals}
         reportDbId={params.reportId}

@@ -9,7 +9,7 @@
  * `allowedKinds` — the drawer passes ["rest", "sqlite"]; everything else is
  * identical between surfaces.
  */
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Plus, Play, X as CloseIcon, FileSpreadsheet, Upload, Lock, Users as UsersIcon, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,12 +30,23 @@ import {
 } from "./types";
 import { buildConnectionPayload, isConnectionKindValid, type ConnectionFormFields } from "./formLogic";
 import { eeClient } from "@/ee/client";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /** Every connector kind, in kind-picker order. Default for `allowedKinds`. */
-const ALL_KINDS: DataSourceKind[] = ["rest", "sqlite", "excel", "postgres", "mysql", "snowflake", "bigquery", "sftp"];
+const ALL_KINDS: DataSourceKind[] = ["rest", "sqlite", "excel", "postgres", "mysql", "snowflake", "bigquery", "sftp", "engine"];
+
+/** Default for `roleOptions`. Must be one stable array: the mirror effect
+ *  below depends on its identity, and a fresh `[]` per render re-fires it
+ *  forever (the Data drawer, which passes none, hit "Maximum update depth"). */
+const NO_ROLE_OPTIONS: RoleOption[] = [];
+
+/** What a Test button last returned; `pending` while the request is in flight. */
+type TestResultState = { pending?: boolean; ok?: boolean; status?: number; durationMs?: number; method?: string; url?: string; preview?: string; error?: string };
+
+const SELECT_1 = <span className="font-mono">SELECT 1</span>;
 
 export function ConnectionForm({
-  editing, onSaved, roleOptions = [], onRoleOptionsChange, currentTier, allowedKinds, onSaveAsQuery,
+  editing, onSaved, roleOptions = NO_ROLE_OPTIONS, onRoleOptionsChange, currentTier, allowedKinds, onSaveAsQuery,
 }: {
   editing: EditingConnection | null;
   onSaved: () => void;
@@ -52,6 +63,12 @@ export function ConnectionForm({
 }) {
   const kinds = allowedKinds ?? ALL_KINDS;
   const { push } = useToast();
+  const { t } = useT();
+  // "Password (leave blank to keep the existing one)" and friends, for any
+  // secret the server already holds.
+  const keepLabel = (hasExisting: unknown, label: string) =>
+    hasExisting ? t("connectionForm.keepExisting").replace("{label}", label) : label;
+  const alreadySetMasked = "•••••••• " + t("connectionForm.alreadySet");
   // Local mirror of roleOptions so the inline tag manager can add/delete
   // tags even when the caller doesn't track the catalog itself (the
   // designer's Data drawer never fetches /api/admin/roles).
@@ -123,13 +140,17 @@ export function ConnectionForm({
   const [sftpPrivateKey, setSftpPrivateKey] = useState("");
   const [sftpPassphrase, setSftpPassphrase] = useState("");
   const [sftpRemotePath, setSftpRemotePath] = useState(editing?.sftp?.remotePath ?? "");
+  // Engine fields — no secret. A blank URL means the platform's own engine, so
+  // an engine that is the platform's shows blank here rather than its address.
+  const [engineBaseUrl, setEngineBaseUrl] = useState(editing?.engine && !editing.engine.usesPlatformEngine ? editing.engine.baseUrl : "");
+  const [engineAudience, setEngineAudience] = useState(editing?.engine?.audience ?? "");
   const [visibility, setVisibility] = useState<VisibilityWire>(editing?.visibility ?? { mode: "tenant" });
   // REST only — see DataSource.readOnly's doc comment in schema.prisma.
   const [readOnly, setReadOnly] = useState<boolean>(editing?.readOnly ?? false);
   const [testMethod, setTestMethod] = useState<"POST" | "GET">("POST");
   const [testPath, setTestPath] = useState("/");
   const [testBody, setTestBody] = useState("{}");
-  const [testResult, setTestResult] = useState<null | { ok?: boolean; status?: number; durationMs?: number; method?: string; url?: string; preview?: string; error?: string }>(null);
+  const [testResult, setTestResult] = useState<TestResultState | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Re-seed form state whenever `editing` switches (including back to null).
@@ -175,6 +196,8 @@ export function ConnectionForm({
     setSftpPrivateKey("");
     setSftpPassphrase("");
     setSftpRemotePath(editing?.sftp?.remotePath ?? "");
+    setEngineBaseUrl(editing?.engine && !editing.engine.usesPlatformEngine ? editing.engine.baseUrl : "");
+    setEngineAudience(editing?.engine?.audience ?? "");
     setVisibility(editing?.visibility ?? { mode: "tenant" });
     setTestResult(null);
   }, [editing]);
@@ -202,6 +225,7 @@ export function ConnectionForm({
         host: sftpHost, port: sftpPort, username: sftpUsername, authMethod: sftpAuthMethod,
         password: sftpPassword, privateKey: sftpPrivateKey, passphrase: sftpPassphrase, remotePath: sftpRemotePath,
       },
+      engine: { baseUrl: engineBaseUrl, audience: engineAudience },
     };
   }
 
@@ -210,7 +234,7 @@ export function ConnectionForm({
     try {
       if (headersText.trim()) {
         try { JSON.parse(headersText); }
-        catch { push({ variant: "destructive", title: "Headers must be JSON" }); setSubmitting(false); return; }
+        catch { push({ variant: "destructive", title: t("connectionForm.headersNotJson") }); setSubmitting(false); return; }
       }
 
       // Visibility shape on the wire is exactly the discriminator the API
@@ -229,15 +253,22 @@ export function ConnectionForm({
       });
       if (!r.ok) {
         let msg = await r.text();
-        try { msg = JSON.parse(msg).error ?? msg; } catch { /* keep text */ }
-        push({ variant: "destructive", title: editing ? "Save failed" : "Failed to add connection", description: msg });
+        try {
+          const body = JSON.parse(msg);
+          // A 400 can carry per-field issues (e.g. a disallowed engine URL) —
+          // show the field's own message when the top-level error is generic.
+          const issue = Array.isArray(body.issues) ? body.issues[0]?.message : undefined;
+          msg = issue && issue !== body.error ? [body.error, issue].filter(Boolean).join(": ") : (body.error ?? msg);
+        } catch { /* keep text */ }
+        push({ variant: "destructive", title: editing ? t("common.saveFailed") : t("connectionForm.addFailed"), description: msg });
         return;
       }
-      push({ variant: "success", title: editing ? "Connection updated" : "Connection added" });
+      push({ variant: "success", title: editing ? t("connectionForm.updated") : t("connectionForm.added") });
       if (!editing) {
         setName(""); setBaseUrl(""); setConnection(""); setHeadersText("{}");
         setHsAccessToken(""); setZdSubdomain(""); setZdEmail(""); setZdApiToken("");
         setSftpHost(""); setSftpUsername(""); setSftpPassword(""); setSftpPrivateKey(""); setSftpPassphrase(""); setSftpRemotePath("");
+        setEngineBaseUrl(""); setEngineAudience("");
       }
       onSaved();
     } finally {
@@ -246,7 +277,7 @@ export function ConnectionForm({
   }
 
   async function test() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       // Blank headers box on an existing connection means "use the stored
       // ones" — rehydrate server-side by id instead of sending plaintext.
@@ -269,7 +300,7 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
@@ -279,7 +310,7 @@ export function ConnectionForm({
   // users/me.json are both minimal, read-only "who am I" endpoints — enough
   // to confirm the token authenticates without needing any specific scope.
   async function testHubspot() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       const useStored = !!editing && !hsAccessToken.trim();
       const body: Record<string, unknown> = { path: "/account-info/v3/details", method: "GET" };
@@ -296,12 +327,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testZendesk() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       const useStored = !!editing && !zdEmail.trim() && !zdApiToken.trim();
       const body: Record<string, unknown> = { path: "/users/me.json", method: "GET" };
@@ -321,12 +352,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testSqlite() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       const r = await fetch(`/api/data-sources/test-sqlite`, {
         method: "POST",
@@ -335,12 +366,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testPostgres() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       // When editing an existing source AND the password field is empty,
       // ask the server to rehydrate the stored credentials by id. Otherwise
@@ -359,12 +390,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testMysql() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       // Same stored-credentials trick as testPostgres: when editing and the
       // password field is empty, rehydrate from the encrypted DB row.
@@ -382,12 +413,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testSnowflake() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       const useStored = !!editing && sfPassword.length === 0;
       const body = useStored
@@ -404,12 +435,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testBigQuery() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       // Same stored-credentials trick: editing + empty credentialsJson =
       // rehydrate from the encrypted DB row. Otherwise pass plaintext.
@@ -428,12 +459,12 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
   async function testSftp() {
-    setTestResult({ preview: "Testing…" });
+    setTestResult({ pending: true });
     try {
       const useStored = !!editing && (sftpAuthMethod === "password" ? !sftpPassword.trim() : !sftpPrivateKey.trim());
       const body = useStored
@@ -450,7 +481,7 @@ export function ConnectionForm({
       });
       setTestResult(await r.json());
     } catch (e: any) {
-      setTestResult({ error: e?.message ?? "Request failed" });
+      setTestResult({ error: e?.message ?? t("common.requestFailed") });
     }
   }
 
@@ -462,13 +493,13 @@ export function ConnectionForm({
     return (
       <div className="grid gap-3 rounded-lg border bg-card p-5 shadow-xs">
         <div className="grid grid-cols-[140px_1fr] gap-3">
-          <F label="Kind">
+          <F label={t("connections.kindHeader")}>
             <Select value={kind} onValueChange={(v) => setKind(v as DataSourceKind)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {kinds.includes("rest") && <SelectItem value="rest">REST API</SelectItem>}
-                {kinds.includes("sqlite") && <SelectItem value="sqlite">SQLite file</SelectItem>}
-                {kinds.includes("excel") && <SelectItem value="excel">Excel upload</SelectItem>}
+                {kinds.includes("sqlite") && <SelectItem value="sqlite">{t("connectionForm.kind.sqlite")}</SelectItem>}
+                {kinds.includes("excel") && <SelectItem value="excel">{t("connectionForm.kind.excel")}</SelectItem>}
               </SelectContent>
             </Select>
           </F>
@@ -482,7 +513,7 @@ export function ConnectionForm({
   return (
     <div className="grid gap-3 rounded-lg border bg-card p-5 shadow-xs">
       <div className="grid grid-cols-[140px_1fr] gap-3">
-        <F label="Kind">
+        <F label={t("connections.kindHeader")}>
           <Select value={kind} onValueChange={(v) => setKind(v as PickerKind)} disabled={!!editing}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -492,21 +523,21 @@ export function ConnectionForm({
                   "rest" allowance rather than a separate kinds entry. */}
               {kinds.includes("rest") && eeClient.connectors?.hubspotBaseUrl && <SelectItem value="hubspot">HubSpot CRM</SelectItem>}
               {kinds.includes("rest") && eeClient.connectors?.zendeskBaseUrl && <SelectItem value="zendesk">Zendesk</SelectItem>}
-              {kinds.includes("sqlite") && <SelectItem value="sqlite">SQLite file</SelectItem>}
-              {kinds.includes("excel") && <SelectItem value="excel">Excel upload</SelectItem>}
+              {kinds.includes("sqlite") && <SelectItem value="sqlite">{t("connectionForm.kind.sqlite")}</SelectItem>}
+              {kinds.includes("excel") && <SelectItem value="excel">{t("connectionForm.kind.excel")}</SelectItem>}
               {/* Tier-gated kinds. Picking a locked option still works — we
                   show an UpgradeLock card below where the form would normally
                   render, so users can see what they'd be unlocking. */}
               {kinds.includes("postgres") && (
-                <SelectItem value="postgres">Postgres database</SelectItem>
+                <SelectItem value="postgres">{t("connectionForm.kind.postgres")}</SelectItem>
               )}
               {kinds.includes("mysql") && (
-                <SelectItem value="mysql">MySQL database</SelectItem>
+                <SelectItem value="mysql">{t("connectionForm.kind.mysql")}</SelectItem>
               )}
               {kinds.includes("snowflake") && (
                 <SelectItem value="snowflake">
                   <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                    Snowflake warehouse
+                    {t("connectionForm.kind.snowflake")}
                     {!isFeatureAvailable(currentTier, "connector.snowflake") && (
                       <UpgradeLock feature="connector.snowflake" currentTier={currentTier} variant="inline" />
                     )}
@@ -516,7 +547,7 @@ export function ConnectionForm({
               {kinds.includes("bigquery") && (
                 <SelectItem value="bigquery">
                   <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                    BigQuery dataset
+                    {t("connectionForm.kind.bigquery")}
                     {!isFeatureAvailable(currentTier, "connector.bigquery") && (
                       <UpgradeLock feature="connector.bigquery" currentTier={currentTier} variant="inline" />
                     )}
@@ -528,9 +559,19 @@ export function ConnectionForm({
               {kinds.includes("sftp") && (
                 <SelectItem value="sftp">
                   <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                    SFTP file
+                    {t("connectionForm.kind.sftp")}
                     {!isFeatureAvailable(currentTier, "connector.sftp") && (
                       <UpgradeLock feature="connector.sftp" currentTier={currentTier} variant="inline" />
+                    )}
+                  </span>
+                </SelectItem>
+              )}
+              {kinds.includes("engine") && (
+                <SelectItem value="engine">
+                  <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                    {t("connectionForm.kind.engine")}
+                    {!isFeatureAvailable(currentTier, "connector.engine") && (
+                      <UpgradeLock feature="connector.engine" currentTier={currentTier} variant="inline" />
                     )}
                   </span>
                 </SelectItem>
@@ -538,8 +579,8 @@ export function ConnectionForm({
             </SelectContent>
           </Select>
         </F>
-        <F label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. orders_api" />
+        <F label={t("common.name")}>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.eg").replace("{example}", "orders_api")} />
         </F>
       </div>
       <VisibilityPicker value={visibility} onChange={setVisibility} roleOptions={localRoleOptions} onRoleOptionsChange={handleRoleOptionsChange} />
@@ -550,7 +591,7 @@ export function ConnectionForm({
       {kind === "rest" && (
         <label className="mt-3 flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-xs">
           <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
-          Read-only — block any request against this connection that isn't a GET, regardless of what a report's query asks for
+          {t("connectionForm.readOnly")}
         </label>
       )}
 
@@ -565,12 +606,15 @@ export function ConnectionForm({
         <UpgradeLock feature={KIND_FEATURE[kind as DataSourceKind]!} currentTier={currentTier} />
       ) : kind === "rest" ? (
         <>
-          <F label="Base URL">
+          <F label={t("connectionForm.baseUrl")}>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com" />
           </F>
           <F label={editing && editing.hasHeaders
-            ? `Headers — leave blank to keep the existing ${editing.headerKeys?.length ?? 0} header${(editing.headerKeys?.length ?? 0) === 1 ? "" : "s"} (${(editing.headerKeys ?? []).join(", ")})`
-            : 'Headers (JSON, e.g. {"Authorization":"Bearer XYZ"})'}>
+            ? t("connectionForm.headersKeep")
+                .replace("{n}", String(editing.headerKeys?.length ?? 0))
+                .replace("{plural}", (editing.headerKeys?.length ?? 0) === 1 ? "" : "s")
+                .replace("{keys}", (editing.headerKeys ?? []).join(", "))
+            : t("connectionForm.headers")}>
             <textarea
               className="min-h-[88px] rounded-md border border-input bg-background p-2 font-mono text-xs"
               value={headersText}
@@ -579,9 +623,9 @@ export function ConnectionForm({
             />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test request</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testRequest")}</p>
             <div className="grid grid-cols-[120px_1fr] gap-2">
-              <F label="Method">
+              <F label={t("dataDrawer.method")}>
                 <Select value={testMethod} onValueChange={(v) => setTestMethod(v as any)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -590,12 +634,12 @@ export function ConnectionForm({
                   </SelectContent>
                 </Select>
               </F>
-              <F label="Path">
+              <F label={t("connectionForm.path")}>
                 <Input value={testPath} onChange={(e) => setTestPath(e.target.value)} placeholder="/" />
               </F>
             </div>
             {testMethod === "POST" && (
-              <F label="Body (JSON if it parses; otherwise plain text)">
+              <F label={t("connectionForm.body")}>
                 <textarea
                   className="min-h-[80px] rounded-md border border-input bg-background p-2 font-mono text-xs"
                   value={testBody}
@@ -606,19 +650,10 @@ export function ConnectionForm({
             )}
             <div>
               <Button size="sm" variant="outline" onClick={test} disabled={!baseUrl} type="button">
-                <Play className="mr-1.5 h-4 w-4" /> Test {testMethod} {testPath || "/"}
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testMethodPath").replace("{method}", testMethod).replace("{path}", testPath || "/")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Request failed"
-                    : `${testResult.ok ? "OK" : "Failed"} (${testResult.status}${testResult.durationMs != null ? `, ${testResult.durationMs}ms` : ""}) ${testResult.method ?? ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} rest />
             {/* Drawer-only affordance: after a successful test against a saved
                 connection, offer to add the request to the report's Queries
                 tab. Only rendered when the caller wires `onSaveAsQuery`. */}
@@ -635,112 +670,90 @@ export function ConnectionForm({
                     body: testMethod === "POST" ? testBody : "",
                   })}
                 >
-                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Save as query
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> {t("connectionForm.saveAsQuery")}
                 </Button>
-                <span className="text-[11px] text-muted-foreground">
-                  Adds this request to the Queries tab so blocks can bind to it.
-                </span>
+                <span className="text-[11px] text-muted-foreground">{t("connectionForm.saveAsQueryHint")}</span>
               </div>
             )}
           </div>
         </>
       ) : kind === "hubspot" ? (
         <>
-          <F label={editing && editing.hasHeaders ? "Private App access token (leave blank to keep the existing one)" : "Private App access token"}>
+          <F label={keepLabel(editing && editing.hasHeaders, t("connectionForm.hsToken"))}>
             <Input
               type="password"
               value={hsAccessToken}
               onChange={(e) => setHsAccessToken(e.target.value)}
-              placeholder={editing && editing.hasHeaders ? "•••••••• (already set)" : "pat-na1-..."}
+              placeholder={editing && editing.hasHeaders ? alreadySetMasked : "pat-na1-..."}
               autoComplete="new-password"
             />
           </F>
           <p className="text-xs text-muted-foreground">
-            From your HubSpot account: Settings → Integrations → Private Apps. Requests go to{" "}
-            <span className="font-mono">{eeClient.connectors?.hubspotBaseUrl}</span> with a Bearer token — every report query against
-            this connection authenticates automatically.
+            {fill(t("connectionForm.hsHelp"), { url: <span className="font-mono">{eeClient.connectors?.hubspotBaseUrl}</span> })}
           </p>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
-            <p className="text-xs text-muted-foreground">Confirms the token by requesting account details.</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-xs text-muted-foreground">{t("connectionForm.hsTestHint")}</p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testHubspot}
                 disabled={!hsAccessToken && !(editing && editing.hasHeaders)}
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       ) : kind === "zendesk" ? (
         <>
-          <F label="Subdomain">
+          <F label={t("connectionForm.subdomain")}>
             <Input
               value={zdSubdomain}
               onChange={(e) => setZdSubdomain(e.target.value)}
-              placeholder="acme (for acme.zendesk.com)"
+              placeholder={t("connectionForm.subdomainPlaceholder")}
             />
           </F>
           <div className="grid grid-cols-2 gap-3">
-            <F label="Agent email">
+            <F label={t("connectionForm.agentEmail")}>
               <Input value={zdEmail} onChange={(e) => setZdEmail(e.target.value)} placeholder="agent@acme.com" />
             </F>
-            <F label={editing && editing.hasHeaders ? "API token (leave blank to keep the existing one)" : "API token"}>
+            <F label={keepLabel(editing && editing.hasHeaders, t("connectionForm.apiToken"))}>
               <Input
                 type="password"
                 value={zdApiToken}
                 onChange={(e) => setZdApiToken(e.target.value)}
-                placeholder={editing && editing.hasHeaders ? "•••••••• (already set)" : "API token"}
+                placeholder={editing && editing.hasHeaders ? alreadySetMasked : t("connectionForm.apiToken")}
                 autoComplete="new-password"
               />
             </F>
           </div>
           <p className="text-xs text-muted-foreground">
-            From Zendesk: Admin Center → Apps and integrations → APIs → Zendesk API → add an API token. Requests go
-            to <span className="font-mono">{zdSubdomain && eeClient.connectors?.zendeskBaseUrl ? eeClient.connectors.zendeskBaseUrl(zdSubdomain) : "https://<subdomain>.zendesk.com/api/v2"}</span> with
-            HTTP Basic auth built from your email + token.
+            {fill(t("connectionForm.zdHelp"), {
+              url: <span className="font-mono">{zdSubdomain && eeClient.connectors?.zendeskBaseUrl ? eeClient.connectors.zendeskBaseUrl(zdSubdomain) : "https://<subdomain>.zendesk.com/api/v2"}</span>,
+            })}
           </p>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
-            <p className="text-xs text-muted-foreground">Confirms the credentials by requesting the authenticated agent's own profile.</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-xs text-muted-foreground">{t("connectionForm.zdTestHint")}</p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testZendesk}
                 disabled={editing && editing.hasHeaders ? !zdSubdomain : !zdSubdomain || !zdEmail || !zdApiToken}
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       ) : kind === "postgres" ? (
         <>
           <div className="grid grid-cols-[1fr_120px] gap-3">
-            <F label="Host">
+            <F label={t("admin.newConnectionWizard.host")}>
               <Input value={pgHost} onChange={(e) => setPgHost(e.target.value)} placeholder="db.example.com" />
             </F>
-            <F label="Port">
+            <F label={t("admin.newConnectionWizard.port")}>
               <Input
                 type="number"
                 value={pgPort}
@@ -749,69 +762,57 @@ export function ConnectionForm({
             </F>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <F label="Database">
+            <F label={t("admin.newConnectionWizard.database")}>
               <Input value={pgDatabase} onChange={(e) => setPgDatabase(e.target.value)} placeholder="appdb" />
             </F>
-            <F label="User">
+            <F label={t("admin.newConnectionWizard.user")}>
               <Input value={pgUser} onChange={(e) => setPgUser(e.target.value)} placeholder="readonly_user" />
             </F>
           </div>
-          <F label={editing && editing.pg?.hasPassword ? "Password (leave blank to keep the existing one)" : "Password"}>
+          <F label={keepLabel(editing && editing.pg?.hasPassword, t("admin.newConnectionWizard.password"))}>
             <Input
               type="password"
               value={pgPassword}
               onChange={(e) => setPgPassword(e.target.value)}
-              placeholder={editing && editing.pg?.hasPassword ? "•••••••• (already set)" : "Database password"}
+              placeholder={editing && editing.pg?.hasPassword ? alreadySetMasked : t("connectionForm.dbPassword")}
               autoComplete="new-password"
             />
           </F>
           <div className="grid grid-cols-[1fr_140px] gap-3">
-            <F label='Schema (default "public")'>
+            <F label={t("connectionForm.schemaDefault").replace("{value}", "public")}>
               <Input value={pgSchema} onChange={(e) => setPgSchema(e.target.value)} placeholder="public" />
             </F>
-            <F label="SSL">
+            <F label={t("admin.newConnectionWizard.ssl")}>
               <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs">
                 <input type="checkbox" checked={pgSsl} onChange={(e) => setPgSsl(e.target.checked)} />
-                Require SSL
+                {t("connectionForm.requireSsl")}
               </label>
             </F>
           </div>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
-              Opens a connection, runs <span className="font-mono">SELECT 1</span>, and lists tables in
-              <span className="font-mono"> {pgSchema || "public"}</span>.
-              {editing && pgPassword.length === 0 && editing.pg?.hasPassword
-                ? " (Using the stored password — leave the field blank to test against it.)"
-                : ""}
+              {fill(t("connectionForm.dbTestHint"), { sql: SELECT_1, target: <span className="font-mono">{pgSchema || "public"}</span> })}
+              {editing && pgPassword.length === 0 && editing.pg?.hasPassword ? ` ${t("connectionForm.usingStoredPassword")}` : ""}
             </p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testPostgres}
                 disabled={!pgHost || !pgDatabase || !pgUser || (!editing && !pgPassword)}
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       ) : kind === "mysql" ? (
         <>
           <div className="grid grid-cols-[1fr_120px] gap-3">
-            <F label="Host">
+            <F label={t("admin.newConnectionWizard.host")}>
               <Input value={myHost} onChange={(e) => setMyHost(e.target.value)} placeholder="db.example.com" />
             </F>
-            <F label="Port">
+            <F label={t("admin.newConnectionWizard.port")}>
               <Input
                 type="number"
                 value={myPort}
@@ -820,76 +821,67 @@ export function ConnectionForm({
             </F>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <F label="Database">
+            <F label={t("admin.newConnectionWizard.database")}>
               <Input value={myDatabase} onChange={(e) => setMyDatabase(e.target.value)} placeholder="appdb" />
             </F>
-            <F label="User">
+            <F label={t("admin.newConnectionWizard.user")}>
               <Input value={myUser} onChange={(e) => setMyUser(e.target.value)} placeholder="readonly_user" />
             </F>
           </div>
-          <F label={editing && editing.my?.hasPassword ? "Password (leave blank to keep the existing one)" : "Password"}>
+          <F label={keepLabel(editing && editing.my?.hasPassword, t("admin.newConnectionWizard.password"))}>
             <Input
               type="password"
               value={myPassword}
               onChange={(e) => setMyPassword(e.target.value)}
-              placeholder={editing && editing.my?.hasPassword ? "•••••••• (already set)" : "Database password"}
+              placeholder={editing && editing.my?.hasPassword ? alreadySetMasked : t("connectionForm.dbPassword")}
               autoComplete="new-password"
             />
           </F>
           <div className="grid grid-cols-[140px_1fr] gap-3">
-            <F label="SSL">
+            <F label={t("admin.newConnectionWizard.ssl")}>
               <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs">
                 <input type="checkbox" checked={mySsl} onChange={(e) => setMySsl(e.target.checked)} />
-                Require SSL
+                {t("connectionForm.requireSsl")}
               </label>
             </F>
             <div />
           </div>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
-              Opens a connection, runs <span className="font-mono">SELECT 1</span>, and lists tables in
-              <span className="font-mono"> {myDatabase || "(database)"}</span>.
-              {editing && myPassword.length === 0 && editing.my?.hasPassword
-                ? " (Using the stored password — leave the field blank to test against it.)"
-                : ""}
+              {fill(t("connectionForm.dbTestHint"), {
+                sql: SELECT_1,
+                target: <span className="font-mono">{myDatabase || `(${t("admin.newConnectionWizard.database")})`}</span>,
+              })}
+              {editing && myPassword.length === 0 && editing.my?.hasPassword ? ` ${t("connectionForm.usingStoredPassword")}` : ""}
             </p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testMysql}
                 disabled={!myHost || !myDatabase || !myUser || (!editing && !myPassword)}
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       ) : kind === "bigquery" ? (
         <>
           <div className="grid grid-cols-2 gap-3">
-            <F label="Project ID">
+            <F label={t("connectionForm.projectId")}>
               <Input value={bqProjectId} onChange={(e) => setBqProjectId(e.target.value)} placeholder="my-gcp-project" />
             </F>
-            <F label="Dataset">
+            <F label={t("connectionForm.dataset")}>
               <Input value={bqDataset} onChange={(e) => setBqDataset(e.target.value)} placeholder="analytics" />
             </F>
           </div>
-          <F label="Location (optional — e.g. US, EU, asia-southeast1)">
+          <F label={t("connectionForm.bqLocation")}>
             <Input value={bqLocation} onChange={(e) => setBqLocation(e.target.value)} placeholder="US" />
           </F>
           <F label={editing && editing.bq?.hasCredentials
-            ? `Service-account JSON (leave blank to keep ${editing.bq?.clientEmail || "the existing key"})`
-            : "Service-account JSON (paste the entire .json key file)"}>
+            ? t("connectionForm.bqCredsKeep").replace("{key}", editing.bq?.clientEmail || t("connectionForm.bqExistingKey"))
+            : t("connectionForm.bqCreds")}>
             <textarea
               className="min-h-[180px] rounded-md border border-input bg-background p-2 font-mono text-[11px]"
               value={bqCredentialsJson}
@@ -908,94 +900,84 @@ export function ConnectionForm({
             />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
-              Calls BigQuery, runs <span className="font-mono">SELECT 1</span>, and lists tables in
-              <span className="font-mono"> {bqProjectId || "project"}.{bqDataset || "dataset"}</span>.
-              {editing && bqCredentialsJson.trim().length === 0 && editing.bq?.hasCredentials
-                ? " (Using the stored service-account JSON — leave the field blank to test against it.)"
-                : ""}
+              {fill(t("connectionForm.bqTestHint"), {
+                sql: SELECT_1,
+                target: <span className="font-mono">{bqProjectId || "project"}.{bqDataset || "dataset"}</span>,
+              })}
+              {editing && bqCredentialsJson.trim().length === 0 && editing.bq?.hasCredentials ? ` ${t("connectionForm.usingStoredCreds")}` : ""}
             </p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testBigQuery}
                 disabled={!bqProjectId || !bqDataset || (!editing && !bqCredentialsJson.trim())}
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       ) : kind === "sftp" ? (
         <>
           <p className="text-xs text-muted-foreground">
-            Feeds a scheduled lake pull (Tables → Scheduled pulls), not live report queries — the file at
-            &quot;Remote path&quot; below is downloaded and landed as a table on the cron you configure there.
+            {t("connectionForm.sftpIntro").replace("{remotePath}", t("connectionForm.remotePath"))}
           </p>
           <div className="grid grid-cols-[1fr_100px] gap-3">
-            <F label="Host">
+            <F label={t("admin.newConnectionWizard.host")}>
               <Input value={sftpHost} onChange={(e) => setSftpHost(e.target.value)} placeholder="sftp.example.com" />
             </F>
-            <F label="Port">
+            <F label={t("admin.newConnectionWizard.port")}>
               <Input type="number" value={sftpPort} onChange={(e) => setSftpPort(Number(e.target.value) || 22)} />
             </F>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <F label="Username">
+            <F label={t("connectors.usernameLabel")}>
               <Input value={sftpUsername} onChange={(e) => setSftpUsername(e.target.value)} placeholder="report_reader" />
             </F>
-            <F label="Remote path">
+            <F label={t("connectionForm.remotePath")}>
               <Input value={sftpRemotePath} onChange={(e) => setSftpRemotePath(e.target.value)} placeholder="/exports/orders.csv" />
             </F>
           </div>
-          <F label="Authentication">
+          <F label={t("connectionForm.authentication")}>
             <Select value={sftpAuthMethod} onValueChange={(v) => setSftpAuthMethod(v as "password" | "privateKey")}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="password">Password</SelectItem>
-                <SelectItem value="privateKey">Private key</SelectItem>
+                <SelectItem value="password">{t("admin.newConnectionWizard.password")}</SelectItem>
+                <SelectItem value="privateKey">{t("connectionForm.privateKey")}</SelectItem>
               </SelectContent>
             </Select>
           </F>
           {sftpAuthMethod === "password" ? (
-            <F label={editing && editing.sftp?.hasPassword ? "Password (leave blank to keep the existing one)" : "Password"}>
+            <F label={keepLabel(editing && editing.sftp?.hasPassword, t("admin.newConnectionWizard.password"))}>
               <Input
                 type="password"
                 value={sftpPassword}
                 onChange={(e) => setSftpPassword(e.target.value)}
-                placeholder={editing && editing.sftp?.hasPassword ? "•••••••• (already set)" : "Password"}
+                placeholder={editing && editing.sftp?.hasPassword ? alreadySetMasked : t("admin.newConnectionWizard.password")}
                 autoComplete="new-password"
               />
             </F>
           ) : (
             <>
-              <F label={editing && editing.sftp?.hasPrivateKey ? "Private key (leave blank to keep the existing one)" : "Private key"}>
+              <F label={keepLabel(editing && editing.sftp?.hasPrivateKey, t("connectionForm.privateKey"))}>
                 <textarea
                   className="min-h-[120px] rounded-md border border-input bg-background p-2 font-mono text-[11px]"
                   value={sftpPrivateKey}
                   onChange={(e) => setSftpPrivateKey(e.target.value)}
-                  placeholder={editing && editing.sftp?.hasPrivateKey ? "(already set)" : "-----BEGIN OPENSSH PRIVATE KEY-----\n…"}
+                  placeholder={editing && editing.sftp?.hasPrivateKey ? t("connectionForm.alreadySet") : "-----BEGIN OPENSSH PRIVATE KEY-----\n…"}
                   spellCheck={false}
                 />
               </F>
-              <F label="Passphrase (optional, only if the key is encrypted)">
+              <F label={t("connectionForm.passphrase")}>
                 <Input type="password" value={sftpPassphrase} onChange={(e) => setSftpPassphrase(e.target.value)} autoComplete="new-password" />
               </F>
             </>
           )}
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
-            <p className="text-xs text-muted-foreground">Connects and confirms the remote path exists.</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-xs text-muted-foreground">{t("connectionForm.sftpTestHint")}</p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testSftp}
@@ -1004,108 +986,99 @@ export function ConnectionForm({
                   (!editing && (sftpAuthMethod === "password" ? !sftpPassword : !sftpPrivateKey))
                 }
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
+        </>
+      ) : kind === "engine" ? (
+        <>
+          <F label={t("connectionForm.engineUrl")}>
+            <Input
+              value={engineBaseUrl}
+              onChange={(e) => setEngineBaseUrl(e.target.value)}
+              placeholder="https://engine.example.com"
+              spellCheck={false}
+            />
+          </F>
+          <p className="text-xs text-muted-foreground">{t("connectionForm.engineUrlHelp")}</p>
+          <F label={t("connectionForm.engineAudience")}>
+            <Input
+              value={engineAudience}
+              onChange={(e) => setEngineAudience(e.target.value)}
+              spellCheck={false}
+            />
+          </F>
+          <p className="text-xs text-muted-foreground">{t("connectionForm.engineAudienceHelp")}</p>
         </>
       ) : kind === "snowflake" ? (
         <>
-          <F label="Account locator (e.g. xy12345.us-east-1)">
+          <F label={t("connectionForm.sfAccount")}>
             <Input value={sfAccount} onChange={(e) => setSfAccount(e.target.value)} placeholder="xy12345.us-east-1" />
           </F>
           <div className="grid grid-cols-2 gap-3">
-            <F label="Username">
+            <F label={t("connectors.usernameLabel")}>
               <Input value={sfUsername} onChange={(e) => setSfUsername(e.target.value)} placeholder="REPORT_READER" />
             </F>
-            <F label={editing && editing.sf?.hasPassword ? "Password (leave blank to keep)" : "Password"}>
+            <F label={keepLabel(editing && editing.sf?.hasPassword, t("admin.newConnectionWizard.password"))}>
               <Input
                 type="password"
                 value={sfPassword}
                 onChange={(e) => setSfPassword(e.target.value)}
-                placeholder={editing && editing.sf?.hasPassword ? "•••••••• (already set)" : "Snowflake password"}
+                placeholder={editing && editing.sf?.hasPassword ? alreadySetMasked : t("connectionForm.sfPassword")}
                 autoComplete="new-password"
               />
             </F>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <F label="Warehouse">
+            <F label={t("connectionForm.warehouse")}>
               <Input value={sfWarehouse} onChange={(e) => setSfWarehouse(e.target.value)} placeholder="COMPUTE_WH" />
             </F>
-            <F label="Database">
+            <F label={t("admin.newConnectionWizard.database")}>
               <Input value={sfDatabase} onChange={(e) => setSfDatabase(e.target.value)} placeholder="ANALYTICS" />
             </F>
-            <F label='Schema (default "PUBLIC")'>
+            <F label={t("connectionForm.schemaDefault").replace("{value}", "PUBLIC")}>
               <Input value={sfSchema} onChange={(e) => setSfSchema(e.target.value)} placeholder="PUBLIC" />
             </F>
           </div>
-          <F label="Role (optional — defaults to user's default role)">
+          <F label={t("connectionForm.sfRole")}>
             <Input value={sfRole} onChange={(e) => setSfRole(e.target.value)} placeholder="SYSADMIN" />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
-              Opens a Snowflake session, runs <span className="font-mono">SELECT 1</span>, and lists tables in
-              <span className="font-mono"> {(sfDatabase || "DB").toUpperCase()}.{(sfSchema || "PUBLIC").toUpperCase()}</span>.
-              {editing && sfPassword.length === 0 && editing.sf?.hasPassword
-                ? " (Using the stored password — leave the field blank to test against it.)"
-                : ""}
+              {fill(t("connectionForm.sfTestHint"), {
+                sql: SELECT_1,
+                target: <span className="font-mono">{(sfDatabase || "DB").toUpperCase()}.{(sfSchema || "PUBLIC").toUpperCase()}</span>,
+              })}
+              {editing && sfPassword.length === 0 && editing.sf?.hasPassword ? ` ${t("connectionForm.usingStoredPassword")}` : ""}
             </p>
             <div>
               <Button
                 size="sm" variant="outline" type="button" onClick={testSnowflake}
                 disabled={!sfAccount || !sfUsername || !sfWarehouse || !sfDatabase || (!editing && !sfPassword)}
               >
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       ) : (
         <>
-          <F label="Connection string (absolute path to .db file)">
+          <F label={t("connectionForm.sqlitePath")}>
             <Input value={connection} onChange={(e) => setConnection(e.target.value)} placeholder="C:\\\\path\\\\to\\\\warehouse.db" />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Test connection</p>
-            <p className="text-xs text-muted-foreground">
-              Opens the file read-only, runs <span className="font-mono">SELECT 1</span>, and lists the tables it finds.
-            </p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-xs text-muted-foreground">{fill(t("connectionForm.sqliteTestHint"), { sql: SELECT_1 })}</p>
             <div>
               <Button size="sm" variant="outline" onClick={testSqlite} disabled={!connection} type="button">
-                <Play className="mr-1.5 h-4 w-4" /> Test connection
+                <Play className="mr-1.5 h-4 w-4" /> {t("connectionForm.testConnection")}
               </Button>
             </div>
-            {testResult && (
-              <div className={testResult.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
-                <div className="mb-1 font-medium">
-                  {testResult.error
-                    ? "Connection failed"
-                    : `${testResult.ok ? "OK" : "Failed"}${testResult.durationMs != null ? ` (${testResult.durationMs}ms)` : ""} ${testResult.url ?? ""}`}
-                </div>
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{testResult.error ?? testResult.preview ?? ""}</pre>
-              </div>
-            )}
+            <TestResult result={testResult} />
           </div>
         </>
       )}
@@ -1116,7 +1089,7 @@ export function ConnectionForm({
           disabled={submitting || !name || !isConnectionKindValid(currentFields())}
         >
           <Plus className="mr-1.5 h-4 w-4" />
-          {submitting ? "Saving…" : editing ? "Save changes" : "Add connection"}
+          {submitting ? t("common.saving") : editing ? t("action.saveChanges") : t("connections.addHeading")}
         </Button>
       </div>
     </div>
@@ -1147,6 +1120,7 @@ type ExcelImportSchema = {
 
 function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSaved: () => void; roleOptions: RoleOption[]; onRoleOptionsChange: (next: RoleOption[]) => void }) {
   const { push } = useToast();
+  const { t } = useT();
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1183,7 +1157,7 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
       if (!r.ok) {
         push({
           variant: "destructive",
-          title: r.status === 402 ? "Plan limit reached" : "Upload failed",
+          title: r.status === 402 ? t("connectionForm.planLimit") : t("common.uploadFailed"),
           description: json?.error ?? r.statusText,
         });
         return;
@@ -1191,15 +1165,18 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
       setSchema(json.schema as ExcelImportSchema);
       push({
         variant: "success",
-        title: "Excel uploaded",
-        description: `${json.schema.tables.length} sheet${json.schema.tables.length === 1 ? "" : "s"} imported as "${json.name}".`,
+        title: t("connectionForm.excelUploaded"),
+        description: t("connectionForm.excelUploadedDesc")
+          .replace("{n}", String(json.schema.tables.length))
+          .replace("{plural}", json.schema.tables.length === 1 ? "" : "s")
+          .replace("{name}", json.name),
       });
       // Refresh the parent list so the new connection appears immediately.
       onSaved();
       // Don't reset `file` so the user still sees the preview block.
       setName("");
     } catch (e: any) {
-      push({ variant: "destructive", title: "Upload failed", description: e?.message ?? "Network error" });
+      push({ variant: "destructive", title: t("common.uploadFailed"), description: e?.message ?? t("ask.networkError") });
     } finally {
       setBusy(false);
     }
@@ -1240,24 +1217,26 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
                   className="mt-1.5 text-xs text-primary underline-offset-2 hover:underline"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  Choose a different file
+                  {t("connectionForm.chooseDifferentFile")}
                 </button>
               </div>
             ) : (
               <div className="text-center">
                 <div className="text-sm">
-                  Drag and drop an <span className="font-medium">.xlsx</span> here, or{" "}
-                  <button
-                    type="button"
-                    className="text-primary underline-offset-2 hover:underline"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    choose a file
-                  </button>
+                  {fill(t("connectionForm.dropHint"), {
+                    ext: <span className="font-medium">.xlsx</span>,
+                    choose: (
+                      <button
+                        type="button"
+                        className="text-primary underline-offset-2 hover:underline"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        {t("connectionForm.chooseFile")}
+                      </button>
+                    ),
+                  })}
                 </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  Up to 25 MB · 100 000 rows per sheet
-                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{t("connectionForm.limits")}</div>
               </div>
             )}
             <input
@@ -1271,16 +1250,16 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
 
           {file && (
             <>
-              <F label="Connection name (defaults to filename)">
+              <F label={t("connectionForm.excelName")}>
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={file.name.replace(/\.(xlsx|xlsm|xls)$/i, "")} />
               </F>
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={upload} disabled={busy || !file}>
                   <Upload className="mr-1.5 h-4 w-4" />
-                  {busy ? "Uploading…" : "Upload & create connection"}
+                  {busy ? t("connectionForm.uploading") : t("connectionForm.uploadCreate")}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={reset} disabled={busy}>
-                  <CloseIcon className="mr-1.5 h-4 w-4" /> Cancel
+                  <CloseIcon className="mr-1.5 h-4 w-4" /> {t("action.cancel")}
                 </Button>
               </div>
             </>
@@ -1292,31 +1271,40 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
         <div className="grid gap-3">
           <div className="rounded-md border border-success/40 bg-success/5 p-3 text-xs">
             <div className="mb-1 font-medium">
-              Imported {schema.tables.length} sheet{schema.tables.length === 1 ? "" : "s"} from {schema.originalFilename}
+              {t("connectionForm.importedFrom")
+                .replace("{n}", String(schema.tables.length))
+                .replace("{plural}", schema.tables.length === 1 ? "" : "s")
+                .replace("{file}", schema.originalFilename)}
             </div>
             <div className="text-muted-foreground">
-              Total rows: {schema.tables.reduce((s, t) => s + t.rowCount, 0).toLocaleString()} ·
-              Size: {(schema.fileSize / 1024).toFixed(1)} KB ·
-              Imported {new Date(schema.importedAt).toLocaleString()}
+              {t("connectionForm.importSummary")
+                .replace("{rows}", schema.tables.reduce((s, tbl) => s + tbl.rowCount, 0).toLocaleString())
+                .replace("{size}", (schema.fileSize / 1024).toFixed(1))
+                .replace("{at}", new Date(schema.importedAt).toLocaleString())}
             </div>
           </div>
 
           {schema.warnings.length > 0 && (
             <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-xs ">
-              <div className="mb-1 font-medium">Warnings</div>
+              <div className="mb-1 font-medium">{t("connectionForm.warnings")}</div>
               <ul className="ml-4 list-disc space-y-0.5 text-muted-foreground">
                 {schema.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
 
-          {schema.tables.map((t) => (
-            <div key={t.name} className="overflow-hidden rounded-md border bg-card">
+          {schema.tables.map((sheet) => (
+            <div key={sheet.name} className="overflow-hidden rounded-md border bg-card">
               <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-2">
                 <div>
-                  <div className="text-sm font-medium">{t.name}</div>
+                  <div className="text-sm font-medium">{sheet.name}</div>
                   <div className="text-[11px] text-muted-foreground">
-                    sheet "{t.originalSheetName}" · {t.rowCount.toLocaleString()} row{t.rowCount === 1 ? "" : "s"} · {t.columns.length} column{t.columns.length === 1 ? "" : "s"}
+                    {t("connectionForm.sheetSummary")
+                      .replace("{sheet}", sheet.originalSheetName)
+                      .replace("{rows}", sheet.rowCount.toLocaleString())
+                      .replace("{rowsPlural}", sheet.rowCount === 1 ? "" : "s")
+                      .replace("{cols}", String(sheet.columns.length))
+                      .replace("{colsPlural}", sheet.columns.length === 1 ? "" : "s")}
                   </div>
                 </div>
               </div>
@@ -1324,14 +1312,14 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
                 <table className="w-full text-xs">
                   <thead className="bg-muted/30 text-muted-foreground">
                     <tr>
-                      <th className="px-3 py-1.5 text-left font-medium">Column</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Type</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Original header</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Sample</th>
+                      <th className="px-3 py-1.5 text-left font-medium">{t("tableDetail.colHeaderColumn")}</th>
+                      <th className="px-3 py-1.5 text-left font-medium">{t("common.type")}</th>
+                      <th className="px-3 py-1.5 text-left font-medium">{t("connectionForm.originalHeader")}</th>
+                      <th className="px-3 py-1.5 text-left font-medium">{t("tableDetail.colHeaderSample")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {t.columns.map((c) => (
+                    {sheet.columns.map((c) => (
                       <tr key={c.name} className="border-t">
                         <td className="px-3 py-1.5 font-mono">{c.name}</td>
                         <td className="px-3 py-1.5">
@@ -1352,9 +1340,7 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
           ))}
 
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={reset}>
-              Upload another
-            </Button>
+            <Button size="sm" onClick={reset}>{t("connectionForm.uploadAnother")}</Button>
           </div>
         </div>
       )}
@@ -1385,6 +1371,7 @@ function VisibilityPicker({
   roleOptions: RoleOption[];
   onRoleOptionsChange: (next: RoleOption[]) => void;
 }) {
+  const { t } = useT();
   const mode = value.mode;
   const selectedRoles = value.mode === "roles" ? value.roles : [];
 
@@ -1397,7 +1384,7 @@ function VisibilityPicker({
 
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Visibility</p>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connections.visibilityHeader")}</p>
 
       <div className="grid gap-1.5 text-sm">
         <label className="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted/40">
@@ -1408,11 +1395,9 @@ function VisibilityPicker({
           />
           <span className="flex-1">
             <span className="flex items-center gap-1.5 font-medium">
-              <UsersIcon className="h-3.5 w-3.5" /> Tenant
+              <UsersIcon className="h-3.5 w-3.5" /> {t("dashboardsMgr.vis.tenantLabel")}
             </span>
-            <span className="text-xs text-muted-foreground">
-              Everyone in this workspace can use this connection. (Default.)
-            </span>
+            <span className="text-xs text-muted-foreground">{t("connectionForm.vis.tenantDesc")}</span>
           </span>
         </label>
 
@@ -1424,11 +1409,9 @@ function VisibilityPicker({
           />
           <span className="flex-1">
             <span className="flex items-center gap-1.5 font-medium">
-              <Lock className="h-3.5 w-3.5" /> Roles
+              <Lock className="h-3.5 w-3.5" /> {t("dashboardsMgr.vis.rolesLabel")}
             </span>
-            <span className="text-xs text-muted-foreground">
-              Only users with at least one of these roles can use it.
-            </span>
+            <span className="text-xs text-muted-foreground">{t("connectionForm.vis.rolesDesc")}</span>
             {mode === "roles" && (
               <span className="mt-2 block">
                 <InlineTagManager
@@ -1450,17 +1433,47 @@ function VisibilityPicker({
           />
           <span className="flex-1">
             <span className="flex items-center gap-1.5 font-medium">
-              <UserIcon className="h-3.5 w-3.5" /> Just me
+              <UserIcon className="h-3.5 w-3.5" /> {t("dashboardsMgr.vis.justMe")}
             </span>
-            <span className="text-xs text-muted-foreground">
-              Only you can use this connection. Admins do not bypass — this is
-              private.
-            </span>
+            <span className="text-xs text-muted-foreground">{t("connectionForm.vis.justMeDesc")}</span>
           </span>
         </label>
       </div>
     </div>
   );
+}
+
+/**
+ * The box under every Test button. REST shows the HTTP status and method it
+ * sent; the database and file connectors report timing and what they reached.
+ */
+function TestResult({ result, rest }: { result: TestResultState | null; rest?: boolean }) {
+  const { t } = useT();
+  if (!result) return null;
+  if (result.pending) {
+    return <div className="rounded-md border border-border bg-muted/30 p-2 text-xs text-muted-foreground">{t("connectionForm.testing")}</div>;
+  }
+  const verdict = t(result.ok ? "connectionForm.testOk" : "connectionForm.testFailed");
+  const ms = result.durationMs != null ? `${result.durationMs}ms` : "";
+  const headline = result.error
+    ? t(rest ? "common.requestFailed" : "connectionForm.connectionFailed")
+    : rest
+      ? `${verdict} (${result.status}${ms ? `, ${ms}` : ""}) ${result.method ?? ""} ${result.url ?? ""}`
+      : `${verdict}${ms ? ` (${ms})` : ""} ${result.url ?? ""}`;
+  return (
+    <div className={result.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
+      <div className="mb-1 font-medium">{headline}</div>
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{result.error ?? result.preview ?? ""}</pre>
+    </div>
+  );
+}
+
+/** Splits a dictionary string on its {slot} placeholders and drops React nodes in; t() itself only handles text. */
+function fill(template: string, slots: Record<string, React.ReactNode>): React.ReactNode {
+  return template.split(/(\{\w+\})/).map((part, i) => {
+    const m = /^\{(\w+)\}$/.exec(part);
+    return <Fragment key={i}>{m && m[1] in slots ? slots[m[1]] : part}</Fragment>;
+  });
 }
 
 function F({ label, children }: { label: string; children: React.ReactNode }) {

@@ -17,12 +17,14 @@ import type { ReactElement } from "react";
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Tooltip, Legend,
 } from "recharts";
-import { TOOLTIP_STYLE, GRID_STROKE, TICK_FILL, LABEL_FILL, LEGEND_STYLE, formatValue, type ChartRenderCtx } from "./shared";
+import { TOOLTIP_STYLE, GRID_STROKE, TICK_FILL, LABEL_FILL, LEGEND_STYLE, formatValue, type ChartRenderCtx, seriesName, seriesTooltip } from "./shared";
 
 export function renderRadarChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, palette, fmt, currency, print, showLegend } = ctx;
-  const radiusTickFormatter = (v: number) => formatValue(v, fmt, currency);
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
+  const radiusTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
+  const tooltipFormatter = seriesTooltip(ctx);
   // Radar is circular, so its size is capped by the SHORTER side of
   // whatever box it's given — and a report chart block is almost always
   // wide-and-short (the same block shape a bar/line chart wants), not
@@ -63,7 +65,7 @@ export function renderRadarChart(ctx: ChartRenderCtx): ReactElement {
         return (
           <Radar
             key={f}
-            name={f}
+            name={seriesName(f, ctx.cfg)}
             dataKey={f}
             stroke={color}
             fill={color}

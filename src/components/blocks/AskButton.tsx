@@ -10,6 +10,8 @@
 import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Sparkles, Send, Loader2 } from "lucide-react";
+import { useT } from "@/lib/i18n/LocaleContext";
+import { AiNotice } from "@/components/common/AiNotice";
 
 type Message = { role: "user" | "assistant"; text: string; citations?: Array<{ label: string; value: string }> };
 
@@ -26,6 +28,7 @@ export function AskButton({
   params?: Record<string, unknown>;
   suggestions?: string[];
 }) {
+  const { locale } = useT();
   const [open, setOpen] = React.useState(false);
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [input, setInput] = React.useState("");
@@ -46,7 +49,8 @@ export function AskButton({
       const res = await fetch(`/api/reports/${reportId}/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blockId, question: q, params: params ?? {} }),
+        // The reader's language, so the answer matches the interface (Issue 02).
+        body: JSON.stringify({ blockId, question: q, params: params ?? {}, locale }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Failed");
@@ -156,6 +160,7 @@ export function AskButton({
 
           <div className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
             Answers come from the rows behind this block only — no external data.
+            <AiNotice short className="mt-0.5 text-[10px]" />
           </div>
         </Popover.Content>
       </Popover.Portal>

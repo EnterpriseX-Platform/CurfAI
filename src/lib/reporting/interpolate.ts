@@ -14,12 +14,23 @@ export type Dataset = Record<string, Row[]>;
 
 export function interpolate(
   template: string,
-  ctx: { params?: Record<string, unknown>; row?: InterpolateRow }
+  ctx: {
+    params?: Record<string, unknown>;
+    row?: InterpolateRow;
+    /**
+     * Text a reader sees may show a value differently (a Thai reader gets
+     * "26 ก.ย. 2569" for a date param — see thaiDateLabel). Return null to
+     * keep String(v). Machine callers (action configs, Operate payloads)
+     * never pass this, so they always get the raw value.
+     */
+    display?: (v: unknown) => string | null;
+  }
 ): string {
   return template.replace(/\{\{\s*(param|row)\.([a-zA-Z0-9_]+)\s*\}\}/g, (_m, scope, key) => {
     const src = scope === "param" ? ctx.params : ctx.row;
     if (!src) return "";
     const v = src[key];
-    return v == null ? "" : String(v);
+    if (v == null) return "";
+    return ctx.display?.(v) ?? String(v);
   });
 }

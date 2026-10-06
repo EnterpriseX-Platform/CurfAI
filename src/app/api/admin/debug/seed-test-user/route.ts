@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
+import { withSystemDbContext } from "@/lib/dbContext";
 import { requireUser, requireAdmin } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -37,11 +38,12 @@ export async function POST(req: NextRequest) {
   }
 
   const passwordHash = await bcrypt.hash(body.password, 10);
-  const target = await prisma.user.upsert({
-    where: { email: body.email },
+  // Global account row (one per email) — outside this workspace's RLS filter.
+  const target = await withSystemDbContext(() => prisma.user.upsert({
+    where: { email: body.email! },
     update: { passwordHash, name: body.name ?? null },
-    create: { email: body.email, name: body.name ?? null, passwordHash },
-  });
+    create: { email: body.email!, name: body.name ?? null, passwordHash },
+  }));
   const membership = await prisma.membership.upsert({
     where: { userId_tenantId: { userId: target.id, tenantId: user.tenantId } },
     update: { role: body.role ?? "developer", rolesJson: JSON.stringify(body.rolesJson ?? []) },

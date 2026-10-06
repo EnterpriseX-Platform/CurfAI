@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
-import path from "node:path";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin, getUserRoles } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { writeVisibility, canSeeDataSource, type Visibility } from "@/lib/datasourceAcl";
 import { joinRestUrl } from "@/lib/reporting/restUrl";
-import { encodeRestConnection, decodeRestConnection, resolveRestHeaders, maskRestConnectionForClient } from "@/lib/connections/rest";
+import { encodeRestConnection, decodeRestConnection, resolveRestHeaders, maskRestConnectionForClient, restBaseUrlError } from "@/lib/connections/rest";
 import { encodePgConnection, maskPgConnectionForClient } from "@/lib/connections/postgres";
 import { encodeMyConnection, maskMyConnectionForClient } from "@/lib/connections/mysql";
 import { guardedFetch } from "@/lib/security/ssrfGuard";
 import { ee } from "@/ee";
 import { paidConnector, unsupportedKindResponse } from "@/lib/connections/paid";
+import { featureGate } from "@/lib/featureGate";
+import { tenantUploadRoot } from "@/lib/connections/excelImport";
+import { sqlitePathAllowed, SQLITE_PATH_REFUSED } from "@/lib/connections/sqlitePath";
+import { assertWarehouseHost } from "@/lib/connections/warehouseHost";
+import { decodeEngineConnection, encodeEngineConnection, engineBaseUrlError, maskEngineConnectionForClient, platformEngineUrl } from "@/lib/connections/engine";
 
 // Same preset resolver as data-sources/route.ts's create path — see that
 // file's comment for why HubSpot/Zendesk are "rest" presets, not their own
@@ -145,6 +149,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       createdAt: row.createdAt,
     });
   }
+  if (row.kind === "engine") {
+    let engine: ReturnType<typeof maskEngineConnectionForClient> | null = null;
+    try { engine = maskEngineConnectionForClient(row.connection); }
+    catch { engine = null; }
+    return NextResponse.json({
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      engine,
+      visibility,
+      createdAt: row.createdAt,
+    });
+  }
   return NextResponse.json({
     id: row.id,
     name: row.name,
@@ -259,6 +276,15 @@ const PatchSchema = z.discriminatedUnion("kind", [
     remotePath: z.string().min(1).optional(),
     visibility: VisibilityInputSchema,
   }),
+  // Java engine edit. A blank baseUrl switches the connection back to the platform's engine; omitting
+  // the field leaves it as it is.
+  z.object({
+    kind: z.literal("engine"),
+    name: z.string().min(1).optional(),
+    baseUrl: z.string().max(2048).optional(),
+    audience: z.string().max(256).optional(),
+    visibility: VisibilityInputSchema,
+  }),
 ]);
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -292,6 +318,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const restPreset = resolveRestPreset(parsed.data.preset);
     let existingBaseUrl = "";
     try { existingBaseUrl = decodeRestConnection(existing.connection).baseUrl; } catch { /* corrupt — require a fresh baseUrl */ }
+    const nextBaseUrl = restPreset?.baseUrl ?? parsed.data.baseUrl;
+    if (nextBaseUrl !== undefined && nextBaseUrl !== existingBaseUrl) {
+      const urlError = await restBaseUrlError(nextBaseUrl);
+      if (urlError) {
+        return NextResponse.json({ error: urlError, issues: [{ path: ["baseUrl"], message: urlError }] }, { status: 400 });
+      }
+    }
     data.connection = encodeRestConnection(
       restPreset
         ? { baseUrl: restPreset.baseUrl, headers: restPreset.headers, presetKind: restPreset.presetKind }
@@ -299,11 +332,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       existing.connection,
     );
   } else if (parsed.data.kind === "sqlite") {
-    if (parsed.data.connection !== undefined) data.connection = parsed.data.connection;
+    if (parsed.data.connection !== undefined) {
+      if (!sqlitePathAllowed(user.tenantId, parsed.data.connection)) {
+        return NextResponse.json({ error: SQLITE_PATH_REFUSED }, { status: 400 });
+      }
+      data.connection = parsed.data.connection;
+    }
   } else if (parsed.data.kind === "postgres") {
     // Merge supplied fields onto the stored shape. encodePgConnection
     // reuses the existing passwordEnc when no fresh password is provided.
     const stored = safeParseJson<any>(existing.connection) ?? {};
+    try { await assertWarehouseHost(parsed.data.host ?? stored.host); }
+    catch (e: any) { return NextResponse.json({ error: e?.message ?? "Host not allowed" }, { status: 400 }); }
     data.connection = encodePgConnection(
       {
         host: parsed.data.host ?? stored.host,
@@ -318,6 +358,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
   } else if (parsed.data.kind === "mysql") {
     const stored = safeParseJson<any>(existing.connection) ?? {};
+    try { await assertWarehouseHost(parsed.data.host ?? stored.host); }
+    catch (e: any) { return NextResponse.json({ error: e?.message ?? "Host not allowed" }, { status: 400 }); }
     data.connection = encodeMyConnection(
       {
         host: parsed.data.host ?? stored.host,
@@ -335,11 +377,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const connector = paidConnector(parsed.data.kind);
     if (!connector) return unsupportedKindResponse(parsed.data.kind);
     data.connection = connector.encodeUpdate(parsed.data, existing.connection);
+  } else if (parsed.data.kind === "engine") {
+    let stored: { baseUrl?: string; audience?: string } = {};
+    try { stored = decodeEngineConnection(existing.connection); } catch { /* corrupt — start from the supplied fields */ }
+    const baseUrl = parsed.data.baseUrl !== undefined ? parsed.data.baseUrl.trim() : stored.baseUrl ?? "";
+    if (baseUrl && baseUrl !== stored.baseUrl) {
+      const urlError = await engineBaseUrlError(baseUrl);
+      if (urlError) return NextResponse.json({ error: urlError, issues: [{ path: ["baseUrl"], message: urlError }] }, { status: 400 });
+    }
+    if (!baseUrl && !platformEngineUrl()) {
+      const msg = "Give this connection an engine URL: this Curf has no platform engine to fall back on.";
+      return NextResponse.json({ error: msg, issues: [{ path: ["baseUrl"], message: msg }] }, { status: 400 });
+    }
+    data.connection = encodeEngineConnection({ baseUrl, audience: parsed.data.audience !== undefined ? parsed.data.audience : stored.audience });
   }
   // Excel: no connection-shape fields; refresh-from-file handles data updates.
 
   // Visibility (any kind): owner_only is bound to the CURRENT user. If an
   // admin transfers ownership to themselves they explicitly issue the PATCH.
+  if (parsed.data.visibility && parsed.data.visibility.mode !== "tenant") {
+    // See the POST route — gov.connection_acl covers owner_only/roles only.
+    const aclBlock = await featureGate(user, "gov.connection_acl");
+    if (aclBlock) return aclBlock;
+  }
   if (parsed.data.visibility) {
     const v: Visibility =
       parsed.data.visibility.mode === "tenant"     ? { mode: "tenant" }
@@ -382,12 +442,12 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
   try {
     await prisma.dataSource.delete({ where: { id: params.id } });
-    // For Excel imports, the SQLite file lives under var/tenants/<id>/uploads/.
+    // For Excel imports, the SQLite file lives under tenantUploadRoot(<id>)/uploads/.
     // Clean it up so deleted connections don't leave orphan .db files on disk.
     // Best-effort: a stale file on disk is annoying but not a correctness bug,
     // so we don't block the response on filesystem errors.
     if (existing.kind === "excel" && existing.connection) {
-      const expectedPrefix = path.join(process.cwd(), "var", "tenants", user.tenantId);
+      const expectedPrefix = tenantUploadRoot(user.tenantId);
       // Path-traversal guard: only unlink if the connection points inside the
       // tenant's own upload dir. Belt-and-braces — the upload route only ever
       // writes there, but we don't want a malformed connection string to
@@ -413,14 +473,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   // Connections are admin-managed. Every test-* action below reaches an
-  // outbound fetch (test-rest = SSRF) or opens an arbitrary local file
-  // (test-sqlite = filesystem existence/enumeration oracle) with
-  // caller-supplied targets — gate them to admins, not any authenticated
-  // viewer. (Deeper host/path validation on those sinks is tracked separately.)
+  // outbound fetch (test-rest, guarded via guardedFetch()/assertPublicHttpUrl
+  // — see ssrfGuard.ts) or opens an arbitrary local file (test-sqlite =
+  // filesystem existence/enumeration oracle) with caller-supplied targets —
+  // gate them to admins, not any authenticated viewer.
   if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   if (params.id === "test-rest") return testRest(req);
-  if (params.id === "test-sqlite") return testSqlite(req);
+  if (params.id === "test-sqlite") return testSqlite(req, user.tenantId);
   if (params.id === "test-postgres") return testPostgres(req);
   if (params.id === "test-mysql") return testMysql(req);
   if (params.id.startsWith("test-")) {
@@ -508,10 +568,13 @@ async function testRest(req: NextRequest) {
   }
 }
 
-async function testSqlite(req: NextRequest) {
+async function testSqlite(req: NextRequest, tenantId: string) {
   const input = await req.json().catch(() => null) as { connection?: string } | null;
   const path = input?.connection?.trim();
   if (!path) return NextResponse.json({ error: "connection (file path) required" }, { status: 400 });
+  // Opening a caller-supplied path is a file-existence and table-listing
+  // oracle for the whole server; only this workspace's own files may be tested.
+  if (!sqlitePathAllowed(tenantId, path)) return NextResponse.json({ error: SQLITE_PATH_REFUSED }, { status: 400 });
 
   const Database = (await import("better-sqlite3")).default;
   const started = Date.now();
@@ -597,6 +660,8 @@ async function testPostgres(req: NextRequest) {
     return NextResponse.json({ error: e?.message ?? "Could not resolve connection" }, { status: 400 });
   }
 
+  try { await assertWarehouseHost(cfg.host); }
+  catch (e: any) { return NextResponse.json({ error: e?.message ?? "Host not allowed" }, { status: 400 }); }
   const started = Date.now();
   const client = new PgClient(cfg);
   try {
@@ -677,6 +742,8 @@ async function testMysql(req: NextRequest) {
     return NextResponse.json({ error: e?.message ?? "Could not resolve connection" }, { status: 400 });
   }
 
+  try { await assertWarehouseHost(cfg.host); }
+  catch (e: any) { return NextResponse.json({ error: e?.message ?? "Host not allowed" }, { status: 400 }); }
   const started = Date.now();
   let conn: any;
   try {

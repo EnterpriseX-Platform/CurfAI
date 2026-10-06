@@ -12,6 +12,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/lib/toast";
+import { useT } from "@/lib/i18n/LocaleContext";
+import { exportFailureToast, fetchExport } from "@/lib/reporting/exportDownload";
+import { saveBlob } from "@/components/reports/useReportExport";
 
 type ScheduleItem = {
   id: string;
@@ -26,13 +29,13 @@ type ScheduleItem = {
   lastStatus?: string | null;
 };
 
-const CRON_PRESETS: { label: string; expr: string }[] = [
-  { label: "Every weekday at 07:00",       expr: "0 7 * * 1-5" },
-  { label: "Every Monday at 07:00",        expr: "0 7 * * 1" },
-  { label: "Every day at 07:00",           expr: "0 7 * * *" },
-  { label: "Every Monday at 17:00",        expr: "0 17 * * 1" },
-  { label: "First of the month at 06:00",  expr: "0 6 1 * *" },
-  { label: "Every hour",                   expr: "0 * * * *" },
+const CRON_PRESETS: { labelKey: string; expr: string }[] = [
+  { labelKey: "schedules.preset.weekdays0700",   expr: "0 7 * * 1-5" },
+  { labelKey: "schedules.preset.monday0700",     expr: "0 7 * * 1" },
+  { labelKey: "schedules.preset.daily0700",      expr: "0 7 * * *" },
+  { labelKey: "schedules.preset.monday1700",     expr: "0 17 * * 1" },
+  { labelKey: "schedules.preset.monthFirst0600", expr: "0 6 1 * *" },
+  { labelKey: "schedules.preset.hourly",         expr: "0 * * * *" },
 ];
 
 export function ScheduleDrawer({
@@ -43,13 +46,17 @@ export function ScheduleDrawer({
   open: boolean;
   onClose: () => void;
 }) {
+  const { t } = useT();
   const { push } = useToast();
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
 
-  const [name, setName] = useState("Weekly delivery");
+  // null = untouched: show the default name in the current locale rather than
+  // freezing whichever locale was active when the toolbar mounted.
+  const [nameInput, setNameInput] = useState<string | null>(null);
+  const name = nameInput ?? t("schedules.defaultName");
   const [cron, setCron] = useState("0 7 * * 1");
   const [format, setFormat] = useState<"pdf" | "xlsx" | "docx" | "csv">("pdf");
   const [recipients, setRecipients] = useState("");
@@ -73,7 +80,7 @@ export function ScheduleDrawer({
 
   async function create() {
     if (!name || !cron) {
-      push({ variant: "destructive", title: "Missing fields", description: "Name and cron are required." });
+      push({ variant: "destructive", title: t("common.missingFields"), description: t("schedules.nameAndCronRequired") });
       return;
     }
     setCreating(true);
@@ -88,11 +95,11 @@ export function ScheduleDrawer({
         }),
       });
       if (!r.ok) {
-        push({ variant: "destructive", title: "Create failed", description: await r.text() });
+        push({ variant: "destructive", title: t("schedules.createFailed"), description: await r.text() });
         return;
       }
-      push({ variant: "success", title: "Schedule created" });
-      setName("Weekly delivery"); setCron("0 7 * * 1"); setRecipients(""); setFormat("pdf");
+      push({ variant: "success", title: t("schedules.created") });
+      setNameInput(null); setCron("0 7 * * 1"); setRecipients(""); setFormat("pdf");
       refresh();
     } finally { setCreating(false); }
   }
@@ -107,10 +114,10 @@ export function ScheduleDrawer({
   }
 
   async function remove(id: string) {
-    if (!confirm("Delete this schedule?")) return;
+    if (!confirm(t("schedules.confirmDelete"))) return;
     const r = await fetch("/api/schedules/" + id, { method: "DELETE" });
     if (!r.ok) {
-      push({ variant: "destructive", title: "Delete failed", description: await r.text() });
+      push({ variant: "destructive", title: t("schedules.deleteFailed"), description: await r.text() });
       return;
     }
     refresh();
@@ -119,21 +126,13 @@ export function ScheduleDrawer({
   async function runNow(id: string) {
     setRunningId(id);
     try {
-      const r = await fetch("/api/schedules/" + id + "/run", { method: "POST" });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: "Run failed" }));
-        push({ variant: "destructive", title: "Run failed", description: err.error });
+      const res = await fetchExport("/api/schedules/" + id + "/run", "report", { method: "POST" });
+      if (!res.ok) {
+        push(exportFailureToast(res, t, t("schedules.runFailed")));
         return;
       }
-      const blob = await r.blob();
-      const cd = r.headers.get("content-disposition") ?? "";
-      const match = /filename="([^"]+)"/.exec(cd);
-      const fname = match?.[1] ?? "report";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = fname; a.click();
-      URL.revokeObjectURL(url);
-      push({ variant: "success", title: "Ran and downloaded" });
+      saveBlob(res.blob, res.filename);
+      push({ variant: "success", title: t("schedules.ranAndDownloaded") });
       refresh();
     } finally { setRunningId(null); }
   }
@@ -141,6 +140,7 @@ export function ScheduleDrawer({
   // Portal so the drawer escapes any ancestor that establishes a containing
   // block via transform/filter/backdrop-filter (the toolbar uses backdrop-blur).
   if (!open || typeof document === "undefined") return null;
+  const [forPre, forPost] = t("schedules.forReport").split("{report}");
   return createPortal((
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
@@ -149,11 +149,11 @@ export function ScheduleDrawer({
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <div>
-              <h2 className="text-sm font-semibold leading-tight">Schedules</h2>
-              <p className="text-[11px] text-muted-foreground">for <span className="font-medium text-foreground">{reportName}</span></p>
+              <h2 className="text-sm font-semibold leading-tight">{t("schedules.breadcrumb")}</h2>
+              <p className="text-[11px] text-muted-foreground">{forPre}<span className="font-medium text-foreground">{reportName}</span>{forPost}</p>
             </div>
           </div>
-          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} aria-label="Close">
+          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} aria-label={t("action.close")}>
             <X className="h-4 w-4" />
           </Button>
         </header>
@@ -162,14 +162,14 @@ export function ScheduleDrawer({
           <section className="border-b border-border px-5 py-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Active schedules
+                {t("schedules.activeHeading")}
               </h3>
               {loading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
             </div>
             {items.length === 0 ? (
               <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-center">
                 <Calendar className="mx-auto mb-2 h-5 w-5 text-muted-foreground" />
-                <p className="text-xs text-muted-foreground">No schedules yet for this report.</p>
+                <p className="text-xs text-muted-foreground">{t("schedules.emptyForReport")}</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -186,33 +186,35 @@ export function ScheduleDrawer({
                           <span className="text-[11px]">
                             {s.lastRunAt ? (
                               <span className={s.lastStatus === "ok" ? "text-success" : "text-destructive"}>
-                                last: {new Date(s.lastRunAt).toLocaleString()} - {s.lastStatus}
+                                {t("schedules.lastRunStatus")
+                                  .replace("{when}", new Date(s.lastRunAt).toLocaleString())
+                                  .replace("{status}", s.lastStatus ?? "")}
                               </span>
-                            ) : <span className="italic">never run</span>}
+                            ) : <span className="italic">{t("schedules.neverRun")}</span>}
                           </span>
                         </div>
                         {s.recipients.length > 0 && (
                           <div className="mt-1 truncate text-[11px] text-muted-foreground">
-                            to: {s.recipients.join(", ")}
+                            {t("schedules.recipientsTo").replace("{recipients}", s.recipients.join(", "))}
                           </div>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-0.5">
-                        <label className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[11px] hover:bg-accent" title="Enabled">
+                        <label className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[11px] hover:bg-accent" title={t("schedules.colEnabled")}>
                           <input
                             type="checkbox"
                             checked={s.enabled}
                             onChange={(e) => toggle(s.id, e.target.checked)}
                             className="h-3 w-3 accent-[hsl(var(--primary))]"
                           />
-                          {s.enabled ? "on" : "off"}
+                          {s.enabled ? t("schedules.enabledOn") : t("schedules.enabledOff")}
                         </label>
                         <Button
                           size="icon" variant="ghost"
                           className="h-7 w-7"
                           onClick={() => runNow(s.id)}
                           disabled={runningId === s.id}
-                          title="Run now and download"
+                          title={t("schedules.runNowAndDownload")}
                         >
                           {runningId === s.id
                             ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -222,7 +224,7 @@ export function ScheduleDrawer({
                           size="icon" variant="ghost"
                           className="h-7 w-7"
                           onClick={() => remove(s.id)}
-                          title="Delete schedule"
+                          title={t("schedules.deleteSchedule")}
                         >
                           <Trash2 className="h-3.5 w-3.5 text-destructive/80" />
                         </Button>
@@ -236,27 +238,27 @@ export function ScheduleDrawer({
 
           <section className="px-5 py-4">
             <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              New schedule
+              {t("schedules.newHeading")}
             </h3>
             <div className="grid gap-3">
               <div className="grid gap-1">
-                <Label className="text-xs">Name</Label>
+                <Label className="text-xs">{t("common.name")}</Label>
                 <Input
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Weekly Monday digest"
+                  onChange={(e) => setNameInput(e.target.value)}
+                  placeholder={t("schedules.digestNamePlaceholder")}
                   className="h-8 text-xs"
                 />
               </div>
               <div className="grid gap-1">
-                <Label className="text-xs">Frequency</Label>
+                <Label className="text-xs">{t("schedules.frequencyLabel")}</Label>
                 <Select value={CRON_PRESETS.find((p) => p.expr === cron)?.expr ?? "custom"} onValueChange={(v) => v !== "custom" && setCron(v)}>
                   <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {CRON_PRESETS.map((p) => (
-                      <SelectItem key={p.expr} value={p.expr}>{p.label}</SelectItem>
+                      <SelectItem key={p.expr} value={p.expr}>{t(p.labelKey)}</SelectItem>
                     ))}
-                    <SelectItem value="custom">Custom cron...</SelectItem>
+                    <SelectItem value="custom">{t("schedules.customCron")}</SelectItem>
                   </SelectContent>
                 </Select>
                 <Input
@@ -266,12 +268,12 @@ export function ScheduleDrawer({
                   className="h-7 font-mono text-[11px]"
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  Five fields: minute hour day-of-month month day-of-week. The cron sweep runs every minute via /api/cron/tick.
+                  {t("schedules.cronFieldsHint")}
                 </p>
               </div>
               <div className="grid grid-cols-[1fr_120px] gap-3">
                 <div className="grid gap-1">
-                  <Label className="text-xs">Recipients <span className="font-normal text-muted-foreground">(comma-separated)</span></Label>
+                  <Label className="text-xs">{t("schedules.recipientsLabel")} <span className="font-normal text-muted-foreground">{t("schedules.commaSeparated")}</span></Label>
                   <Input
                     value={recipients}
                     onChange={(e) => setRecipients(e.target.value)}
@@ -280,7 +282,7 @@ export function ScheduleDrawer({
                   />
                 </div>
                 <div className="grid gap-1">
-                  <Label className="text-xs">Format</Label>
+                  <Label className="text-xs">{t("schedules.formatLabel")}</Label>
                   <Select value={format} onValueChange={(v) => setFormat(v as any)}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -293,7 +295,7 @@ export function ScheduleDrawer({
                 </div>
               </div>
               <Button size="sm" onClick={create} disabled={creating || !name || !cron}>
-                {creating ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Saving...</> : <><Plus className="mr-1.5 h-4 w-4" /> Create schedule</>}
+                {creating ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("schedules.saving")}</> : <><Plus className="mr-1.5 h-4 w-4" /> {t("schedules.createButton")}</>}
               </Button>
             </div>
           </section>

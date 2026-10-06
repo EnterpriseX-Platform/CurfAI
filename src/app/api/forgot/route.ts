@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ensureLimit } from "@/lib/rateLimit";
 import { clientIp } from "@/lib/security/clientIp";
+import { appBase } from "@/lib/http/appBase";
 
 /**
  * POST /api/forgot — start a password reset.
@@ -73,7 +74,7 @@ export async function POST(req: NextRequest) {
 
     // Send the email. Uses the same SMTP path as scheduled delivery; if SMTP
     // isn't configured we log the link so dev admins can still see it.
-    const origin = new URL(req.url).origin;
+    const origin = appBase(req);
     const resetUrl = `${origin}/reset/${raw}`;
     try {
       const mod = await import("@/lib/delivery/dispatch");

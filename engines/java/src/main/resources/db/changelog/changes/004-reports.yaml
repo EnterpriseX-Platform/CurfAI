@@ -1,0 +1,53 @@
+databaseChangeLog:
+  - changeSet:
+      id: 009-engine-report
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_report
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: name, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: definition, type: jsonb, constraints: { nullable: false } }
+              - column: { name: run_roles, type: jsonb, constraints: { nullable: false } }
+              - column: { name: version, type: int, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: updated_by, type: varchar(255), constraints: { nullable: false } }
+        - addUniqueConstraint:
+            tableName: engine_report
+            columnNames: tenant_id, name
+            constraintName: uq_engine_report_tenant_name
+      rollback:
+        - dropTable:
+            tableName: engine_report
+
+  - changeSet:
+      id: 010-engine-report-version
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_report_version
+            columns:
+              - column: { name: report_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: version_no, type: int, constraints: { nullable: false } }
+              - column: { name: definition, type: jsonb, constraints: { nullable: false } }
+              - column: { name: saved_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: saved_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: note, type: varchar(500) }
+        - addPrimaryKey:
+            tableName: engine_report_version
+            columnNames: report_id, version_no
+            constraintName: pk_engine_report_version
+        - addForeignKeyConstraint:
+            baseTableName: engine_report_version
+            baseColumnNames: report_id
+            referencedTableName: engine_report
+            referencedColumnNames: id
+            constraintName: fk_engine_report_version_report
+            onDelete: CASCADE
+      rollback:
+        - dropTable:
+            tableName: engine_report_version

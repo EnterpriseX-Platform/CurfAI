@@ -13,6 +13,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { AiNotice } from "@/components/common/AiNotice";
 import { Sparkles, X, Loader2 } from "lucide-react";
 import { useTheme } from "@/components/providers/ThemeProvider";
 
@@ -206,6 +207,7 @@ function WhyContent({ data, metric }: { data: WhyResponse; metric: string }) {
             <Sparkles className="h-3 w-3" /> AI explanation
           </div>
           <p>{narrative}</p>
+          <AiNotice className="mt-2" />
         </section>
       ) : (
         <p className="text-xs italic text-muted-foreground">

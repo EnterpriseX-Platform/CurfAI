@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import path from "node:path";
 import fs from "node:fs";
 import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
-import { parseExcelToSqlite, MAX_FILE_BYTES } from "@/lib/connections/excelImport";
+import { parseExcelToSqlite, MAX_FILE_BYTES, tenantUploadRoot } from "@/lib/connections/excelImport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +40,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
   }
 
-  const expectedPrefix = path.join(process.cwd(), "var", "tenants", user.tenantId);
+  const expectedPrefix = tenantUploadRoot(user.tenantId);
   if (!existing.connection?.startsWith(expectedPrefix)) {
     // Either the row points outside the tenant tree (impossible via the upload
     // route, but defensive) or the field is empty. Refuse rather than write

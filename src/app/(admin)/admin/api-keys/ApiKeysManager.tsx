@@ -10,6 +10,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/lib/toast";
+import { featureAvailable } from "@/lib/featureTiers";
+import { UpgradeLock } from "@/components/common/UpgradeLock";
 
 type Key = {
   id: string;
@@ -25,9 +27,10 @@ type Key = {
 };
 type ReportOpt = { id: string; name: string };
 
-export function ApiKeysManager({ initial, reports }: { initial: Key[]; reports: ReportOpt[] }) {
+export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; reports: ReportOpt[]; tier: string | null }) {
   const { t } = useT();
   const { push } = useToast();
+  const canMint = featureAvailable(tier, "gov.api_keys");
   const [keys, setKeys] = useState<Key[]>(initial);
   const [name, setName] = useState("");
   const [role, setRole] = useState<"viewer" | "executive" | "developer" | "admin">("viewer");
@@ -107,6 +110,9 @@ export function ApiKeysManager({ initial, reports }: { initial: Key[]; reports: 
 
   return (
     <div className="grid gap-6">
+      {!canMint ? (
+        <UpgradeLock feature="gov.api_keys" currentTier={tier} />
+      ) : (
       <section className="rounded-lg border bg-card p-5 shadow-xs">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {t("admin.apikeys.mintTitle")}
@@ -208,6 +214,7 @@ export function ApiKeysManager({ initial, reports }: { initial: Key[]; reports: 
           </div>
         )}
       </section>
+      )}
 
       <section>
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

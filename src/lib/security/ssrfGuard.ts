@@ -75,7 +75,37 @@ function isBlockedIpv6(ip: string): boolean {
     const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
     return isBlockedIpv4(dotted);
   }
+
+  // Other encodings that carry an IPv4 address inside an IPv6 one — each
+  // routes to that IPv4 host, so a private one inside must be refused too.
+  const g = expandIpv6(lower);
+  if (!g) return false;
+  const v4 = (hi: number, lo: number) => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  if ((g[0] & 0xffc0) === 0xfec0) return true; // fec0::/10 site-local (deprecated, still routable on some stacks)
+  if (g[0] === 0x2002) return isBlockedIpv4(v4(g[1], g[2])); // 2002::/16 6to4
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return isBlockedIpv4(v4(g[6], g[7])); // 64:ff9b::/96 NAT64
+  if (g.slice(0, 6).every((x) => x === 0)) return isBlockedIpv4(v4(g[6], g[7])); // ::a.b.c.d IPv4-compatible
   return false;
+}
+
+/** An IPv6 address as its eight 16-bit groups, or null if it isn't one. Handles "::" and a dotted-quad tail. */
+function expandIpv6(ip: string): number[] | null {
+  let s = ip;
+  const dotted = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const parts = dotted[2].split(".").map(Number);
+    if (parts.some((p) => p > 255)) return null;
+    s = `${dotted[1]}${((parts[0] << 8) | parts[1]).toString(16)}:${((parts[2] << 8) | parts[3]).toString(16)}`;
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const groups = [...head, ...Array(fill).fill("0"), ...tail];
+  if (groups.length !== 8 || groups.some((x) => !/^[0-9a-f]{1,4}$/.test(x))) return null;
+  return groups.map((x) => parseInt(x, 16));
 }
 
 /**
@@ -109,8 +139,10 @@ export async function assertPublicHost(hostname: string): Promise<void> {
   try {
     addresses = await dns.lookup(bare, { all: true });
   } catch {
-    // Unresolvable host — let the real connection fail with its own network error.
-    return;
+    // Fail closed. Letting an unresolvable host through meant the check
+    // passed while the real connection's own lookup — moments later —
+    // could resolve it to anything, private addresses included.
+    throw new Error(`Refusing to connect to "${bare}" — the host could not be resolved`);
   }
   for (const { address, family } of addresses) {
     const blocked = family === 4 ? isBlockedIpv4(address) : isBlockedIpv6(address);

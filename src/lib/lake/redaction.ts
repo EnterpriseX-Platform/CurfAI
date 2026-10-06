@@ -88,3 +88,12 @@ export function readsSensitiveData(viewer: RedactionViewer, schema: LakeColumn[]
   const redactedColumns = schema.filter((c) => shouldRedact(viewer, c)).map((c) => c.name);
   return { any: redactedColumns.length > 0, redactedColumns };
 }
+
+/**
+ * `schema` with each masked column's `sample` masked too — a sample is a
+ * value from the table, so a column list sent beside masked rows can't carry
+ * the raw one. Returns new objects; the input is untouched.
+ */
+export function redactSamples<C extends LakeColumn>(schema: C[], viewer: RedactionViewer): C[] {
+  return schema.map((c) => (c.sample != null && c.sample !== "" && shouldRedact(viewer, c) ? { ...c, sample: redactionMaskFor(c.sensitivity!) } : c));
+}

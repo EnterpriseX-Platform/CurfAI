@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { linearFit, projectSeries, withForecast, exponentialSmoothingFit, projectSeriesETS, detectCadenceUnit } from "./forecast";
+import {
+  linearFit, projectSeries, withForecast, exponentialSmoothingFit, projectSeriesETS, detectCadenceUnit, hasForecastHistory, MIN_FORECAST_POINTS,
+  modelForecastValues, drawnForecastMethod, spliceModelValues,
+} from "./forecast";
+
+describe("hasForecastHistory", () => {
+  it("needs MIN_FORECAST_POINTS real values: two year-end balances are not a trend", () => {
+    expect(MIN_FORECAST_POINTS).toBe(4);
+    expect(hasForecastHistory([{ y: 9959 }, { y: 885444 }], "y")).toBe(false);
+    expect(hasForecastHistory([{ y: 1 }, { y: 2 }, { y: 3 }, { y: 4 }], "y")).toBe(true);
+  });
+
+  it("counts only real numbers, so empty periods do not make up the history", () => {
+    expect(hasForecastHistory([{ y: 1 }, { y: null }, { y: "" }, { y: 3 }, { y: "4" }], "y")).toBe(false);
+    expect(hasForecastHistory([{ y: 1 }, { y: 2 }, { y: 3 }, { y: 4 }], undefined)).toBe(false);
+  });
+});
 
 describe("linearFit", () => {
   it("returns null for fewer than 2 finite points", () => {
@@ -188,6 +204,57 @@ describe("detectCadenceUnit", () => {
 
   it("falls back to \"point\" for unrecognized label formats", () => {
     expect(detectCadenceUnit([{ d: "Alpha" }, { d: "Beta" }], "d")).toEqual({ unit: "point" });
+  });
+});
+
+/**
+ * A chart set to the AI forecast, on the day the provider account ran out
+ * of credit (2026-09-30): the server sent the straight line back, the chart
+ * drew it under "AI forecast", and the band read "as low as -2K" for sales.
+ */
+describe("the AI forecast when the model did, and did not, answer", () => {
+  // 13 days of a book fair's sales.
+  const days = [22706, 1470, 29416, 40859, 18600, 10070, 18068, 15108, 16988, 31004, 33275, 19549, 9009].map((y, i) => ({ d: `d${i}`, y }));
+
+  it("takes only the model's own numbers from the route's answer", () => {
+    expect(modelForecastValues({ values: [1, 2, 3], source: "llm" }, 3)).toEqual([1, 2, 3]);
+    // The provider failed: the route echoes the straight line, marked as one.
+    expect(modelForecastValues({ values: [1, 2, 3], source: "linear" }, 3)).toBeNull();
+    expect(modelForecastValues({ values: [1, 2], source: "llm" }, 3)).toBeNull();
+    expect(modelForecastValues({ values: [1, "2", null], source: "llm" }, 3)).toBeNull();
+    expect(modelForecastValues(null, 3)).toBeNull();
+    expect(modelForecastValues({ error: "Unauthorized" }, 3)).toBeNull();
+  });
+
+  it("names the projection by what drew it, not by what was asked for", () => {
+    expect(drawnForecastMethod("llm", false)).toBe("linear");
+    expect(drawnForecastMethod("llm", true)).toBe("llm");
+    expect(drawnForecastMethod("ets", false)).toBe("ets");
+    expect(drawnForecastMethod("linear", false)).toBe("linear");
+  });
+
+  it("keeps the band around the model's values at or above zero for a series that never went below it", () => {
+    const line = projectSeries(days, "y", 6, { xField: "d" });
+    // The straight line's own band already stops at zero.
+    expect(Math.min(...line.map((p) => p.__lower))).toBe(0);
+    const spliced = spliceModelValues(line, "y", [20000, 20000, 20000, 20000, 20000, 20000], days);
+    expect(spliced.map((p) => p.y)).toEqual([20000, 20000, 20000, 20000, 20000, 20000]);
+    expect(spliced.map((p) => p.d)).toEqual(line.map((p) => p.d));
+    for (const p of spliced) {
+      expect(p.__lower).toBeGreaterThanOrEqual(0);
+      expect(p.__upper).toBeGreaterThan(20000);
+    }
+    // A model that answers below zero is held to zero as well.
+    expect(spliceModelValues(line, "y", [-500], days)[0].y).toBe(0);
+    // Fewer values than points: the rest stay on the line.
+    expect(spliceModelValues(line, "y", [20000], days)[1]).toBe(line[1]);
+  });
+
+  it("leaves the band free to go below zero for a series that has been there", () => {
+    const pnl = [{ y: 400 }, { y: -300 }, { y: 250 }, { y: -100 }, { y: 50 }];
+    const line = projectSeries(pnl, "y", 1);
+    expect(spliceModelValues(line, "y", [-50], pnl)[0]).toMatchObject({ y: -50 });
+    expect(spliceModelValues(line, "y", [-50], pnl)[0].__lower).toBeLessThan(-50);
   });
 });
 

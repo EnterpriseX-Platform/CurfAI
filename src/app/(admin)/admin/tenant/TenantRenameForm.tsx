@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { Save, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +14,8 @@ import { useToast } from "@/lib/toast";
  */
 export function TenantRenameForm({ initial }: { initial: { id: string; name: string; slug: string } }) {
   const { push } = useToast();
+  const router = useRouter();
+  const { update } = useSession();
   const [name, setName] = useState(initial.name);
   const [saving, setSaving] = useState(false);
 
@@ -31,6 +35,15 @@ export function TenantRenameForm({ initial }: { initial: { id: string; name: str
         return;
       }
       push({ variant: "success", title: "Tenant renamed" });
+      // useSession()'s client cache doesn't know the DB changed under it —
+      // session()'s own callback already re-reads membership names fresh on
+      // every invocation (see auth.ts), so the fix is just making the client
+      // ask again: update() re-hits /api/auth/session, router.refresh() then
+      // re-renders the server components (breadcrumb, page header) that read
+      // the old name via getServerSession(). Same pairing DeleteWorkspacePanel
+      // uses after its own tenant-affecting mutation.
+      await update({ refreshMemberships: true });
+      router.refresh();
     } finally {
       setSaving(false);
     }

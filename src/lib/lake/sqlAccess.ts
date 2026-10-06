@@ -20,6 +20,7 @@ import { prisma } from "@/lib/db";
 import { canRead, loadRoleSlugs, type LakeViewer } from "./acl";
 import { applyRedaction, type RedactionViewer } from "./redaction";
 import type { LakeColumn } from "./tables";
+import { parseSchemaJson } from "./schemaGovernance";
 
 export type SqlAccessViewer = { id: string; tenantId: string; role: string };
 
@@ -32,8 +33,15 @@ export type SqlAccessResult =
  * table name appears as its own token in FROM/JOIN, quoted or bare) while
  * staying immune to the identifier-injection concerns a full SQL parser
  * would introduce. Anchored so "loan" doesn't match "loan_portfolio".
+ *
+ * Exported so `dateColumnNames.ts` can reuse the exact same "does this SQL
+ * touch this table" rule to decide which typed date columns are safe to
+ * reformat in a DuckDB result, and so `sourceGovernance.ts` can agree with
+ * this file on which tables (and, for its fail-closed rule, which column
+ * names) a query touches — three different concerns from this file's own
+ * ACL/redaction one, but the same underlying question.
  */
-function referencesTable(sql: string, tableName: string): boolean {
+export function referencesTable(sql: string, tableName: string): boolean {
   const escaped = tableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[^A-Za-z0-9_])${escaped}($|[^A-Za-z0-9_])`, "i").test(sql);
 }
@@ -66,10 +74,8 @@ export async function checkSqlAccess(opts: {
     if (!canRead(lakeViewer, { ownerUserId: t.ownerUserId, visibleToRolesJson: t.visibleToRolesJson, tenantId: opts.tenantId })) {
       return { ok: false, error: `You don't have access to table "${t.name}".` };
     }
-    try {
-      const parsed = JSON.parse(t.schemaJson || "[]");
-      if (Array.isArray(parsed)) schema.push(...parsed);
-    } catch { /* malformed schema cache — nothing to redact for this table */ }
+    // A malformed schema cache parses to [] — nothing to redact for this table.
+    schema.push(...parseSchemaJson(t.schemaJson));
   }
   return { ok: true, schema };
 }

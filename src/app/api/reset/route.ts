@@ -37,15 +37,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Reset link is invalid or has expired" }, { status: 400 });
   }
 
+  // Claim the token atomically before using it: two requests racing with the
+  // same link both passed the read above, and each set a password. Only the
+  // one whose update flips usedAt from null proceeds (same as /work tokens).
+  const claimed = await prisma.passwordResetToken.updateMany({
+    where: { id: row.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+  if (claimed.count !== 1) {
+    return NextResponse.json({ error: "Reset link is invalid or has expired" }, { status: 400 });
+  }
+
   const passwordHash = await bcrypt.hash(parsed.data.password, 10);
   const target = await prisma.user.update({
     where: { id: row.userId },
-    data: { passwordHash },
+    data: { passwordHash, passwordChangedAt: new Date() },
     select: { id: true, email: true },
-  });
-  await prisma.passwordResetToken.update({
-    where: { id: row.id },
-    data: { usedAt: new Date() },
   });
 
   // One passwordHash change takes effect for every workspace this email

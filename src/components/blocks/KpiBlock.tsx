@@ -2,15 +2,16 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ExternalLink, Loader2, Play, X } from "lucide-react";
-import { formatCurrency, formatNumber, formatPercent, isIdentifierLabel } from "@/lib/reporting/format";
+import { formatCurrency, formatNumber, formatPercent, isIdentifierLabel, kpiChange, readsThaiMoney, thaiMoney } from "@/lib/reporting/format";
 import { projectSeries, projectSeriesETS } from "@/lib/reporting/forecast";
 import { FORECAST_COLOR } from "./charts/PredictionOverlay";
 import type { ForecastConfig } from "@/lib/reporting/schema";
 import type { ProvenanceRecord } from "@/lib/reporting/provenance";
-import { currencySymbol } from "@/lib/reporting/currency";
-import { computeKpiValue, kpiDelta, pickKpiCompare } from "@/lib/reporting/kpi";
+import { currencySymbol, DEFAULT_CURRENCY } from "@/lib/reporting/currency";
+import { computeKpiValue, kpiDelta, kpiVsPlan, pickKpiCompare, pickKpiPlan } from "@/lib/reporting/kpi";
 import type { BlockRenderContext } from "./types";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { queryNotRun } from "@/lib/reporting/queryRunState";
 import { ShowWorkButton } from "./ShowWorkButton";
 import { AskButton } from "./AskButton";
 import { eeClient } from "@/ee/client";
@@ -23,9 +24,10 @@ import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { useCurrency } from "@/components/providers/CurrencyProvider";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { useDrillThrough } from "@/components/providers/drill-through-context";
 import {
   shouldAnimateCountUp, tierFor, type Tier,
-  KpiCardFrame, KpiLabel, KpiValue, KpiDelta, KpiReceipt,
+  KpiCardFrame, KpiLabel, KpiValue, KpiDelta, KpiPlan, KpiReceipt,
 } from "./kpiCard";
 
 // Re-exported so existing imports (kpiCountUp.test.ts) keep working — the
@@ -187,7 +189,7 @@ function compactCurrency(n: number, format: "currency" | "number", currency?: st
   else return format === "currency" ? formatCurrency(n, currency) : formatNumber(n);
   const trimmed = Math.abs(scaled).toFixed(1).replace(/\.0$/, "");
   return format === "currency"
-    ? `${sign}${currencySymbol(currency ?? "USD")}${trimmed}${suffix}`
+    ? `${sign}${currencySymbol(currency ?? DEFAULT_CURRENCY)}${trimmed}${suffix}`
     : `${sign}${trimmed}${suffix}`;
 }
 
@@ -231,12 +233,15 @@ type KpiInnerProps = Omit<BlockRenderContext, "block"> & { block: Extract<BlockR
 function KpiBlockInner({ block, dataset, provenance, print, report, params, reportDbId, bare }: KpiInnerProps) {
   const cfg = block.config;
   const { queryId, label, valueField, format, compareField, prefix, suffix,
-          sparkQueryId, sparkValueField, sparkPositive, aggregate, forecast } = cfg;
+          sparkQueryId, sparkValueField, sparkPositive, aggregate, forecast, plan: planValue, planField, shareOfField, shareOfLabel } = cfg;
   // Sparkline + delta colors come from theme.semantic (theme-invariant by
   // design — meaning shouldn't shift with the chart palette).
   const theme = useTheme();
   const currency = useCurrency();
   const { t, locale } = useT();
+  // Drill (lib/reporting/drill.ts): the number opens the rows behind it.
+  const onDrill = useDrillThrough();
+  const drillEnabled = !print && !!onDrill && !!cfg.drilldown;
   // Time-travel replay: the KPI's daily snapshot series, fetched once on
   // first use; `replayIndex` is the day being looked at (null = live).
   const [history, setHistory] = useState<HistoryPoint[] | null>(null);
@@ -250,12 +255,21 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
   const datasetEntry = dataset[queryId];
 
   if (!queryId || !datasetEntry || datasetEntry.length === 0) {
-    return <BlockEmptyState type="kpi" blockId={block.id} title={label} description={t("blockEmpty.noData")} />;
+    const notRun = queryNotRun(provenance?.[queryId]);
+    return (
+      <BlockEmptyState
+        type="kpi" blockId={block.id} title={label} typeLabel={t("blockType.kpi")}
+        description={t(notRun ? (notRun.kind === "failed" ? "blockEmpty.queryFailed" : "blockEmpty.restricted") : "blockEmpty.noData")}
+        notRun={notRun}
+      />
+    );
   }
 
   const rows = datasetEntry as Array<Record<string, unknown>>;
   const liveValue = computeKpiValue({ valueField, aggregate }, rows);
   const liveCompare = pickKpiCompare(rows, compareField);
+  // "72% of requested": this figure against another column of the same row.
+  const shareBase = shareOfField ? computeKpiValue({ valueField: shareOfField, aggregate }, rows) : null;
 
   // Sparkline values come from a separate query - usually a date-bucketed
   // time-series for the same metric. Filtered out non-numeric rows so a
@@ -285,6 +299,10 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
   // use the compact form (17M, 94B, 2.3K) whenever the magnitude is big enough
   // to matter — this is the honest format for a dashboard card: it never
   // truncates, it fits at every card width, and it reads faster at a glance.
+  // A fractional figure (1.6 items per order) keeps two decimals — rounding it
+  // to a whole number would show a different figure from the data. Every
+  // count-up frame uses the same, so an integer never flickers decimals.
+  const numberDecimals = Number.isFinite(value) && !Number.isInteger(value) && Math.abs(value) < 1000 ? 2 : 0;
   const full =
     !Number.isFinite(value)
       ? "—"
@@ -292,7 +310,7 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
         ? formatCurrency(value, currency)
         : format === "percent"
           ? formatPercent(value)
-          : formatNumber(value);
+          : formatNumber(value, numberDecimals);
 
   const tier = tierFor(block.h, !!bare);
   // The full figure (1,284,300) is what a provenance card should show; cards
@@ -306,12 +324,19 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
     Math.abs(value) >= 1000 &&
     !isIdentifierLabel(label) &&
     !roomForFull;
-  const display = useCompact ? compactCurrency(value, format as "currency" | "number", currency) : full;
+  // Baht for a Thai reader reads in Thai units once it reaches the millions
+  // ("20.35 พันล้านบาท") — the way the budget documents the card sits beside
+  // read, rather than "฿20.4B" or nine digits.
+  const thaiBaht = format === "currency" && readsThaiMoney(currency, locale);
+  const display = thaiBaht && Number.isFinite(value) && Math.abs(value) >= 1e6
+    ? thaiMoney(value, false)
+    : useCompact ? compactCurrency(value, format as "currency" | "number", currency) : full;
 
   // Frame-by-frame formatter for the count-up animation. Mirrors the
   // logic above so every interpolated step reads correctly.
   const formatFrame = (n: number) => {
     if (!Number.isFinite(n)) return "—";
+    if (thaiBaht && Math.abs(value) >= 1e6) return thaiMoney(n, false);
     if (
       (format === "currency" || format === "number") &&
       Math.abs(n) >= 1000 &&
@@ -322,7 +347,7 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
     }
     if (format === "currency") return formatCurrency(n, currency);
     if (format === "percent")  return formatPercent(n);
-    return formatNumber(n);
+    return formatNumber(n, numberDecimals);
   };
 
   // The proof is read in print too — that is what puts the run receipt on
@@ -368,14 +393,17 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
 
   // Direction semantics: `sparkPositive: "down"` says falling is good (churn,
   // refund rate), so the delta's colour follows the same rule as the line.
-  const deltaGood = showDelta ? (delta! >= 0) === ((sparkPositive ?? "up") === "up") : true;
-  // A rate moves in points (1.8% vs 2.1% is "▼ 0.3 pt"), not in percent of
-  // a percent — the relative form reads as a much bigger move than it is.
-  const deltaText = !showDelta
-    ? ""
-    : format === "percent" && compare != null
-      ? `${Math.abs((value - compare) * 100).toFixed(1)} pt`
-      : formatPercent(Math.abs(delta!));
+  // The move as it's shown (points for a rate, relative otherwise); within
+  // ±0.1 it reads flat — a neutral "—", never "▲ 0.0%" coloured as news.
+  const change = showDelta ? kpiChange({ format, currentValue: value, previousValue: compare, deltaPct: delta }, t("kpi.pts")) : null;
+  const dir = change?.dir ?? "flat";
+  const deltaGood = dir !== "flat" && (dir === "up") === ((sparkPositive ?? "up") === "up");
+  const deltaText = change?.text ?? "";
+  // Against plan (viz.kpi_plan): live value only — a replayed day has no plan of its own.
+  const plan = point ? undefined : pickKpiPlan(rows, { plan: planValue, planField, aggregate });
+  const vsPlan = tier !== "tiny" ? kpiVsPlan(value, plan, format, sparkPositive, t("kpi.pts")) : undefined;
+  const planFormatted = plan == null ? "" : format === "currency" ? compactCurrency(plan, "currency", currency)
+    : format === "percent" ? formatPercent(plan) : Math.abs(plan) >= 1000 ? compactCurrency(plan, "number", currency) : formatNumber(plan);
   return (
     <KpiCardFrame tier={tier} bare={bare}>
       {/* Header: label, then the verified seal (opens the proof) and the ⋯
@@ -397,10 +425,34 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
         }
       />
 
-      <KpiValue value={value} format={formatFrame} display={display} tier={tier} prefix={prefix} suffix={suffix} title={full} />
+      {drillEnabled && !point ? (
+        <div
+          role="button" tabIndex={0} title={t("drill.openKpi")}
+          onClick={() => onDrill!(block.id, null)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onDrill!(block.id, null); } }}
+          className="-mx-1 cursor-pointer rounded-md px-1 transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          <KpiValue value={value} format={formatFrame} display={display} tier={tier} prefix={prefix} suffix={suffix} title={full} />
+        </div>
+      ) : (
+        <KpiValue value={value} format={formatFrame} display={display} tier={tier} prefix={prefix} suffix={suffix} title={full} />
+      )}
 
       {showDelta && (
-        <KpiDelta dir={delta! >= 0 ? "up" : "down"} good={deltaGood} text={deltaText} caption={t("kpi.vsPrior")} />
+        <KpiDelta dir={dir} good={deltaGood} text={deltaText} caption={t("kpi.vsPrior")} />
+      )}
+
+      {shareBase != null && Number.isFinite(shareBase) && shareBase !== 0 && Number.isFinite(value) && !point && (
+        <p className="text-[11px] text-muted-foreground" data-kpi-share>
+          {t("kpi.shareOf")
+            .replace("{pct}", `${Math.round((value / shareBase) * 100)}%`)
+            .replace("{label}", shareOfLabel ?? shareOfField ?? "")}
+        </p>
+      )}
+
+      {vsPlan && (
+        <KpiPlan state={vsPlan.state} text={vsPlan.text} planFormatted={planFormatted}
+          words={{ ahead: t("kpi.plan.ahead"), behind: t("kpi.plan.behind"), on: t("kpi.plan.on"), plan: t("kpi.plan.value") }} />
       )}
 
       {showSpark && sparkForRender.length > 1 && (

@@ -2,6 +2,7 @@
 import { useMemo } from "react";
 import GridLayout, { type Layout } from "react-grid-layout";
 import { GripVertical, MousePointerClick, Database, PlayCircle, LayoutTemplate } from "lucide-react";
+import { useT } from "@/lib/i18n/LocaleContext";
 import { BlockRegistry } from "@/components/blocks";
 import { BLOCK_TEMPLATES } from "@/lib/reporting/blockTemplates";
 import { useDesignerStore } from "@/lib/reporting/store";
@@ -10,6 +11,7 @@ import type { Dataset } from "@/lib/reporting/interpolate";
 import { RenderBlock } from "@/components/reports/ReportDocument";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { CurrencyProvider } from "@/components/providers/CurrencyProvider";
+import { DateStyleProvider } from "@/components/providers/DateStyleProvider";
 import { WhyProvider } from "@/components/blocks/WhyDrawer";
 import { RulerH, RulerV } from "./Ruler";
 import "react-grid-layout/css/styles.css";
@@ -39,6 +41,7 @@ export function Canvas({
   /** DB id of the report being edited (for Ask/action routes on blocks). */
   reportDbId?: string;
 }) {
+  const { t } = useT();
   const report = useDesignerStore((s) => s.report);
   const activePageId = useDesignerStore((s) => s.activePageId);
   const selectedBlockId = useDesignerStore((s) => s.selectedBlockId);
@@ -86,6 +89,7 @@ export function Canvas({
       tenantDefaultChartStyle={tenantBrand?.defaultChartStyle ?? null}
     >
     <CurrencyProvider reportCurrency={(report as any).currency}>
+    <DateStyleProvider reportEra={report.dateEra}>
     <WhyProvider>
     <div className="mx-auto w-full" style={{ maxWidth: CANVAS_WIDTH + (showRulers ? 20 : 0) }}>
       {showRulers && (
@@ -186,69 +190,65 @@ export function Canvas({
         </div>
       </div>
       <p className={`mt-3 text-center text-[11px] text-muted-foreground ${showRulers ? "pl-5" : ""}`}>
-        {page.size} · {page.orientation} · {pageMm.w}×{pageMm.h} mm
+        {page.size} · {t(page.orientation === "landscape" ? "designerShell.landscape" : "designerShell.portrait")} · {pageMm.w}×{pageMm.h} mm
       </p>
     </div>
     </WhyProvider>
+    </DateStyleProvider>
     </CurrencyProvider>
     </ThemeProvider>
   );
 }
 
 function BlockHeaderChip({ block, selected }: { block: Block; selected?: boolean }) {
-  const label = BlockRegistry[block.type].label;
+  const { t } = useT();
   return (
     <div
-      title="Drag to move block"
+      title={t("canvas.dragToMove")}
       className={`drag-handle absolute left-0 top-0 z-10 flex cursor-grab items-center gap-1 rounded-br-md bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground transition-opacity active:cursor-grabbing ${
         selected ? "opacity-100" : "opacity-0 group-hover:opacity-90"
       }`}
     >
       <GripVertical className="h-3 w-3" />
-      {label}
+      {t(`blockType.${block.type}`)}
     </div>
   );
 }
 
 function EmptyCanvasGuide() {
+  const { t } = useT();
   return (
     <div className="mx-auto flex max-w-lg min-h-[400px] flex-col items-center justify-center p-8 text-center">
       <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <LayoutTemplate className="h-7 w-7" />
       </div>
-      <h3 className="text-xl font-bold tracking-tight text-foreground">Let's build your first report!</h3>
-      <p className="mt-2 mb-8 text-sm text-muted-foreground">
-        Creating a report is as simple as 1, 2, 3. Follow these steps to get started:
-      </p>
+      <h3 className="text-xl font-bold tracking-tight text-foreground">{t("canvas.empty.title")}</h3>
+      <p className="mt-2 mb-8 text-sm text-muted-foreground">{t("canvas.empty.subtitle")}</p>
 
       <div className="grid w-full gap-4 sm:grid-cols-3">
         <div className="flex flex-col items-center text-center p-4 rounded-xl border border-border bg-card">
           <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <MousePointerClick className="h-5 w-5" />
           </div>
-          <h4 className="text-sm font-semibold">1. Pick & Drop</h4>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Click or drag blocks like Charts, Tables, or text from the left panel onto this canvas.
-          </p>
+          <h4 className="text-sm font-semibold">{t("canvas.empty.step1")}</h4>
+          <p className="mt-1 text-xs text-muted-foreground">{t("canvas.empty.step1Desc")}</p>
         </div>
 
         <div className="flex flex-col items-center text-center p-4 rounded-xl border border-border bg-card">
           <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <Database className="h-5 w-5" />
           </div>
-          <h4 className="text-sm font-semibold">2. Connect Data</h4>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Select a block to write its SQL query or connect an API using the properties on the right.
-          </p>
+          <h4 className="text-sm font-semibold">{t("canvas.empty.step2")}</h4>
+          <p className="mt-1 text-xs text-muted-foreground">{t("canvas.empty.step2Desc")}</p>
         </div>
 
         <div className="flex flex-col items-center text-center p-4 rounded-xl border border-border bg-card">
           <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <PlayCircle className="h-5 w-5" />
           </div>
-          <h4 className="text-sm font-semibold">3. Preview</h4>
+          <h4 className="text-sm font-semibold">{t("canvas.empty.step3")}</h4>
           <p className="mt-1 text-xs text-muted-foreground">
-            Hit the &quot;Run&quot; button at the top to fetch your data and see the report come to life.
+            {t("canvas.empty.step3Desc").replace("{run}", t("designerShell.run"))}
           </p>
         </div>
       </div>

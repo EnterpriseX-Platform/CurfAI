@@ -11,7 +11,7 @@ import {
   Monitor, Mail, Layers, Activity, Webhook, Globe, Zap, Bot, NotebookText,
   Workflow, LayoutDashboard, Wand2, Menu, Ruler, Target, Rocket, Terminal, Tv, Library, Loader2,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -35,10 +35,12 @@ const IS_COMMUNITY = eeClient.edition === "community";
 // (see src/lib/ee/clientTypes.ts).
 const PastDueBanner = eeClient.layout?.PastDueBanner ?? null;
 import { CurfLogo } from "@/components/common/CurfLogo";
-import { onNavCountsRefresh } from "@/lib/navCounts";
+import { loadNavCounts, onNavCountsRefresh, peekNavCounts, type NavCounts } from "@/lib/navCounts";
 import { useResilientSession } from "@/lib/useResilientSession";
+import { useWorkspaceSwitch } from "@/lib/useWorkspaceSwitch";
 import { RELEASE_LOG } from "@/lib/releaseLog";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { canUseOperateInbox } from "@/lib/roles";
 
 // Single source of truth for the version badge — RELEASE_LOG[0] is always
 // the newest entry (see releaseLog.ts's own "add one entry per version
@@ -166,6 +168,9 @@ const COMMUNITY_NAV = [
   "/admin/tenant", "/admin/users", "/admin/audit", "/admin/compliance", "/admin/release-log",
 ];
 
+/** One empty value, so resetting to "no counts yet" twice doesn't re-render. */
+const NO_COUNTS: NavCounts = {};
+
 function Sidebar() {
   const { t } = useT();
   // See useResilientSession() for why this isn't a plain useSession() call:
@@ -185,56 +190,27 @@ function Sidebar() {
   // session itself doesn't have this problem: it's fetched the same way
   // on both passes (see useResilientSession.ts), exactly like `role`.
   const isPlatAdmin = !!(session?.user as any)?.isPlatformAdmin;
-  const [counts, setCounts] = useState<{
-    reports?: number; sources?: number; dashboards?: number; onScreen?: number;
-    notebooks?: number; templates?: number; decisions?: number; metrics?: number;
-    inbox?: number; watchers?: number; dataQuality?: number;
-  }>({});
+  // Badge counts: one GET /api/nav/counts, kept per workspace for a moment
+  // (lib/navCounts.ts), so moving between pages — each renders its own
+  // AppShell — doesn't count everything again. The route applies the role
+  // and plan rules; the inbox count (requests whose current step is *mine*)
+  // is the one number here that needs a human, which is why it alone
+  // renders in the critical colour.
+  const activeTenantId = (session?.user as any)?.activeTenantId ?? (session?.user as any)?.tenantId;
+  const countsKey = activeTenantId ? `${(session?.user as any)?.id}:${activeTenantId}:${role}` : null;
+  const [counts, setCounts] = useState<NavCounts>(() => (countsKey && peekNavCounts(countsKey)) || NO_COUNTS);
 
   useEffect(() => {
-    async function loadCounts() {
-      try {
-        const count = (url: string) => fetch(url, { cache: "no-store" }).then((r) => r.ok ? r.json() : null).catch(() => null);
-        // Paid routes don't exist in the Community edition — skip them
-        // rather than collecting 404s in the console.
-        const paid = (url: string) => (IS_COMMUNITY ? Promise.resolve(null) : count(url));
-        const [rep, ds, dash, onScreen, nb, tpl, dec, met, opStats, watch, dq] = await Promise.all([
-          count("/api/reports?_count=1"),
-          count("/api/data-sources"),
-          count("/api/dashboards"),
-          count("/api/on-screen"),
-          paid("/api/v1/notebooks"),
-          paid("/api/operate/templates"),
-          paid("/api/decisions"),
-          paid("/api/metrics"),
-          // Inbox count = requests whose current approval step is *mine*
-          // (pendingMyApproval) — the one number in the rail that needs a
-          // human, which is why it alone renders in the critical colour.
-          paid("/api/operate/stats"),
-          paid("/api/watchers"),
-          // Admin-only route — 403s for editors, badge just stays hidden for them.
-          paid("/api/admin/dq"),
-        ]);
-        setCounts({
-          reports: Array.isArray(rep?.items) ? rep.items.length : undefined,
-          sources: Array.isArray(ds?.items) ? ds.items.length : undefined,
-          dashboards: Array.isArray(dash?.items) ? dash.items.length : undefined,
-          onScreen: Array.isArray(onScreen?.items) ? onScreen.items.length : undefined,
-          notebooks: Array.isArray(nb?.items) ? nb.items.length : undefined,
-          templates: Array.isArray(tpl?.items) ? tpl.items.length : undefined,
-          decisions: Array.isArray(dec?.items) ? dec.items.length : undefined,
-          metrics: Array.isArray(met?.items) ? met.items.length : undefined,
-          inbox: typeof opStats?.pendingMyApproval === "number" ? opStats.pendingMyApproval : undefined,
-          watchers: Array.isArray(watch?.items) ? watch.items.length : undefined,
-          dataQuality: Array.isArray(dq?.items) ? dq.items.length : undefined,
-        });
-      } catch { /* ignore */ }
-    }
-    loadCounts();
+    if (!countsKey) return;
+    let live = true;
+    const load = () => void loadNavCounts(countsKey).then((c) => { if (live && c) setCounts(c); });
+    setCounts(peekNavCounts(countsKey) ?? NO_COUNTS);
+    load();
     // Same-page create/delete flows (e.g. the Dashboards manager) call
     // refreshNavCounts() so this badge doesn't stay stale until a reload.
-    return onNavCountsRefresh(loadCounts);
-  }, []);
+    const off = onNavCountsRefresh(load);
+    return () => { live = false; off(); };
+  }, [countsKey]);
 
   // ── Reorganized 5-group structure ──────────────────────────────────
   // The sidebar grew organically as we shipped 200+ features. This pass
@@ -270,7 +246,7 @@ function Sidebar() {
         // Ask Curf (workspace-wide) — the "ask from anywhere" entry point,
         // no report picked first. Gated Business+ server-side; the page
         // itself renders the UpgradeLock for tenants below that tier.
-        { href: "/ask", label: t("nav.askCurf"), icon: Sparkles,
+        { href: "/ask", label: t("nav.askCurf"), icon: Sparkles, badge: counts.askUnread ?? null,
           match: (p: string) => p === "/ask" || p.startsWith("/ask/") } as NavItemExt,
         { href: "/reports", label: t("nav.reports"), icon: FileText, badge: counts.reports ?? null,
           match: (p) => p === "/reports" || p.startsWith("/reports/") },
@@ -300,9 +276,10 @@ function Sidebar() {
     },
     // ── OPERATE ─────────────────────────────────────────────────────
     // New top-level group. The unicorn pitch surface — every path from
-    // "noticed something" to "took action" lives here. Authoring items
-    // (Inbox/Templates/Insights/Action Center) are editor+/admin only —
-    // viewer and executive don't approve requests or run templates.
+    // "noticed something" to "took action" lives here. The Inbox is for
+    // builders and executives (canUseOperateInbox — executives are who
+    // approval chains usually name); authoring items (Templates/Insights/
+    // Action Center) stay builder-only.
     // Watchers + Decisions are the exception (2026-08 role restructure):
     // both are visible read-only to every role, including viewer and
     // executive — the pages themselves (not the sidebar) gate the actual
@@ -310,11 +287,13 @@ function Sidebar() {
     {
       label: t("nav.section.operate"),
       items: [
-        ...(role !== "viewer" && role !== "executive" ? [
+        ...(canUseOperateInbox(role) ? [
           // The inbox is the home base — what's awaiting me, what I sent,
           // what's in flight, what's done.
           { href: "/operate", label: t("nav.inbox"), icon: Workflow, badge: counts.inbox ?? null, critical: true,
             match: (p: string) => p === "/operate" || (p.startsWith("/operate/") && !p.startsWith("/operate/templates") && !p.startsWith("/operate/incidents") && !p.startsWith("/operate/watchers") && !p.startsWith("/operate/insights")) } as NavItemExt,
+        ] : []),
+        ...(role !== "viewer" && role !== "executive" ? [
           { href: "/operate/templates", label: t("nav.operateTemplates"), icon: LayoutTemplate, badge: counts.templates ?? null,
             match: (p: string) => p.startsWith("/operate/templates") } as NavItemExt,
           // Insights — tenant-wide rollups (volume, SLA hit rate, value
@@ -412,6 +391,10 @@ function Sidebar() {
         // Users + Roles merged. The page has tabs for both.
         { href: "/admin/users", label: t("nav.usersRoles"), icon: Users,
           match: (p) => p.startsWith("/admin/users") || p.startsWith("/admin/roles") },
+        // Org chart — reporting lines, assignment policy, assistants and LINE
+        // for the Executive view (executive journey P2+).
+        { href: "/admin/org", label: t("nav.orgChart"), icon: Building2,
+          match: (p) => p.startsWith("/admin/org") },
         // Access — points directly at the API-keys page since the unified
         // /admin/access tabbed shell hasn't shipped yet. Sidebar still
         // highlights the right tab when the user lands on /api-keys, /sso,
@@ -555,15 +538,22 @@ function Section({ section }: { section: NavSection }) {
 
 function ProfileBlock() {
   const { t } = useT();
-  const { data } = useSession();
-  const user = data?.user;
+  // See useResilientSession() for why this isn't a plain useSession() call
+  // — without it, a session-fetch blip leaves this block (and its avatar)
+  // stuck on the skeleton below forever, since next-auth's own client never
+  // retries once a fetch has failed once.
+  const { user } = useResilientSession();
   const router = useRouter();
-  const initials = (user?.name ?? user?.email ?? "?")
-    .split(/\s+/).map((s) => s[0]).slice(0, 2).join("").toUpperCase();
+  const monogram = initials((user?.name ?? user?.email ?? "?") as string);
   // Second line is the person's role in this workspace (what the rail is
   // about), not their email (which the menu already leads with).
   const role = (user as any)?.role as string | undefined;
-  const roleLabel = role ? t(`nav.role.${role}`) : (user?.email ?? "");
+  // t() returns the key itself when there is no string for it, which is how
+  // "nav.role.developer" once showed up verbatim under someone's name. Fall
+  // back to the role slug rather than the key if one is ever missing again.
+  const roleKey = `nav.role.${role}`;
+  const roleName = t(roleKey);
+  const roleLabel = role ? (roleName === roleKey ? role : roleName) : (user?.email ?? "");
 
   // Same footprint while the session loads — no "Signed in" placeholder
   // text that then gets replaced by a name.
@@ -587,7 +577,7 @@ function ProfileBlock() {
         <DropdownMenuTrigger asChild>
           <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted">
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary-ink">
-              {initials}
+              {monogram}
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-semibold leading-tight">{user?.name ?? user?.email ?? t("account.signedIn")}</p>
@@ -608,6 +598,12 @@ function ProfileBlock() {
           <DropdownMenuItem onClick={() => router.push("/data-sources")}>
             <Database className="mr-2 h-4 w-4" /> {t("nav.connections")}
           </DropdownMenuItem>
+          {/* The Executive view (/executive) — what executives see; not in the Community edition. */}
+          {!IS_COMMUNITY && (
+            <DropdownMenuItem onClick={() => router.push("/executive")}>
+              <Monitor className="mr-2 h-4 w-4" /> {t("nav.executiveView")}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/" })}>
             <LogOut className="mr-2 h-4 w-4" /> {t("action.signOut")}
@@ -627,17 +623,9 @@ function ProfileBlock() {
  */
 function TenantSwitcher() {
   const { t } = useT();
-  const { data, update } = useSession();
-  const memberships = ((data?.user as any)?.memberships ?? []) as Array<{
-    tenantId: string; tenantSlug: string; tenantName: string; role: string; tenantTier?: string;
-    // True for a workspace surfaced via Platform Admin org oversight rather
-    // than an actual Membership row — see loadMembershipsForUserId() in
-    // src/lib/auth.ts. Shown with a small badge below, not blank.
-    isVirtual?: boolean;
-  }>;
-  const activeTenantId = (data?.user as any)?.activeTenantId ?? (data?.user as any)?.tenantId;
-  const active = memberships.find((m) => m.tenantId === activeTenantId);
-  const [busy, setBusy] = useState(false);
+  // Shared with the Executive header — see lib/useWorkspaceSwitch.ts.
+  const { update, hasSession, memberships, activeTenantId, active, busy, setBusy, switchTo: switchWorkspace, refreshOnOpen } = useWorkspaceSwitch();
+  const data = hasSession ? { user: true } : null;
   // Controlled so the "Create a workspace" item can close the menu itself
   // (see its onSelect below) — onSelect's own preventDefault() suppresses
   // Radix's normal auto-close-on-select, so without this the dropdown was
@@ -675,30 +663,10 @@ function TenantSwitcher() {
     );
   }
 
-  async function switchTo(tenantId: string) {
-    if (tenantId === activeTenantId) return;
-    setBusy(true);
-    try {
-      await update({ activeTenantId: tenantId });
-      // Land on Brief, not wherever the switch happened to be clicked from —
-      // a page scoped to the old tenant (a specific report, an admin screen
-      // the new tenant's role can't see) is jarring context to land in right
-      // after switching.
-      //
-      // router.push("/brief") + router.refresh() here silently did nothing —
-      // reproduced live: the session update succeeded (sidebar showed the
-      // new tenant name) but the URL never left the page it was clicked
-      // from and every server-rendered surface kept the OLD tenant's data.
-      // This item's onClick fires from inside a Radix DropdownMenuItem,
-      // which is itself in the middle of its own close/unmount transition
-      // right as push() is called — plausibly enough to have App Router
-      // drop the scheduled navigation. A full navigation sidesteps that
-      // entirely: by the time this runs, `update()` has already resolved
-      // (its Set-Cookie is applied), so the fresh request Brief makes here
-      // is guaranteed to carry the new session, not a stale/racing one.
-      window.location.href = "/brief";
-    } finally { setBusy(false); }
-  }
+  // Land on Brief, not wherever the switch was clicked from — a page scoped to
+  // the old tenant is jarring context. A full navigation (inside the hook), not
+  // router.push()+refresh(): that silently dropped from a closing Radix item.
+  const switchTo = (tenantId: string) => switchWorkspace(tenantId, "/brief");
 
   /**
    * Create another workspace for the signed-in account. Previously this
@@ -736,15 +704,6 @@ function TenantSwitcher() {
     } catch (e: any) {
       setCreateError(e?.message ?? "Could not create workspace");
     } finally { setCreating(false); }
-  }
-
-  // The membership list is baked into the JWT at signin, so a workspace
-  // created from another session (or via the API) stays invisible here until
-  // the user logs out and back in. Re-pull from the DB whenever the menu
-  // opens — opening it is exactly the moment the list must be current.
-  async function refreshOnOpen(open: boolean) {
-    if (!open || busy) return;
-    try { await update({ refreshMemberships: true }); } catch { /* stale list is still usable */ }
   }
 
   return (

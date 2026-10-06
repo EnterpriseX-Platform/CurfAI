@@ -17,6 +17,16 @@ export const ParameterSchema = z.object({
   required: z.boolean().default(false),
   default: z.union([z.string(), z.number(), z.boolean()]).optional(),
   options: z.array(z.object({ value: z.string(), label: z.string() })).optional(),
+  /** type "number" only: the range a value is clamped to wherever something
+   *  other than the report's author sets it (a What-if driver bound to this
+   *  parameter). Ignored for other types. */
+  min: z.number().finite().optional(),
+  max: z.number().finite().optional(),
+  step: z.number().finite().positive().optional(),
+  /** Content localization, keyed like a block's `i18n` (see BaseBlock):
+   *  `{ en: { label: "Branch", "options.0.label": "All branches" } }`.
+   *  Only words a reader sees — never `name`, `default` or an option's value. */
+  i18n: z.record(z.record(z.string())).optional(),
 });
 export type Parameter = z.infer<typeof ParameterSchema>;
 
@@ -31,6 +41,31 @@ export type Parameter = z.infer<typeof ParameterSchema>;
  *     the rows array out of the response (e.g. "$.data.items").
  * Only the fields relevant to the chosen kind need to be set; others are ignored.
  */
+/** A value in an engine query, or a reference to a report parameter filled in when the report runs. */
+const EngineValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), z.object({ $param: z.string().min(1) }).strict()]);
+
+export const EngineQuerySchema = z.object({
+  viewId: z.string().min(1),
+  columns: z.array(z.string().min(1)).optional(),
+  filters: z.array(z.object({
+    column: z.string().min(1),
+    op: z.enum(["EQ", "NE", "GT", "GE", "LT", "LE", "IN", "NOT_IN", "LIKE", "BETWEEN", "IS_NULL", "IS_NOT_NULL"]),
+    value: EngineValueSchema.optional(),
+    values: z.array(EngineValueSchema).optional(),
+    /** Drop this filter when its parameter is blank ("blank means no filter"). */
+    skipIfEmpty: z.boolean().optional(),
+  })).optional(),
+  groupBy: z.array(z.string().min(1)).optional(),
+  aggregates: z.array(z.object({
+    fn: z.enum(["COUNT", "SUM", "AVG", "MIN", "MAX"]),
+    column: z.string().min(1).optional(),
+    as: z.string().min(1).optional(),
+  })).optional(),
+  orderBy: z.array(z.object({ column: z.string().min(1), descending: z.boolean().optional() })).optional(),
+  limit: z.number().int().positive().optional(),
+});
+export type EngineQuery = z.infer<typeof EngineQuerySchema>;
+
 export const DataSourceDefSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -109,6 +144,12 @@ export const DataSourceDefSchema = z.object({
     }),
     alias: z.string().regex(/^(?!main$|temp$)[a-z_][a-z0-9_]*$/i, "alias must be a SQL identifier and not 'main' / 'temp'"),
   })).optional(),
+  /**
+   * Java engine kind: the published view this query reads and what to ask of it. No SQL — the engine applies
+   * the viewer's row rules and masking first. Same format as the engine's own report definitions
+   * (engines/README.md), so a definition means the same on either side.
+   */
+  engine: EngineQuerySchema.optional(),
 }).refine(
   (ds) => {
     if (!ds.sql) return true;
@@ -293,6 +334,37 @@ export const TableActionSchema = z.object({
 });
 export type TableAction = z.infer<typeof TableActionSchema>;
 
+/**
+ * Drill-through config — "show me the rows behind this". When present on a
+ * chart, map, table or KPI block, clicking a data point (a table row's
+ * drill column, a KPI's number) in the report viewer opens a slide-out
+ * panel listing the rows behind it.
+ *
+ * The handler (POST /api/reports/[id]/drill) runs `queryId` server-side
+ * as the reader and binds `filterParam` to the clicked value (clicking the
+ * "Email" bar binds filterParam="channel" to "Email"); the query references
+ * :filterParam in its SQL. A KPI has no clicked value, so its drill leaves
+ * `filterParam` out and shows the rows behind the whole number.
+ *
+ * A query that only drills read doesn't run when the report loads — only
+ * on the click (drillOnlyQueryIds in lib/reporting/drill.ts) — so its
+ * :filterParam needs no report parameter of its own.
+ */
+export const DrillThroughSchema = z.object({
+  queryId: z.string(),
+  filterParam: z.string().optional(),
+  /** Title displayed at the top of the slide-out panel. */
+  title: z.string().optional(),
+  /**
+   * The panel's columns — which of the query's columns, in what order, under
+   * what heading, formatted how (a table column's shape; headings translate
+   * through the block's i18n as "drilldown.columns.N.label"). Unset: every
+   * column the query returns, under its own name.
+   */
+  columns: z.array(TableColumnSchema).optional(),
+});
+export type DrillThrough = z.infer<typeof DrillThroughSchema>;
+
 export const TableConfigSchema = z.object({
   queryId: z.string(),
   title: z.string().optional(),
@@ -301,6 +373,22 @@ export const TableConfigSchema = z.object({
   stripe: z.boolean().default(true),
   showTotals: z.boolean().default(true),
   actions: z.array(TableActionSchema).default([]),
+  /**
+   * What an empty result means, in the reader's words — for a list whose
+   * being empty is good news ("nothing to order"), where the generic "no
+   * data" would read as broken. Shown only when the query ran and returned
+   * no rows.
+   */
+  emptyText: z.string().optional(),
+  /**
+   * Drill from a row: `drillField` names the column whose value is passed
+   * (its cells become links; unset = the first text column). `drilldown`
+   * opens the rows behind it, `drillParam` re-scopes the whole report to
+   * it — see the chart config's fields of the same names.
+   */
+  drilldown: DrillThroughSchema.optional(),
+  drillParam: z.string().optional(),
+  drillField: z.string().optional(),
 });
 
 /**
@@ -352,28 +440,28 @@ export const KpiConfigSchema = z.object({
   sparkQueryId: z.string().optional(),
   sparkValueField: z.string().optional(),
   sparkPositive: z.enum(["up", "down"]).optional(),
+  /**
+   * The plan this number is held against (viz.kpi_plan, Growth+). A fixed
+   * value in the KPI's own units (a rate as a fraction: 0.45 for 45%), or
+   * `planField` — a column on the same row, for a budget joined in the
+   * query. The column wins when both are set. See pickKpiPlan/kpiVsPlan.
+   */
+  plan: z.number().optional(),
+  planField: z.string().optional(),
+  /**
+   * A second column of the same query this figure is a share of, shown under
+   * the number: "72% of requested". The context an executive reads a total
+   * in — approved against requested, disbursed against approved.
+   */
+  shareOfField: z.string().optional(),
+  /** What the share is of, in the reader's words ("requested"). */
+  shareOfLabel: z.string().optional(),
   /** Optional forecast projection appended to the sparkline tail — see ForecastConfigSchema. */
   forecast: ForecastConfigSchema.optional(),
+  /** Click the number to see the rows behind it — see DrillThroughSchema. */
+  drilldown: DrillThroughSchema.optional(),
 });
 
-/**
- * Drill-through config. When present on a chart (or KPI) block, clicking a
- * data point in the viewer opens a slide-out panel listing the underlying
- * rows that produced that aggregate value.
- *
- * The handler runs `queryId` server-side and binds `filterParam` to the
- * clicked dimension value (e.g. clicking the "Email" bar binds
- * filterParam="channel" to "Email"). The query author is responsible for
- * referencing :filterParam in their SQL — the runner already substitutes
- * named parameters, so no additional plumbing is needed.
- */
-export const DrillThroughSchema = z.object({
-  queryId: z.string(),
-  filterParam: z.string(),
-  /** Title displayed at the top of the slide-out panel. */
-  title: z.string().optional(),
-});
-export type DrillThrough = z.infer<typeof DrillThroughSchema>;
 
 /**
  * Optional reference line drawn across the plot area (target, threshold,
@@ -427,6 +515,12 @@ export const ChartConfigSchema = z.object({
     "sunburst",     // Multi-level composition rings (region -> country -> city)
     "sankey",       // Flow between stages (source -> target, sized by value)
     "streamgraph",  // Wiggle-offset stacked area — proportion over time
+    "boxplot",      // Spread of a measure per category: quartiles, whiskers, outliers
+    "network",      // Who is linked to whom (source -> target), force-laid out
+    "chord",        // Flows between a handful of groups, both ways, round a circle
+    "parallel",     // Every row across several measures at once, one line each
+    "radial",       // A measure round a cycle (hours of the day, months)
+    "scatter3d",    // Three measures as the axes of a cube you can turn
   ]).default("bar"),
   title: z.string().optional(),
   subtitle: z.string().optional(),
@@ -450,11 +544,44 @@ export const ChartConfigSchema = z.object({
   /** For combo charts: which yFields render as lines (vs default bars). */
   lineFields: z.array(z.string()).optional(),
   /**
+   * Combo only: the lines read the bars' value axis instead of their own
+   * right-hand one. For series in the same unit whose scales differ — a
+   * Pareto's share per bucket (bars, 2–30%) and its running share (line, up
+   * to 100%) — where a second, separately scaled axis would make the line
+   * look like it sits on the bars.
+   */
+  sharedYAxis: z.boolean().optional(),
+  /**
+   * Pareto (combo with a running-share line): colour each bar by its ABC
+   * class from the running share before it — A the first 80% of the total,
+   * B the next 15%, C the rest. Which items must never run out, at a glance.
+   */
+  paretoClasses: z.boolean().optional(),
+  /**
    * Scatter / bubble: optional 3rd numeric axis driving point size.
    * Treemap: optional column that drives cell color (ROI, margin, etc).
    */
   sizeField: z.string().optional(),
   colorField: z.string().optional(),
+  /** 3D scatter only: the third measure (depth); xField and yFields[0] are the other two, colorField the category a point is coloured by. */
+  zField: z.string().optional(),
+  /** Network: the target end's group (colorField is the source end's) — a product's category on each side of a pair. */
+  targetColorField: z.string().optional(),
+  /**
+   * 3D scatter: a zone the reader should look in — per axis a [low, high]
+   * range in the data's own units, either end open (null) — drawn as a
+   * translucent box with its label ("order first": selling ≥ 3 a day with
+   * ≤ 14 days of stock). Points inside say so on hover.
+   */
+  zone: z.object({
+    x: z.tuple([z.number().nullable(), z.number().nullable()]).optional(),
+    y: z.tuple([z.number().nullable(), z.number().nullable()]).optional(),
+    z: z.tuple([z.number().nullable(), z.number().nullable()]).optional(),
+    label: z.string().optional(),
+  }).optional(),
+  /** Network: how strong each link is (lift) — links at or above strongAt are drawn strong, the rest faint. */
+  strengthField: z.string().optional(),
+  strongAt: z.number().finite().optional(),
   /**
    * Sunburst only. Ordered outer-to-inner... actually center-to-edge list of
    * grouping columns, e.g. ["region", "country", "city"] — each ring is one
@@ -474,6 +601,12 @@ export const ChartConfigSchema = z.object({
   targetField: z.string().optional(),
   stacked: z.boolean().optional(),
   showLegend: z.boolean().optional(),
+  /**
+   * What the legend and tooltip call each yField, when the column's own name
+   * isn't the words to show (`{ new_mrr: "New customers" }`). A block's i18n
+   * translates them as "seriesLabels.<field>" (lib/reporting/localize.ts).
+   */
+  seriesLabels: z.record(z.string()).optional(),
   /** Show value labels at the end of each bar/point. */
   showDataLabels: z.boolean().optional(),
   /**
@@ -512,6 +645,14 @@ export const ChartConfigSchema = z.object({
    * colour is already carrying the series.
    */
   emphasisTop: z.number().int().min(1).optional(),
+  /**
+   * The same emphasis, the other way round: the LAST row in the series
+   * colour and every row before it in the recessive grey — the latest period
+   * of a trend against the ones it follows ("72.5% this year, after 63.9% and
+   * 68.9%"). Bar charts, single series only, like emphasisTop; ignored when
+   * emphasisTop is set.
+   */
+  emphasisLast: z.boolean().optional(),
   /** Number format hint for axis ticks + tooltips + data labels. */
   valueFormat: z.enum(["number", "currency", "percent", "compact"]).optional(),
   /** Optional reference lines (target, threshold, etc). */
@@ -556,10 +697,8 @@ export const ChartConfigSchema = z.object({
    * references `:{drillParam}` in its SQL re-scopes together (KPIs, other
    * charts, maps — not just this one), exactly like the existing filter bar
    * (`FilterBar.tsx` -> `/api/reports/[id]/run`) already does for manual
-   * filter changes. The Dashboard viewer tracks a breadcrumb of drilled
-   * values so the reader can jump back to any earlier level. Wired up in
-   * the Dashboard viewer only — see ROADMAP-ANALYSIS-APP.md's general,
-   * non-geography-specific drill-down.
+   * filter changes. The Dashboard and Report viewers track a breadcrumb of
+   * drilled values so the reader can jump back to any earlier level.
    */
   drillParam: z.string().optional(),
   /**
@@ -660,6 +799,38 @@ export const MapConfigSchema = z.object({
   pinLonField: z.string().optional(),
   pinLatField: z.string().optional(),
   pinValueField: z.string().optional(),
+  /**
+   * Time-lapse: plays the map through this column's values in order (a
+   * month, a date, a fiscal month number) — one frame each, with a play
+   * button and a slider. The colour scale is fixed across frames, so a
+   * colour means the same amount in every one. A printed or exported map
+   * shows the last frame.
+   */
+  timeField: z.string().optional(),
+  /** Time-lapse only: each frame sums every frame up to it (approvals so far), rather than that frame alone. */
+  cumulative: z.boolean().optional(),
+  /**
+   * Thai provinces only: "3d" opens the map as columns standing on the
+   * provinces (a reader can switch either way). Prints and exports, and
+   * browsers without WebGL, show the flat map.
+   */
+  view: z.enum(["flat", "3d"]).optional(),
+  /**
+   * 3D only: a second measure the columns are coloured by, while their
+   * height stays valueField — tall and dark reads as "a lot of money, and a
+   * lot of it cut". Averaged per province, weighted by valueField.
+   * colorLabel names it in the legend and tooltip.
+   */
+  colorField: z.string().optional(),
+  colorLabel: z.string().optional(),
+  /**
+   * Thai map, point mode: each row stands at its own latitude/longitude (a
+   * branch, a warehouse, a site) instead of on its province — regionField
+   * names the point. In 3D a column per point; flat, a circle. A text
+   * colorField colours points by group (store / online warehouse).
+   */
+  latField: z.string().optional(),
+  lonField: z.string().optional(),
 });
 
 /**
@@ -688,6 +859,12 @@ export const HeatmapConfigSchema = z.object({
   /** Grid mode. */
   xField: z.string().optional(),
   yField: z.string().optional(),
+  /**
+   * Grid mode. How the axes are ordered: "label" sorts them by name,
+   * "query" keeps the order values first appear in the query's rows — for
+   * axes whose order isn't alphabetical (weekdays, items by rank). Unset = "label".
+   */
+  order: z.enum(["label", "query"]).optional(),
   /**
    * Tiles mode. One tile per result row, wrapped in a responsive grid —
    * a status board (sites, regions, accounts), not a matrix. Unlike grid
@@ -875,6 +1052,34 @@ export const ChartStyleSchema = z.enum([
 ]);
 export type ChartStyle = z.infer<typeof ChartStyleSchema>;
 
+/**
+ * What the pre-publish gate (lib/intelligence/reportGate.ts) found and did
+ * when a report was generated — the report's quality note. Absent on a
+ * report a person built, and on generated ones saved before the gate.
+ */
+export const ReportQualitySchema = z.object({
+  checkedAt: z.string(),
+  verdict: z.enum(["pass", "warn", "fail"]),
+  /** "ai": a model wrote its words; "template": a pack, a template or the rule-based layout did. */
+  authored: z.enum(["ai", "template"]),
+  /** False when only the code checks ran (no model, or the review failed). */
+  reviewed: z.boolean(),
+  /** What the gate changed — structured, so the viewer words it in the reader's language. */
+  changes: z.array(z.object({
+    kind: z.enum(["limited", "resized", "retitled", "removed", "captionRewritten", "captionDropped", "subtitleRewritten", "subtitleDropped"]),
+    rule: z.string().optional(),
+    title: z.string().optional(),
+    to: z.string().optional(),
+    n: z.number().optional(),
+    reason: z.string().optional(),
+  })).default([]),
+  /** What a rule flagged but the gate kept — a template's own words, a chart still dense after review. */
+  flags: z.array(z.object({ rule: z.string(), title: z.string().optional() })).default([]),
+  /** The reviewer's notes (in the builder's language) and its reasons for a flag it confirmed. */
+  notes: z.array(z.string()).default([]),
+});
+export type ReportQuality = z.infer<typeof ReportQualitySchema>;
+
 export const ReportSchema = z.object({
   version: z.literal(1),
   name: z.string().min(1),
@@ -905,13 +1110,21 @@ export const ReportSchema = z.object({
   /**
    * Optional report-level currency override (ISO 4217, e.g. "THB"). When
    * unset, renderers fall back to the tenant's default currency, then
-   * "USD". See lib/reporting/currency.ts.
+   * DEFAULT_CURRENCY (THB). See lib/reporting/currency.ts.
    */
   currency: z.string().length(3).optional(),
+  /**
+   * Year style for Thai readers, locked by the author: "be" (พ.ศ.) or "ce"
+   * (ค.ศ.). A regulatory or board report must read the same for everyone
+   * and in its PDF. Unset: each reader's own preference (User.preferences
+   * era, Buddhist era by default). Other languages ignore it.
+   */
+  dateEra: z.enum(["be", "ce"]).optional(),
   /** Content localization for the report's own name/description — same
    *  locale-code keying as a block's `i18n` (see BaseBlock above). */
   nameI18n: z.record(z.string()).optional(),
   descriptionI18n: z.record(z.string()).optional(),
+  quality: ReportQualitySchema.optional(),
   parameters: z.array(ParameterSchema).default([]),
   dataSources: z.array(DataSourceDefSchema).default([]),
   pages: z.array(PageSchema).min(1),
@@ -952,4 +1165,13 @@ export type ReportDisplay = "dashboard" | "page";
 export function reportDisplay(report: Pick<Report, "display" | "category">): ReportDisplay {
   if (report.display) return report.display;
   return report.category === "Form" ? "page" : "dashboard";
+}
+
+/** The block with this id on any page of a report, or null. */
+export function findBlock(def: Report, blockId: string): Block | null {
+  for (const page of def.pages) {
+    const found = page.blocks.find((b) => b.id === blockId);
+    if (found) return found;
+  }
+  return null;
 }

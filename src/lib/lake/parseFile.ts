@@ -5,12 +5,19 @@
  * inline, unshared, untested) so a second real consumer doesn't duplicate
  * the CSV/XLSX/JSON sniffing logic.
  *
- * Deps: exceljs for .xlsx/.xls (lib/connections/excelImport.ts already uses
- * it), papaparse for .csv/.tsv (already in package.json) — avoids adding
- * `xlsx` (SheetJS) just for this.
+ * Two entry points over the same parsers:
+ *   - parseUploadWithMeta / parseUpload: a Buffer already in memory (the
+ *     direct upload route, the SFTP pull), all rows at once.
+ *   - openUploadRows: a file on disk (a staged large upload), rows streamed
+ *     one at a time so a million-row workbook never sits in memory.
+ *
+ * Deps: xlsxStream.ts (unzipper + saxes, both already installed with
+ * exceljs) for .xlsx, papaparse for .csv/.tsv — avoids adding `xlsx`
+ * (SheetJS) just for this.
  */
-import ExcelJS from "exceljs";
+import fs from "node:fs";
 import Papa from "papaparse";
+import { openXlsx } from "./xlsxStream";
 
 export type ParsedUpload = {
   rows: Array<Record<string, unknown>>;
@@ -45,44 +52,40 @@ export async function parseUploadWithMeta(
     throw new Error("JSON must be an array of objects, or an object containing one.");
   }
   if (ext === "csv" || ext === "tsv" || ext === "txt") {
-    const text = buf.toString("utf8");
+    // Excel's "CSV UTF-8" starts with a byte-order mark, which would
+    // otherwise become part of the first column's name.
+    const text = buf.toString("utf8").replace(/^﻿/, "");
     const out = Papa.parse(text, {
       header: true,
       skipEmptyLines: true,
       delimiter: ext === "tsv" ? "\t" : "",   // empty = auto-detect
       dynamicTyping: false,                    // keep everything as strings; lake infers later
     });
-    if (out.errors && out.errors.length > 0) {
-      const first = out.errors[0];
+    // PapaParse's own delimiter sniffer can't tell "," from "\t" from ";"
+    // when the file has none of them anywhere — a perfectly ordinary
+    // single-column CSV (one value per line: a list of emails, IDs, tags).
+    // It still parses correctly by defaulting to ",", and says so via a
+    // non-fatal "Delimiter"/"UndetectableDelimiter" entry in `errors`
+    // rather than leaving `data` empty or malformed — confirmed against
+    // Papa directly: `out.data` for a single-column file is exactly right.
+    // Treating every entry in `errors` as fatal (found live via a Tables
+    // 2.0 edge-case pass) meant every single-column upload was rejected
+    // outright with a confusing "CSV parse error", even though nothing
+    // was actually wrong with the file.
+    const fatalErrors = (out.errors ?? []).filter((e) => e.code !== "UndetectableDelimiter");
+    if (fatalErrors.length > 0) {
+      const first = fatalErrors[0];
       throw new Error(`CSV parse error on row ${first.row}: ${first.message}`);
     }
     const rows = (out.data as any[]).filter((r) => r && typeof r === "object");
     return { rows: nameBlankColumns(rows, out.meta?.fields), sheets: [], sheet: null };
   }
-  // XLSX / XLS via exceljs (already a project dep — see excelImport.ts).
-  const wb = new ExcelJS.Workbook();
-  // Node 20's `Buffer<ArrayBufferLike>` and exceljs's own bundled `Buffer`
-  // type are structurally distinct, and casting through `Buffer` doesn't
-  // help (the global IS the Node 20 generic). `any` is the pragmatic escape.
-  await wb.xlsx.load(buf as any);
-  const sheets = wb.worksheets.map((w) => w.name);
-  if (wb.worksheets.length === 0) throw new Error("Spreadsheet had no sheets");
-
-  let ws;
-  if (opts?.sheet != null) {
-    ws = wb.worksheets.find((w) => w.name === opts.sheet);
-    // Naming a sheet that isn't there is a caller bug (a stale sheet list,
-    // a renamed tab). Falling back to sheet 1 would import the wrong data
-    // under the right-looking name — the exact silent-substitution failure
-    // this function exists to end.
-    if (!ws) {
-      throw new Error(`Sheet "${opts.sheet}" not found. This workbook has: ${sheets.join(", ")}`);
-    }
-  } else {
-    ws = wb.worksheets[0];
-  }
-
-  return { rows: sheetToRows(ws), sheets, sheet: ws.name };
+  // XLSX — the same streaming reader a staged large upload uses, collected.
+  const wb = await openXlsx({ buffer: buf });
+  const sheet = wb.resolveSheet(opts?.sheet);
+  const rows: Array<Record<string, unknown>> = [];
+  for await (const row of wb.rows(sheet)) rows.push(row);
+  return { rows, sheets: wb.sheets, sheet };
 }
 
 export async function parseUpload(
@@ -113,34 +116,144 @@ function nameBlankColumns(
   });
 }
 
-function sheetToRows(ws: ExcelJS.Worksheet): Array<Record<string, unknown>> {
-  // Row 1 is the header; subsequent rows become objects keyed by header.
-  const headers: string[] = [];
-  ws.getRow(1).eachCell({ includeEmpty: false }, (cell, colNumber) => {
-    headers[colNumber - 1] = String(cell.value ?? `col_${colNumber}`).trim();
-  });
-  if (headers.length === 0) throw new Error(`Sheet "${ws.name}" has no header row`);
-  const rows: Array<Record<string, unknown>> = [];
-  for (let r = 2; r <= ws.rowCount; r++) {
-    const row = ws.getRow(r);
-    const obj: Record<string, unknown> = {};
-    let hasAny = false;
-    for (let c = 1; c <= headers.length; c++) {
-      const cell = row.getCell(c);
-      const v = cell.value;
-      // exceljs returns rich objects for formulas, dates, hyperlinks. We
-      // flatten to a primitive: prefer .result (formula output), then .text
-      // for hyperlinks, then the raw value.
-      const flat = v == null
-        ? null
-        : typeof v === "object" && "result" in (v as any) ? (v as any).result
-        : typeof v === "object" && "text" in (v as any)   ? (v as any).text
-        : v instanceof Date                                ? v.toISOString()
-        : v;
-      obj[headers[c - 1]] = flat as any;
-      if (flat != null && flat !== "") hasAny = true;
-    }
-    if (hasAny) rows.push(obj);
+// ---------------------------------------------------------------------------
+// Streaming, from a file on disk
+// ---------------------------------------------------------------------------
+
+export type UploadRowStream = {
+  /** Sheet names in workbook order. Empty for CSV/TSV/JSON. */
+  sheets: string[];
+  /** Which sheet `rows` reads. Null for CSV/TSV/JSON. */
+  sheet: string | null;
+  rows: AsyncGenerator<Record<string, unknown>>;
+  /**
+   * Data rows (header excluded) the file says it holds before it is read:
+   * an XLSX sheet's <dimension>, or a CSV's line count. An estimate — a
+   * trailing blank row or a quoted newline moves it — but good enough for
+   * progress, and read without parsing a single row.
+   */
+  expectedRows(): Promise<number | null>;
+};
+
+/** File types a staged upload can import. */
+export const UPLOAD_EXTENSIONS = ["csv", "tsv", "txt", "xlsx", "json"] as const;
+
+/** JSON has no streaming form here — it is parsed whole, so it keeps the direct upload's cap. */
+export const MAX_JSON_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+export function uploadExtension(filename: string): string {
+  return (filename.split(".").pop() ?? "").toLowerCase();
+}
+
+export async function openUploadRows(
+  path: string,
+  filename: string,
+  opts?: { sheet?: string },
+): Promise<UploadRowStream> {
+  const ext = uploadExtension(filename);
+  if (ext === "csv" || ext === "tsv" || ext === "txt") {
+    return {
+      sheets: [],
+      sheet: null,
+      rows: csvRows(path, ext === "tsv" ? "\t" : ""),
+      expectedRows: async () => Math.max(0, (await countLines(path)) - 1),
+    };
   }
-  return rows;
+  if (ext === "xlsx") {
+    const wb = await openXlsx({ path });
+    const sheet = wb.resolveSheet(opts?.sheet);
+    return {
+      sheets: wb.sheets,
+      sheet,
+      rows: wb.rows(sheet),
+      expectedRows: async () => {
+        const n = await wb.declaredRowCount(sheet);
+        return n == null ? null : Math.max(0, n - 1);
+      },
+    };
+  }
+  if (ext === "json") {
+    const { size } = await fs.promises.stat(path);
+    if (size > MAX_JSON_UPLOAD_BYTES) {
+      throw new Error(`JSON files can be at most ${MAX_JSON_UPLOAD_BYTES / 1024 / 1024} MB — save larger data as .csv or .xlsx.`);
+    }
+    const { rows } = await parseUploadWithMeta(await fs.promises.readFile(path), filename);
+    return {
+      sheets: [],
+      sheet: null,
+      rows: (async function* () { yield* rows; })(),
+      expectedRows: async () => rows.length,
+    };
+  }
+  throw new Error(`.${ext || "?"} files can't be imported — upload a .xlsx, .csv or .json file.`);
+}
+
+/**
+ * CSV rows through Papa's step mode, paused whenever the consumer falls
+ * behind, so the file streams instead of loading. Same header handling and
+ * error rules as the in-memory path above.
+ */
+async function* csvRows(path: string, delimiter: string): AsyncGenerator<Record<string, unknown>> {
+  const queue: Array<Record<string, unknown>> = [];
+  let finished = false;
+  let failure: Error | null = null;
+  let paused = false;
+  let parser: Papa.Parser | null = null;
+  let wake: (() => void) | null = null;
+  const notify = () => { const w = wake; wake = null; w?.(); };
+
+  const input = fs.createReadStream(path, { encoding: "utf8" });
+  Papa.parse(input as any, {
+    header: true,
+    skipEmptyLines: true,
+    delimiter,
+    dynamicTyping: false,
+    transformHeader: (h: string, i: number) => {
+      const name = i === 0 ? h.replace(/^﻿/, "") : h;
+      return name.trim() === "" ? `column_${i + 1}` : name;
+    },
+    step: (res: Papa.ParseStepResult<Record<string, unknown>>, p: Papa.Parser) => {
+      parser = p;
+      const fatal = (res.errors ?? []).filter((e) => e.code !== "UndetectableDelimiter");
+      if (fatal.length > 0) {
+        failure = new Error(`CSV parse error on row ${fatal[0].row}: ${fatal[0].message}`);
+        p.abort();
+        return;
+      }
+      if (res.data && typeof res.data === "object") queue.push(res.data);
+      if (queue.length >= 2_000 && !paused) { paused = true; p.pause(); }
+      notify();
+    },
+    complete: () => { finished = true; notify(); },
+    error: (e: Error) => { failure = e; finished = true; notify(); },
+  } as any);
+
+  try {
+    let i = 0;
+    for (;;) {
+      if (i < queue.length) {
+        yield queue[i++];
+        if (i === queue.length) { queue.length = 0; i = 0; }
+        if (paused && queue.length - i < 500) { paused = false; (parser as Papa.Parser | null)?.resume(); }
+        continue;
+      }
+      if (failure) throw failure;
+      if (finished) return;
+      await new Promise<void>((resolve) => { wake = resolve; });
+    }
+  } finally {
+    if (!finished) (parser as Papa.Parser | null)?.abort();
+    input.destroy();
+  }
+}
+
+async function countLines(path: string): Promise<number> {
+  let lines = 0;
+  let last = 0x0a;
+  for await (const chunk of fs.createReadStream(path)) {
+    const buf = chunk as Buffer;
+    for (let i = buf.indexOf(0x0a); i !== -1; i = buf.indexOf(0x0a, i + 1)) lines++;
+    if (buf.length > 0) last = buf[buf.length - 1];
+  }
+  return last === 0x0a ? lines : lines + 1;
 }

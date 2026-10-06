@@ -6,9 +6,10 @@
  * can't import back from ChartBlock.tsx.
  */
 import type { ReactNode } from "react";
-import { currencySymbol } from "@/lib/reporting/currency";
+import { currencySymbol, DEFAULT_CURRENCY } from "@/lib/reporting/currency";
 import { CHART_STYLE_PRESETS, type ResolvedChartStyle } from "@/lib/reporting/chartStyles";
 import type { ForecastConfig } from "@/lib/reporting/schema";
+import { dateValueLabel, isMonthStartSeries, readsThaiMoney, thaiMoney, type DateStyle } from "@/lib/reporting/format";
 
 /**
  * The full set of values a per-chart-type renderer might need. Every
@@ -66,7 +67,72 @@ export type ChartRenderCtx = {
    * helpers below fall back to "classic", which is today's exact look.
    */
   style?: ResolvedChartStyle;
+  /** Reader's language + year style (DateStyleProvider) — date x values read in Thai. */
+  dateStyle?: DateStyle;
+  /** What a chart with nothing to draw says, in the reader's language (renderers have no useT of their own). */
+  emptyText?: string;
+  /** A renderer's other words, already translated (the sunburst's "Total", "Click to step out"). */
+  text?: Record<string, string>;
 };
+
+/**
+ * Category-axis tick formatter: ISO date x values read in the reader's
+ * language — "1 ก.ย. 69" (Buddhist era unless the reader or report chose
+ * Gregorian), "1 Sep 25", and a monthly series of first-of-month dates as
+ * months ("ก.ย. 68", "Sep 25"). English readers saw "2025-09-01" on every
+ * tick of Siam Tech's monthly MRR (2026-10-03). Anything else is drawn as it is.
+ */
+export function dateTick(ctx: ChartRenderCtx): (v: any) => string {
+  return dateFormatter(ctx, "axis");
+}
+
+/**
+ * A Recharts tooltip line: the value in the reader's format, under its
+ * series' name. The name was blanked on every chart, so a Pareto's tooltip
+ * read " : 10.1%" and " : 23.3%" with nothing saying which was the share and
+ * which the running share (Pet Lovers, 2026-10-03). One measure keeps the
+ * blank — the chart's title already names it; several keep their names; and
+ * `always` keeps it where the name IS the category (a pie's slice, a
+ * funnel's stage, a treemap's tile, a scatter's axes).
+ */
+export function seriesTooltip(ctx: ChartRenderCtx, always = false): (v: any, name: any) => [string, string] {
+  const named = always || ctx.yFields.length > 1;
+  const numOpts = { locale: ctx.dateStyle?.locale };
+  return (v, name) => [formatValue(Number(v), ctx.fmt, ctx.currency, numOpts), named ? String(name ?? "") : ""];
+}
+
+/** Tooltip header for the same axis, in full: "1 ก.ย. 2569", "Sep 2025". */
+export function dateLabel(ctx: ChartRenderCtx): (v: any) => string {
+  return dateFormatter(ctx, "full");
+}
+
+function dateFormatter(ctx: ChartRenderCtx, form: "full" | "axis"): (v: any) => string {
+  const monthly = isMonthStartSeries((ctx.data as Array<Record<string, unknown>>).map((r) => r?.[ctx.xField]));
+  return (v) => {
+    const date = dateValueLabel(v, ctx.dateStyle, form, monthly);
+    if (date != null) return date;
+    const s = String(v);
+    // A tick names its category in at most 20 characters — a long product
+    // name on a slanted axis ran off the chart's left edge; the tooltip
+    // header (form "full") keeps the whole name.
+    return form === "axis" && s.length > 20 ? s.slice(0, 19) + "…" : s;
+  };
+}
+
+/**
+ * A series' legend and tooltip name. The chart's own `seriesLabels` name
+ * wins (it can be translated — a block's i18n reaches it as
+ * "seriesLabels.<field>"); otherwise a raw column key ("net_revenue") reads
+ * "Net revenue", and anything someone already wrote as a label ("Revenue",
+ * a Thai header, "Q3 target") is left exactly as it is.
+ */
+export function seriesName(field: string, cfg?: { seriesLabels?: Record<string, string> }): string {
+  const named = cfg?.seriesLabels?.[field];
+  if (named) return named;
+  if (!/^[a-z][a-z0-9_]*$/.test(field)) return field;
+  const words = field.replace(/_+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 /** Style tokens with the classic fallback applied, for renderers to read. */
 export function styleOf(ctx: ChartRenderCtx): ResolvedChartStyle {
@@ -131,10 +197,13 @@ export function formatValue(
      * expects the real figure, not "61K".
      */
     compact?: boolean;
+    /** The reader's language: baht read in Thai units for a Thai reader (thaiMoney). */
+    locale?: string;
   }
 ): string {
   if (v == null || Number.isNaN(v)) return "";
   const compact = opts?.compact ?? true;
+  if (fmt === "currency" && readsThaiMoney(currency, opts?.locale)) return thaiMoney(v, compact);
   if (fmt === "currency") {
     // Threshold on the MAGNITUDE, not the signed value. Comparing `v >= 1000`
     // sent every negative down the non-compact branch, so an axis spanning
@@ -144,7 +213,7 @@ export function formatValue(
     // has it: -$1.1M, not $-1.1M.
     const abs = Math.abs(v);
     const sign = v < 0 ? "-" : "";
-    return sign + currencySymbol(currency ?? "USD") + (compact && abs >= 1000
+    return sign + currencySymbol(currency ?? DEFAULT_CURRENCY) + (compact && abs >= 1000
       ? compactNum(abs)
       : abs.toLocaleString(undefined, { maximumFractionDigits: 2 }));
   }
@@ -190,6 +259,15 @@ export const AXIS_PROPS = {
   axisLine: false as const,
   tickMargin: 8,
 };
+
+/**
+ * A vertical bar chart's category axis. Past six bars Recharts starts
+ * dropping labels that would collide, leaving bars nobody can name; there
+ * every label is kept and tilted instead.
+ */
+export function categoryAxisProps(count: number) {
+  return count > 6 ? { interval: 0, angle: -35, textAnchor: "end" as const, height: 58 } : {};
+}
 
 /**
  * Fixed Y-axis gutter width, shared by every chart type that renders a

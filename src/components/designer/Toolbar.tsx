@@ -3,16 +3,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
-  Undo2, Redo2, Save, Eye, Download, ChevronRight, ArrowLeft,
-  Loader2, Check, FileSpreadsheet, FileText, FileCode, History, Clock, Palette, Sparkles,
-  LayoutDashboard,
+  Undo2, Redo2, Save, Eye, ChevronRight, ArrowLeft,
+  Loader2, Check, FileText, History, Clock, Palette, Sparkles,
+  LayoutDashboard, CalendarDays,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDesignerStore } from "@/lib/reporting/store";
 import { DataDrawer } from "./DataDrawer";
 import { ScheduleDrawer } from "./ScheduleDrawer";
+import { ReportExportMenu } from "@/components/reports/ReportExportMenu";
 import { useToast } from "@/lib/toast";
+import { useT } from "@/lib/i18n/LocaleContext";
 import { CurfLogo } from "@/components/common/CurfLogo";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -33,6 +35,7 @@ export function Toolbar({ reportId }: { reportId: string }) {
   const setMeta = useDesignerStore((s) => s.updateReportMeta);
   const report = useDesignerStore((s) => s.report);
   const { push } = useToast();
+  const { t } = useT();
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
@@ -55,34 +58,38 @@ export function Toolbar({ reportId }: { reportId: string }) {
       // as the {error, upgradeUrl} shape the rest of the app uses, and fall
       // back to the raw text only when it genuinely isn't JSON.
       const raw = await res.text();
-      let description = raw || "Request failed.";
+      let description = raw || t("common.requestFailed");
       try {
         const json = JSON.parse(raw);
         description = json?.upgradeUrl
-          ? `${json.error ?? "Request failed."} Upgrade at ${json.upgradeUrl}.`
+          ? t("designerToolbar.upgradeAt")
+              .replace("{error}", json.error ?? t("common.requestFailed"))
+              .replace("{url}", json.upgradeUrl)
           : json?.error ?? description;
       } catch { /* not JSON — keep the raw text */ }
-      push({ variant: "destructive", title: "Save failed", description });
+      push({ variant: "destructive", title: t("common.saveFailed"), description });
       return;
     }
     setSaveState("saved");
-    push({ variant: "success", title: "Saved", description: "Report updated." });
+    push({ variant: "success", title: t("common.saved"), description: t("designerToolbar.reportUpdated") });
     router.refresh();
     setTimeout(() => setSaveState("idle"), 1500);
   }
 
+  // The actions wrap onto a second row before they squeeze the report's
+  // name to nothing (they need ~1460px; a laptop has 1280–1440).
   return (
-    <header className="flex items-center justify-between border-b border-border bg-background/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-      <div className="flex min-w-0 items-center gap-2">
+    <header className="flex flex-wrap items-center justify-between gap-y-1.5 border-b border-border bg-background/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+      <div className="flex shrink-0 items-center gap-2">
         <Button
           asChild
           size="sm"
           variant="ghost"
           className="h-8 -ml-1 text-muted-foreground hover:text-foreground"
-          title="Back to reports"
+          title={t("designerToolbar.backToReports")}
         >
           <Link href="/reports">
-            <ArrowLeft className="mr-1.5 h-4 w-4" /> Reports
+            <ArrowLeft className="mr-1.5 h-4 w-4" /> {t("nav.reports")}
           </Link>
         </Button>
         <div className="hidden items-center gap-2 sm:flex">
@@ -104,30 +111,33 @@ export function Toolbar({ reportId }: { reportId: string }) {
         <SaveIndicator state={saveState} />
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center justify-end gap-1">
         <div className="mr-1 flex items-center gap-0.5">
-          <Button size="icon" variant="ghost" onClick={undo} title="Undo">
+          <Button size="icon" variant="ghost" onClick={undo} title={t("designerToolbar.undo")}>
             <Undo2 className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={redo} title="Redo">
+          <Button size="icon" variant="ghost" onClick={redo} title={t("designerToolbar.redo")}>
             <Redo2 className="h-4 w-4" />
           </Button>
         </div>
         <DataDrawer />
         {SuggestChartButton && <SuggestChartButton reportId={reportId} />}
         <DisplayPicker />
+        <YearsPicker />
         <ThemePicker />
-        <Button size="sm" variant="ghost" onClick={() => setScheduleOpen(true)} title="Schedule deliveries">
-          <Clock className="mr-1.5 h-4 w-4" /> Schedule
+        {/* Secondary actions show their label on wide screens only — the icon
+            and tooltip carry them on a laptop, so the bar fits beside the name. */}
+        <Button size="sm" variant="ghost" onClick={() => setScheduleOpen(true)} title={t("designerToolbar.scheduleTooltip")} aria-label={t("designerToolbar.schedule")}>
+          <Clock className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designerToolbar.schedule")}</span>
         </Button>
-        <Button size="sm" variant="ghost" asChild>
-          <Link href={"/reports/" + reportId + "/history"}>
-            <History className="mr-1.5 h-4 w-4" /> History
+        <Button size="sm" variant="ghost" asChild title={t("reportHistory.breadcrumb")}>
+          <Link href={"/reports/" + reportId + "/history"} aria-label={t("reportHistory.breadcrumb")}>
+            <History className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("reportHistory.breadcrumb")}</span>
           </Link>
         </Button>
-        <Button size="sm" variant="ghost" asChild>
-          <Link href={"/reports/" + reportId} target="_blank">
-            <Eye className="mr-1.5 h-4 w-4" /> Preview
+        <Button size="sm" variant="ghost" asChild title={t("designerToolbar.preview")}>
+          <Link href={"/reports/" + reportId} target="_blank" aria-label={t("designerToolbar.preview")}>
+            <Eye className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designerToolbar.preview")}</span>
           </Link>
         </Button>
         {PublishButton && <PublishButton reportId={reportId} />}
@@ -135,24 +145,24 @@ export function Toolbar({ reportId }: { reportId: string }) {
             gate (renders an upgrade card below Business) so the button stays
             visible as a discovery affordance; Community has no story page. */}
         {STORY_MODE && (
-          <Button size="sm" variant="ghost" asChild title="Auto-narrated walkthrough">
-            <Link href={"/reports/" + reportId + "/story"} target="_blank">
-              <Sparkles className="mr-1.5 h-4 w-4" /> Story
+          <Button size="sm" variant="ghost" asChild title={t("designerToolbar.storyTooltip")}>
+            <Link href={"/reports/" + reportId + "/story"} target="_blank" aria-label={t("designerToolbar.story")}>
+              <Sparkles className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designerToolbar.story")}</span>
             </Link>
           </Button>
         )}
-        <ExportMenu reportId={reportId} />
+        <ReportExportMenu reportId={reportId} />
         <Button size="sm" onClick={save} disabled={saveState === "saving"}>
           {saveState === "saving" ? (
-            <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Saving...</>
+            <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("common.saving")}</>
           ) : (
-            <><Save className="mr-1.5 h-4 w-4" /> Save</>
+            <><Save className="mr-1.5 h-4 w-4" /> {t("action.save")}</>
           )}
         </Button>
       </div>
       <ScheduleDrawer
         reportId={reportId}
-        reportName={name || "Untitled"}
+        reportName={name || t("common.untitled")}
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}
       />
@@ -161,18 +171,98 @@ export function Toolbar({ reportId }: { reportId: string }) {
 }
 
 function SaveIndicator({ state }: { state: SaveState }) {
+  const { t } = useT();
   if (state === "idle") return null;
   if (state === "saving") return (
     <span className="ml-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-      <Loader2 className="h-3 w-3 animate-spin" /> Saving...
+      <Loader2 className="h-3 w-3 animate-spin" /> {t("common.saving")}
     </span>
   );
   if (state === "saved") return (
     <span className="ml-1 inline-flex items-center gap-1 text-[11px] text-success">
-      <Check className="h-3 w-3" /> Saved
+      <Check className="h-3 w-3" /> {t("common.saved")}
     </span>
   );
-  return <span className="ml-1 text-[11px] text-destructive">Save failed</span>;
+  return <span className="ml-1 text-[11px] text-destructive">{t("common.saveFailed")}</span>;
+}
+
+/**
+ * DisplayPicker — how the viewer lays the report out: full-width dashboard
+ * grid, or the A4 / Letter sheets it prints as. Exports and the designer
+ * canvas always use the sheets; this only changes the interactive viewer.
+ */
+const DISPLAY_OPTIONS: Array<{ value: ReportDisplay; labelKey: string; descriptionKey: string; Icon: typeof LayoutDashboard }> = [
+  { value: "dashboard", labelKey: "designerToolbar.display.dashboard", descriptionKey: "designerToolbar.display.dashboardDesc", Icon: LayoutDashboard },
+  { value: "page",      labelKey: "designerShell.pageLabel",           descriptionKey: "designerToolbar.display.pageDesc",      Icon: FileText },
+];
+
+function DisplayPicker() {
+  const { t } = useT();
+  const report = useDesignerStore((s) => s.report);
+  const setMeta = useDesignerStore((s) => s.updateReportMeta);
+  const current = DISPLAY_OPTIONS.find((o) => o.value === reportDisplay(report)) ?? DISPLAY_OPTIONS[0];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost" title={t("designerToolbar.displayTooltip")}>
+          <current.Icon className="mr-1.5 h-4 w-4" />
+          <span className="text-muted-foreground">{t("designerToolbar.displayLabel")}</span>&nbsp;{t(current.labelKey)}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {DISPLAY_OPTIONS.map((o) => (
+          <DropdownMenuItem key={o.value} onClick={() => setMeta({ display: o.value })} className="flex items-start gap-2">
+            <o.Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="flex-1">
+              <span className="block text-sm font-medium">{t(o.labelKey)}</span>
+              <span className="block text-[10px] leading-tight text-muted-foreground">{t(o.descriptionKey)}</span>
+            </span>
+            {current.value === o.value && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * YearsPicker — how this report writes years for Thai readers. "Reader's
+ * choice" (unset) follows each reader's Account preference; locking it to
+ * พ.ศ. or ค.ศ. makes every reader, and every PDF and Excel file, show the
+ * same year — what a regulatory or board report needs. Report.dateEra.
+ */
+const YEARS_OPTIONS: Array<{ value: "be" | "ce" | undefined; labelKey: string; descriptionKey: string }> = [
+  { value: undefined, labelKey: "designerToolbar.years.reader", descriptionKey: "designerToolbar.years.readerDesc" },
+  { value: "be",      labelKey: "designerToolbar.years.be",     descriptionKey: "designerToolbar.years.beDesc" },
+  { value: "ce",      labelKey: "designerToolbar.years.ce",     descriptionKey: "designerToolbar.years.ceDesc" },
+];
+
+function YearsPicker() {
+  const { t } = useT();
+  const report = useDesignerStore((s) => s.report);
+  const setMeta = useDesignerStore((s) => s.updateReportMeta);
+  const current = YEARS_OPTIONS.find((o) => o.value === report.dateEra) ?? YEARS_OPTIONS[0]!;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost" title={t("designerToolbar.years.tooltip")}>
+          <CalendarDays className="mr-1.5 h-4 w-4" />
+          <span className="text-muted-foreground">{t("designerToolbar.years.label")}</span>&nbsp;{t(current.labelKey)}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {YEARS_OPTIONS.map((o) => (
+          <DropdownMenuItem key={o.value ?? "reader"} onClick={() => setMeta({ dateEra: o.value })} className="flex items-start gap-2">
+            <span className="flex-1">
+              <span className="block text-sm font-medium">{t(o.labelKey)}</span>
+              <span className="block text-[10px] leading-tight text-muted-foreground">{t(o.descriptionKey)}</span>
+            </span>
+            {current.value === o.value && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 /**
@@ -183,59 +273,22 @@ function SaveIndicator({ state }: { state: SaveState }) {
  * deliberately keep the picker visible to everyone so Free users see what
  * they could unlock; the click→save→toast flow is the upgrade nudge.
  */
-/**
- * DisplayPicker — how the viewer lays the report out: full-width dashboard
- * grid, or the A4 / Letter sheets it prints as. Exports and the designer
- * canvas always use the sheets; this only changes the interactive viewer.
- */
-const DISPLAY_OPTIONS: Array<{ value: ReportDisplay; label: string; description: string; Icon: typeof LayoutDashboard }> = [
-  { value: "dashboard", label: "Dashboard", description: "Full-width grid on the app background. KPIs, charts, tables.", Icon: LayoutDashboard },
-  { value: "page", label: "Page", description: "The A4 / Letter sheets it prints as. Invoices, receipts, memos.", Icon: FileText },
-];
-
-function DisplayPicker() {
-  const report = useDesignerStore((s) => s.report);
-  const setMeta = useDesignerStore((s) => s.updateReportMeta);
-  const current = DISPLAY_OPTIONS.find((o) => o.value === reportDisplay(report)) ?? DISPLAY_OPTIONS[0];
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="ghost" title="How the viewer lays this report out: a full-width dashboard grid, or the A4 / Letter page it prints as">
-          <current.Icon className="mr-1.5 h-4 w-4" />
-          <span className="text-muted-foreground">Display:</span>&nbsp;{current.label}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        {DISPLAY_OPTIONS.map((o) => (
-          <DropdownMenuItem key={o.value} onClick={() => setMeta({ display: o.value })} className="flex items-start gap-2">
-            <o.Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="flex-1">
-              <span className="block text-sm font-medium">{o.label}</span>
-              <span className="block text-[10px] leading-tight text-muted-foreground">{o.description}</span>
-            </span>
-            {current.value === o.value && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 function ThemePicker() {
+  const { t } = useT();
   const theme = useDesignerStore((s) => (s.report as any).theme as Theme | undefined);
   const setMeta = useDesignerStore((s) => s.updateReportMeta);
   const current = THEME_PRESETS[theme ?? "default"];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="ghost" title="Theme">
+        <Button size="sm" variant="ghost" title={t("designerToolbar.theme")}>
           <span
             aria-hidden
             className="mr-1.5 inline-block h-3.5 w-3.5 rounded-full ring-1 ring-border"
             style={{ background: current.swatch }}
           />
           <Palette className="mr-1.5 h-4 w-4" />
-          {current.label}
+          {t(`themePreset.${current.slug}`)}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
@@ -254,84 +307,12 @@ function ThemePicker() {
               ))}
             </span>
             <span className="flex-1">
-              <span className="block text-sm font-medium">{p.label}</span>
-              <span className="block text-[10px] leading-tight text-muted-foreground">{p.description}</span>
+              <span className="block text-sm font-medium">{t(`themePreset.${p.slug}`)}</span>
+              <span className="block text-[10px] leading-tight text-muted-foreground">{t(`themePreset.${p.slug}.desc`)}</span>
             </span>
             {(theme ?? "default") === p.slug && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
           </DropdownMenuItem>
         ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function ExportMenu({ reportId }: { reportId: string }) {
-  const { push } = useToast();
-  const [csvExporting, setCsvExporting] = useState(false);
-
-  // CSV, unlike pdf/xlsx/docx, has a real "nothing to export" case (no
-  // table block on the report) and the API route reports it as a 400 JSON
-  // error — a plain <a href> navigation dumped that raw JSON into the whole
-  // tab instead of downloading anything. Same fetch+blob fix already
-  // applied to the viewer's export menu (ReportViewerShell.tsx).
-  async function exportCsv() {
-    setCsvExporting(true);
-    try {
-      const r = await fetch("/api/reports/" + reportId + "/export/csv");
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: "Export failed." }));
-        push({
-          variant: "destructive",
-          title: "Couldn't export CSV",
-          description: err.error ?? "This report doesn't have a table block to export.",
-        });
-        return;
-      }
-      const blob = await r.blob();
-      const cd = r.headers.get("content-disposition") ?? "";
-      const match = /filename="([^"]+)"/.exec(cd);
-      const fname = match?.[1] ?? "report.csv";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = fname; a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      push({ variant: "destructive", title: "Couldn't export CSV", description: "Network error." });
-    } finally {
-      setCsvExporting(false);
-    }
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="outline">
-          <Download className="mr-1.5 h-4 w-4" /> Export
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-44">
-        <DropdownMenuItem asChild>
-          <a href={"/api/reports/" + reportId + "/export/pdf"} target="_blank" rel="noreferrer">
-            <FileText className="mr-2 h-4 w-4" /> PDF
-          </a>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <a href={"/api/reports/" + reportId + "/export/xlsx"}>
-            <FileSpreadsheet className="mr-2 h-4 w-4" /> Excel
-          </a>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <a href={"/api/reports/" + reportId + "/export/docx"}>
-            <FileText className="mr-2 h-4 w-4" /> Word
-          </a>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => void exportCsv()}
-          disabled={csvExporting}
-          className="cursor-pointer"
-        >
-          {csvExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCode className="mr-2 h-4 w-4" />} CSV
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

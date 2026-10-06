@@ -1,5 +1,5 @@
 /**
- * /api/user/preferences — per-user theme override + density + a11y prefs.
+ * /api/user/preferences — per-user theme override + density + a11y prefs + language.
  *
  * GET returns the current user's preferences (parsed from the JSON column).
  * PUT merges a partial update — explicit `null` for themeOverride clears the
@@ -13,6 +13,8 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ThemeSchema } from "@/lib/reporting/schema";
+import { LOCALES } from "@/lib/i18n/dict";
+import { LineBriefSchema } from "@/lib/preferences/lineBrief";
 
 const PrefsSchema = z.object({
   themeOverride: ThemeSchema.nullable().optional(),
@@ -20,6 +22,12 @@ const PrefsSchema = z.object({
   density:       z.enum(["comfortable", "compact"]).optional(),
   fontScale:     z.number().min(0.875).max(1.25).optional(),
   reducedMotion: z.boolean().optional(),
+  // UI language — seeds the rd_locale cookie on devices that don't have it yet (app/layout.tsx).
+  locale:        z.enum(LOCALES).optional(),
+  // Thai readers: Buddhist-era (default) or Gregorian years in dates (lib/i18n/formatDate.ts).
+  era:           z.enum(["be", "ce"]).optional(),
+  // Morning brief on LINE at this local time (lib/line/brief.ts, executive journey P4b).
+  lineBrief:     LineBriefSchema.nullable().optional(),
   // Viewer-local forecast override (per user, applies across every report
   // they view) — lets a reader without edit access turn a forecast overlay
   // on/off and pick method/horizon for themselves, without touching the

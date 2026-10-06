@@ -26,6 +26,7 @@ function fields(overrides: Partial<ConnectionFormFields> = {}): ConnectionFormFi
     hs: { accessToken: "" },
     zd: { subdomain: "", email: "", apiToken: "" },
     sftp: { host: "", port: 22, username: "", authMethod: "password", password: "", privateKey: "", passphrase: "", remotePath: "" },
+    engine: { baseUrl: "", audience: "" },
     ...overrides,
   };
 }
@@ -226,5 +227,31 @@ describe("buildConnectionPayload", () => {
       sftp: { host: "h", port: 22, username: "u", authMethod: "password", password: "", privateKey: "", passphrase: "", remotePath: "/data.csv" },
     })) as any;
     expect(payload.password).toBeUndefined();
+  });
+
+  it("engine is valid with a blank URL (platform engine) and carries no secret", () => {
+    expect(isConnectionKindValid(fields({ kind: "engine" }))).toBe(true);
+    expect(isConnectionKindValid(fields({ kind: "engine", editing: true }))).toBe(true);
+    const payload = buildConnectionPayload(fields({ kind: "engine" })) as any;
+    expect(payload).toEqual({ kind: "engine", name: "My Connection", visibility: { mode: "tenant" } });
+    expect(Object.keys(payload).some((k) => /password|secret|token/i.test(k))).toBe(false);
+  });
+
+  it("engine trims baseUrl and audience", () => {
+    const payload = buildConnectionPayload(fields({
+      kind: "engine",
+      engine: { baseUrl: "  https://engine.acme.com  ", audience: "  curf-engine  " },
+    })) as any;
+    expect(payload.baseUrl).toBe("https://engine.acme.com");
+    expect(payload.audience).toBe("curf-engine");
+  });
+
+  it("engine sends baseUrl and audience as \"\" on edit when cleared (back to the platform engine), omits them on create", () => {
+    const edit = buildConnectionPayload(fields({ kind: "engine", editing: true, engine: { baseUrl: "   ", audience: "" } })) as any;
+    expect(edit.baseUrl).toBe("");
+    expect(edit.audience).toBe("");
+    const create = buildConnectionPayload(fields({ kind: "engine", engine: { baseUrl: "   ", audience: "" } })) as any;
+    expect("baseUrl" in create).toBe(false);
+    expect("audience" in create).toBe(false);
   });
 });

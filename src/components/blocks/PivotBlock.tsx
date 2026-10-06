@@ -1,5 +1,6 @@
 "use client";
-import { formatCurrency, formatNumber, formatPercent } from "@/lib/reporting/format";
+import { formatCurrency, formatNumber, formatPercent, thaiDateLabel } from "@/lib/reporting/format";
+import { useDateStyle } from "@/components/providers/DateStyleProvider";
 import { cn } from "@/lib/utils";
 import type { BlockRenderContext } from "./types";
 import { ProvenanceBadge } from "./ProvenanceBadge";
@@ -8,6 +9,7 @@ import { AskButton } from "./AskButton";
 import { CommentButton } from "./CommentButton";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { useCurrency } from "@/components/providers/CurrencyProvider";
+import { useT } from "@/lib/i18n/LocaleContext";
 import { BlockActions } from "./BlockActions";
 import { BlockEmptyState } from "./BlockEmptyState";
 
@@ -44,9 +46,16 @@ function PivotBlockInner({ block, dataset, provenance, print, report, params, re
   // of the active theme's primary ramp and convert to rgba inline.
   const theme = useTheme();
   const currency = useCurrency();
+  const dateStyle = useDateStyle();
+  const { t } = useT();
 
   if (!cfg.queryId || rows.length === 0) {
-    return <BlockEmptyState type="pivot" blockId={block.id} title={cfg.title} />;
+    return (
+      <BlockEmptyState
+        type="pivot" blockId={block.id} title={cfg.title} typeLabel={t("blockType.pivot")}
+        description={t("blockEmpty.noData")}
+      />
+    );
   }
 
   const tip = theme.ramps.primary[theme.ramps.primary.length - 1];
@@ -54,6 +63,9 @@ function PivotBlockInner({ block, dataset, provenance, print, report, params, re
     const h = tip.replace("#", "");
     return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
   })();
+
+  // Row/column keys are raw values; a date reads in Thai for a Thai reader.
+  const keyLabel = (k: string) => thaiDateLabel(k, dateStyle) ?? k;
 
   // Aggregate.
   const pivot = aggregate(rows, cfg.rowField, cfg.colField, cfg.valueField, cfg.aggregation);
@@ -105,7 +117,7 @@ function PivotBlockInner({ block, dataset, provenance, print, report, params, re
             <tr className="text-muted-foreground">
               <th className="border-b border-border px-2.5 py-1.5 text-left font-medium">{cfg.rowField}</th>
               {pivot.colKeys.map((ck) => (
-                <th key={ck} className="border-b border-border px-2.5 py-1.5 text-right font-medium">{ck}</th>
+                <th key={ck} className="border-b border-border px-2.5 py-1.5 text-right font-medium">{keyLabel(ck)}</th>
               ))}
               {cfg.showRowTotals && (
                 <th className="border-b border-border bg-muted px-2.5 py-1.5 text-right font-semibold text-foreground">Total</th>
@@ -115,7 +127,7 @@ function PivotBlockInner({ block, dataset, provenance, print, report, params, re
           <tbody>
             {pivot.rowKeys.map((rk) => (
               <tr key={rk}>
-                <td className="border-b border-border/60 px-2.5 py-1.5 align-top">{rk}</td>
+                <td className="border-b border-border/60 px-2.5 py-1.5 align-top">{keyLabel(rk)}</td>
                 {pivot.colKeys.map((ck) => {
                   const v = pivot.cells[rk]?.[ck] ?? null;
                   return (

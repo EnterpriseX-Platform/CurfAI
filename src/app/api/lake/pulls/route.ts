@@ -21,7 +21,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { blockScopedApiKey, requireUser, requireAdminOrEditor } from "@/lib/auth";
+import { canSeeDataSource } from "@/lib/datasourceAcl";
+import { exportViewer } from "@/lib/reporting/exportCaller";
 import { recordAudit } from "@/lib/audit";
 import { runLakePull } from "@/lib/lake/restPull";
 
@@ -48,6 +50,8 @@ const CreateSchema = z.object({
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   const items = await prisma.lakePull.findMany({
     where: { tenantId: user.tenantId },
     orderBy: { createdAt: "desc" },
@@ -56,8 +60,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
 
   const body = await req.json().catch(() => ({}));
   const parsed = CreateSchema.safeParse(body);
@@ -68,9 +72,9 @@ export async function POST(req: NextRequest) {
   // Confirm the source DataSource is REST or SFTP + in this tenant.
   const ds = await prisma.dataSource.findFirst({
     where: { id: parsed.data.dataSourceId, tenantId: user.tenantId },
-    select: { id: true, kind: true, name: true },
+    select: { id: true, kind: true, name: true, visibleToRolesJson: true, ownerUserId: true },
   });
-  if (!ds) return NextResponse.json({ error: "Source connection not found" }, { status: 404 });
+  if (!ds || !canSeeDataSource(ds, await exportViewer(user))) return NextResponse.json({ error: "Source connection not found" }, { status: 404 });
   if (ds.kind !== "rest" && ds.kind !== "sftp") {
     return NextResponse.json({ error: "Only REST or SFTP connections can pull into the lake" }, { status: 400 });
   }

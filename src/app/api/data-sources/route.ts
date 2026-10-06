@@ -3,12 +3,16 @@ import { z } from "zod";
 import { ee } from "@/ee";
 import { paidConnector, unsupportedKindResponse } from "@/lib/connections/paid";
 import { prisma } from "@/lib/db";
+import { sqlitePathAllowed, SQLITE_PATH_REFUSED } from "@/lib/connections/sqlitePath";
+import { assertWarehouseHost } from "@/lib/connections/warehouseHost";
 import { requireUser, requireAdmin, tenantWhere, getUserRoles } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { writeVisibility, canSeeDataSource, type Visibility } from "@/lib/datasourceAcl";
-import { encodeRestConnection } from "@/lib/connections/rest";
+import { encodeRestConnection, restBaseUrlError } from "@/lib/connections/rest";
 import { encodePgConnection } from "@/lib/connections/postgres";
 import { encodeMyConnection } from "@/lib/connections/mysql";
+import { encodeEngineConnection, engineBaseUrlError, platformEngineUrl } from "@/lib/connections/engine";
+import { engineIdentityConfigured } from "@/lib/engine/identity";
 import { featureGate, type FeatureKey } from "@/lib/featureGate";
 
 // HubSpot/Zendesk are guided presets over the "rest" kind, not their own
@@ -35,6 +39,7 @@ const CONNECTOR_FEATURE: Record<string, FeatureKey> = {
   snowflake: "connector.snowflake",
   bigquery:  "connector.bigquery",
   sftp:      "connector.sftp",
+  engine:    "connector.engine",
 };
 
 // Visibility is shared across kinds — every connection (REST, SQLite, Excel)
@@ -129,6 +134,15 @@ const DataSourceInputSchema = z.discriminatedUnion("kind", [
     privateKey: z.string().min(1).optional(),
     passphrase: z.string().optional(),
     remotePath: z.string().min(1),
+    visibility: VisibilityInputSchema,
+  }),
+  // Java engine (engines/java): governed views answered per person. Nothing secret to store — Curf signs a
+  // token per query (lib/engine/identity.ts). baseUrl blank = the platform's engine (CURF_ENGINE_URL).
+  z.object({
+    kind: z.literal("engine"),
+    name: z.string().min(1),
+    baseUrl: z.string().max(2048).optional(),
+    audience: z.string().max(256).optional(),
     visibility: VisibilityInputSchema,
   }),
 ]);
@@ -231,6 +245,14 @@ export async function GET(req: NextRequest) {
           return { id: r.id, name: r.name, kind: r.kind, createdAt: r.createdAt, visibility };
         }
       }
+      if (r.kind === "engine") {
+        try {
+          const parsed = JSON.parse(r.connection) as { baseUrl?: string };
+          return { id: r.id, name: r.name, kind: r.kind, baseUrl: parsed.baseUrl || "Platform engine", createdAt: r.createdAt, visibility };
+        } catch {
+          return { id: r.id, name: r.name, kind: r.kind, createdAt: r.createdAt, visibility };
+        }
+      }
       if (r.kind === "excel") {
         // Surface the originally-uploaded filename and table/row counts so
         // the connections list can show something more useful than the raw
@@ -268,6 +290,13 @@ export async function POST(req: NextRequest) {
   if (parsed.data.kind === "rest" && !parsed.data.baseUrl && !parsed.data.preset) {
     return NextResponse.json({ error: "Invalid", issues: [{ path: ["baseUrl"], message: "baseUrl or preset is required" }] }, { status: 400 });
   }
+  if (parsed.data.kind === "postgres" || parsed.data.kind === "mysql") {
+    try { await assertWarehouseHost(parsed.data.host); }
+    catch (e: any) { return NextResponse.json({ error: e?.message ?? "Host not allowed" }, { status: 400 }); }
+  }
+  if (parsed.data.kind === "sqlite" && !sqlitePathAllowed(user.tenantId, parsed.data.connection)) {
+    return NextResponse.json({ error: SQLITE_PATH_REFUSED, issues: [{ path: ["connection"], message: SQLITE_PATH_REFUSED }] }, { status: 400 });
+  }
 
   // Feature gate by connector kind. Free kinds (sqlite/rest/excel) skip the
   // check; warehouses (Postgres/MySQL → Team, Snowflake/BigQuery → Business)
@@ -283,7 +312,22 @@ export async function POST(req: NextRequest) {
   if ((parsed.data.kind === "snowflake" || parsed.data.kind === "bigquery" || parsed.data.kind === "sftp") && !paidConnector(parsed.data.kind)) {
     return unsupportedKindResponse(parsed.data.kind);
   }
+  if (parsed.data.kind === "engine") {
+    // Say so now, while the person saving it can act on it, instead of failing on the first report run.
+    const problem = !engineIdentityConfigured()
+      ? "The Java engine is not set up on this Curf: its operator has to set CURF_ENGINE_SIGNING_KEY."
+      : parsed.data.baseUrl?.trim()
+        ? await engineBaseUrlError(parsed.data.baseUrl.trim())
+        : platformEngineUrl() ? "" : "Give this connection an engine URL: this Curf has no platform engine to fall back on.";
+    if (problem) return NextResponse.json({ error: problem, issues: [{ path: ["baseUrl"], message: problem }] }, { status: 400 });
+  }
   const restPreset = parsed.data.kind === "rest" ? resolveRestPreset(parsed.data.preset) : null;
+  if (parsed.data.kind === "rest") {
+    const urlError = await restBaseUrlError(restPreset?.baseUrl ?? parsed.data.baseUrl!);
+    if (urlError) {
+      return NextResponse.json({ error: urlError, issues: [{ path: ["baseUrl"], message: urlError }] }, { status: 400 });
+    }
+  }
   const connection = parsed.data.kind === "rest"
     ? encodeRestConnection(
         restPreset
@@ -309,13 +353,23 @@ export async function POST(req: NextRequest) {
             password: parsed.data.password,
             ssl: parsed.data.ssl,
           })
-        : parsed.data.kind === "snowflake" || parsed.data.kind === "bigquery" || parsed.data.kind === "sftp"
-          ? paidConnector(parsed.data.kind)!.encode(parsed.data)
-          : parsed.data.connection;
+        : parsed.data.kind === "engine"
+          ? encodeEngineConnection({ baseUrl: parsed.data.baseUrl, audience: parsed.data.audience })
+          : parsed.data.kind === "snowflake" || parsed.data.kind === "bigquery" || parsed.data.kind === "sftp"
+            ? paidConnector(parsed.data.kind)!.encode(parsed.data)
+            : parsed.data.connection;
 
   // Resolve visibility into the persisted columns. owner_only is bound to the
   // CURRENT user — clients can't pick a different owner via the API.
   const vIn = parsed.data.visibility;
+  // Narrowing a connection to "just me" or to specific roles is the
+  // gov.connection_acl capability. The route already featureGates the
+  // connector KIND a few lines up; the ACL field itself was never checked,
+  // so any tier could use it. Tenant-wide (the default) stays free.
+  if (vIn && vIn.mode !== "tenant") {
+    const aclBlock = await featureGate(user, "gov.connection_acl");
+    if (aclBlock) return aclBlock;
+  }
   const visibility: Visibility = !vIn || vIn.mode === "tenant"
     ? { mode: "tenant" }
     : vIn.mode === "owner_only"

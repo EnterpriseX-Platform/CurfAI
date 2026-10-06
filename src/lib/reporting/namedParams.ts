@@ -44,3 +44,17 @@ export function translateNamedToQuestionMark(
   });
   return { sql: rewritten, values, missing };
 }
+
+/**
+ * Every parameter name a query's SQL could read. Deliberately the BROADEST
+ * placeholder pattern any driver uses (runner.ts's SQLite bindParams also
+ * matches after `::`), so it's always a superset of what a driver actually
+ * substitutes — used to key the query cache on the params a query reads,
+ * where naming one too many only costs a cache hit but one too few would
+ * serve another scenario's rows.
+ */
+export function referencedParamNames(sql: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of sql.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)) names.add(m[1]!);
+  return names;
+}

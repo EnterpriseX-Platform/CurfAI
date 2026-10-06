@@ -5,6 +5,8 @@ import { requireUser, requireAdminOrEditor, tenantWhere } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { probeRestDataSource } from "@/lib/connections/probe";
 import { decodeRestConnection, resolveRestHeaders } from "@/lib/connections/rest";
+import { canSeeDataSource } from "@/lib/datasourceAcl";
+import { exportViewer } from "@/lib/reporting/exportCaller";
 
 /**
  * POST /api/data-sources/[id]/probe
@@ -33,9 +35,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const ds = await prisma.dataSource.findFirst({
     where: { id: params.id, ...tenantWhere(user) },
-    select: { id: true, name: true, kind: true, connection: true },
+    select: { id: true, name: true, kind: true, connection: true, visibleToRolesJson: true, ownerUserId: true },
   });
-  if (!ds) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!ds || !canSeeDataSource(ds, await exportViewer(user))) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (ds.kind !== "rest") {
     return NextResponse.json(
       { error: "Probe is only supported for REST data sources. SQLite is introspected automatically." },

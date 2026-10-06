@@ -7,7 +7,8 @@
  * Adding a new kind = add a new branch here and ensure the DataSource row's
  * `connection` field holds whatever that driver expects.
  */
-import Database from "better-sqlite3";
+import { openTenantSqlite, sqlitePathAllowed, SQLITE_PATH_REFUSED } from "@/lib/connections/sqlitePath";
+import { assertWarehouseHost } from "@/lib/connections/warehouseHost";
 import { Client as PgClient } from "pg";
 import { createConnection as createMyConnection } from "mysql2/promise";
 import { prisma } from "@/lib/db";
@@ -16,9 +17,12 @@ import { interpolate as interpolatePure } from "@/lib/reporting/interpolate";
 import { decodePgConnection, resolvePgClientConfig } from "@/lib/connections/postgres";
 import { decodeMyConnection, resolveMyClientConfig } from "@/lib/connections/mysql";
 import { decodeRestConnection, resolveRestHeaders } from "@/lib/connections/rest";
+import { decodeEngineConnection, resolveEngineTarget } from "@/lib/connections/engine";
+import { runEngineQuery } from "@/lib/engine/client";
 import { joinRestUrl } from "@/lib/reporting/restUrl";
 import { tenantLakePath } from "@/lib/lake/storage";
-import { assertSelectOnly } from "./sqlGuard";
+import { runLakeRead } from "@/lib/lake/lakeWorker";
+import { assertSelectOnly, assertLakeReadSqlSafe } from "./sqlGuard";
 export { assertSelectOnly };
 import { guardedFetch } from "@/lib/security/ssrfGuard";
 
@@ -27,26 +31,30 @@ import type { Dataset, Row } from "@/lib/reporting/interpolate";
 import { buildProvenance, hashRows, type ProvenanceMap } from "@/lib/reporting/provenance";
 import { canSeeDataSource } from "@/lib/datasourceAcl";
 import { checkSqlAccess } from "@/lib/lake/sqlAccess";
-import { applyRedaction } from "@/lib/lake/redaction";
+import { applyRedaction, shouldRedact } from "@/lib/lake/redaction";
 import { hashJoin } from "@/lib/reporting/hashJoin";
 import { getCachedRows, setCachedRows } from "@/lib/reporting/queryCache";
 import { reportRunMs } from "@/lib/metrics";
 import { ee } from "@/ee";
 import { rewriteNamedParams, translateNamedToQuestionMark } from "@/lib/reporting/namedParams";
+import { drillOnlyQueryIds } from "@/lib/reporting/drill";
 export type { Dataset, Row };
 export type { ProvenanceMap, ProvenanceRecord } from "@/lib/reporting/provenance";
 
 /**
- * Defense-in-depth viewer identity. When supplied, the runner checks each
- * referenced DataSource against the visibility ACL before executing its
- * query — if the viewer can't see the source, the query gets an empty
- * result + a provenance note rather than throwing. This protects reports
- * that were valid at design time but reference a source the viewer lost
- * access to (visibility was tightened, owner_only was added, etc).
+ * Defense-in-depth viewer identity. The runner checks each referenced
+ * DataSource against the visibility ACL before executing its query — if
+ * the viewer can't see the source, the query gets an empty result + a
+ * provenance note rather than throwing — and redacts sensitivity-tagged
+ * lake columns for the viewer's roles. This protects reports that were
+ * valid at design time but reference a source the viewer lost access to
+ * (visibility was tightened, owner_only was added, etc).
  *
- * Callers without an authenticated viewer (server cron, watcher narration)
- * may omit this; the runner then runs every query, since those contexts
- * predate per-user filtering.
+ * Every run names who it runs as (RunContext.viewer), because whatever it
+ * returns ends up in front of someone:
+ *  - a signed-in person or an API key: exportViewer(user)
+ *  - a public surface (share link, embed, kiosk, published app): ANONYMOUS_VIEWER
+ *  - a scheduled delivery, watcher or Brief: its creator, deliveryViewer()
  */
 export type RunViewer = {
   id: string;
@@ -65,10 +73,63 @@ export type RunViewer = {
  */
 export const ANONYMOUS_VIEWER: RunViewer = { id: "anonymous", isAdmin: false, roles: [] };
 
+export const HIDDEN_BY_VISIBILITY = "Hidden by visibility — you don't have access to this source.";
+
+/**
+ * How a lake query's rows reach `viewer`: refused when its SQL reads a table
+ * they can't read at all (owner-only or role-restricted), otherwise through
+ * `redact`, which masks sensitivity-tagged columns. The one gate a live run
+ * and a saved run (snapshotAccess.ts) both go through. It reuses
+ * lib/lake/sqlAccess.ts's checkSqlAccess() + lib/lake/redaction.ts's
+ * applyRedaction(), the same the Tables browser and the free-form SQL
+ * surfaces use, rather than re-implementing the table matching or the masks.
+ *
+ * `redact` masks a clone, never the rows in place: on a cache hit they are the
+ * live array getCachedRows() returned, shared by every viewer of the same
+ * query, and mutating it would leak one viewer's redaction (or lack of it)
+ * into every other viewer's read. `redacts` says whether it masks any column
+ * for this viewer — text written from the rows can't be masked afterwards.
+ */
+export async function lakeGate(
+  tenantId: string,
+  sql: string,
+  viewer: RunViewer,
+): Promise<{ ok: false; error: string } | { ok: true; redacts: boolean; redact: (rows: Row[]) => Row[] }> {
+  const redactionViewer = { id: viewer.id, role: viewer.isAdmin ? "admin" : "member", roleSlugs: viewer.roles };
+  const access = await checkSqlAccess({ tenantId, sql, viewer: { id: viewer.id, tenantId, role: redactionViewer.role } });
+  if (!access.ok) return { ok: false, error: access.error };
+  const { schema } = access;
+  return {
+    ok: true,
+    redacts: schema.some((c) => shouldRedact(redactionViewer, c)),
+    redact: (rows) => (schema.length > 0 ? applyRedaction(rows.map((r) => ({ ...r })), schema, redactionViewer) : rows),
+  };
+}
+
+/**
+ * Runs every query with no ACL check and no redaction. Only for work whose
+ * rows no one reads as they come back: a lake pipeline or materialization
+ * filling a table (the table carries its own ACL from there), a build-time
+ * probe that checks a query runs. Anything shown, returned, exported, sent
+ * or narrated to a person names a RunViewer instead.
+ */
+export const SYSTEM_RUN = "system" as const;
+
 export type RunContext = {
   report: Report;
+  /**
+   * The workspace the report belongs to. Every DataSource the report names
+   * (and every source it ATTACHes or joins) is looked up inside it, so a
+   * definition naming another workspace's source id fails as "DataSource not
+   * found" instead of reading it. Row-level security stops that inside a
+   * request, but a cron tick or other system context has no workspace bound.
+   */
+  tenantId: string;
   params: Record<string, unknown>;
-  viewer?: RunViewer;
+  /** Required so that leaving it out can't silently mean "as the system":
+   *  that default is how on-demand routes, public app pages and scheduled
+   *  narration all ended up computing over sources their reader can't see. */
+  viewer: RunViewer | typeof SYSTEM_RUN;
   /**
    * When true, skip the in-process query result cache for this run. Wired
    * to `?bust=1` on the report data API so a viewer can force a refresh.
@@ -121,6 +182,43 @@ export function bindParams(sql: string, params: Record<string, unknown>) {
  * a file nobody can open. Far above any realistic spreadsheet.
  */
 export const EXPORT_ROW_CAP = 100_000;
+
+/**
+ * Most rows one SQLite/lake query may hand back. The lake now takes
+ * million-row uploads (lib/lake/importJob.ts), and a report, pipeline or
+ * materialized view that selects such a table without summarising it would
+ * pull every row into the server's memory at once — enough to take the
+ * whole pod down, for every workspace on it. Above EXPORT_ROW_CAP so an
+ * export's lifted LIMIT still fits. These queries run in-process; the
+ * Postgres/MySQL/warehouse drivers hold their own rows and aren't capped here.
+ */
+export const QUERY_ROW_CAP = 200_000;
+
+/**
+ * Drain a SQLite row iterator, refusing — rather than silently truncating,
+ * which would make every total wrong — once it passes QUERY_ROW_CAP.
+ * Iterating (not stmt.all()) is what lets it stop before the rows exist.
+ */
+export function readRowsCapped(rows: Iterable<unknown>, queryName: string): Row[] {
+  const out: Row[] = [];
+  for (const row of rows) {
+    if (out.length === QUERY_ROW_CAP) throw new Error(rowCapMessage(queryName));
+    out.push(row as Row);
+  }
+  return out;
+}
+
+const rowCapMessage = (queryName: string) =>
+  `Query "${queryName}" returns more than ${QUERY_ROW_CAP.toLocaleString("en-US")} rows — more than a report can hold. ` +
+  `Summarise it in SQL (GROUP BY) or add a LIMIT.`;
+
+/**
+ * How long a lake query may run (on its worker — lib/lake/lakeWorker.ts's
+ * runLakeRead) before it's stopped. A report reading a summarised table
+ * answers in milliseconds; this is for the query that would otherwise hold
+ * the app for everyone while it scans a million rows.
+ */
+export const LAKE_QUERY_TIMEOUT_MS = 30_000;
 
 /**
  * Swap a generator-applied display cap for the export ceiling.
@@ -179,7 +277,7 @@ function pluck(json: any, path?: string): any {
  */
 function runOnSqlite(
   ds: DataSourceDef,
-  dsRow: { connection: string },
+  dsRow: { connection: string; tenantId: string },
   connCache: Map<string, any>,
   params: Record<string, unknown>,
   attaches?: ResolvedAttach[],
@@ -192,8 +290,9 @@ function runOnSqlite(
   if (hasAttaches) {
     // Fresh connection that we'll close after the query — keeps attached
     // state out of the per-report connCache.
-    db = new Database(dsRow.connection, { readonly: true, fileMustExist: true });
+    db = openTenantSqlite(dsRow.tenantId, dsRow.connection);
     for (const a of attaches!) {
+      if (!sqlitePathAllowed(dsRow.tenantId, a.connection)) throw new Error(SQLITE_PATH_REFUSED);
       // SQLite ATTACH doesn't accept ? bindings. Connection paths are
       // controlled by us (DataSource.connection column); aliases are
       // regex-validated by the schema. Belt-and-braces: escape single
@@ -204,20 +303,78 @@ function runOnSqlite(
   } else {
     db = connCache.get(ds.dataSourceId);
     if (!db) {
-      db = new Database(dsRow.connection, { readonly: true, fileMustExist: true });
+      db = openTenantSqlite(dsRow.tenantId, dsRow.connection);
       connCache.set(ds.dataSourceId, db);
     }
   }
 
   try {
     const bound = bindParams(ds.sql, params);
-    const stmt = db.prepare(ds.sql);
-    return stmt.all(bound) as Row[];
+    return readRowsCapped(db.prepare(ds.sql).iterate(bound), ds.name);
   } finally {
     if (hasAttaches) {
       try { db.close(); } catch { /* ignore */ }
     }
   }
+}
+
+/**
+ * Read a lake ("Curf Tables") data source. Routes through a paid engine
+ * (DuckDB) when the tenant is on one — see ee.lake.readLakeIfPaidEngine's
+ * doc comment — falling through to the SQLite-per-tenant-file path,
+ * completely unchanged, for every tenant on the default engine (which is
+ * every tenant today; ee.lake is absent entirely in Community). This is
+ * what makes a DuckDB-engine tenant's reports see their real .duckdb data
+ * instead of the stale-or-missing .db file every report used to read
+ * regardless of Tenant.lakeEngine — see ENGINE_READ_PATH_UNIFIED's doc
+ * comment in the lake-engine admin route.
+ *
+ * `attaches` is accepted only for signature symmetry with runOnSqlite's
+ * fallback call — it's always undefined here in practice, because the
+ * caller already rejects cross-source ATTACH for any non-sqlite/excel
+ * primary (lake included) before resolving attaches at all.
+ */
+async function runOnLake(
+  ds: DataSourceDef,
+  dsRow: { tenantId: string; connection: string },
+  connCache: Map<string, any>,
+  params: Record<string, unknown>,
+  attaches?: ResolvedAttach[],
+): Promise<Row[]> {
+  if (!ds.sql) throw new Error(`Query "${ds.name}" has no sql`);
+  // Lake SQL runs against a DuckDB or SQLite tenant file — assertSelectOnly
+  // alone would let a DuckDB-engine tenant read_csv/read_parquet another
+  // tenant's lake files, so use the stricter lake guard here (it's a no-op
+  // on top of assertSelectOnly for the SQLite path, which has no such
+  // functions). External tables/MVs are unaffected — the query names them
+  // as views; the read_parquet lives in the view body, not this SQL.
+  assertLakeReadSqlSafe(ds.sql);
+  const { sql, values, missing } = translateNamedToQuestionMark(ds.sql, params);
+  if (missing.length > 0) {
+    throw new Error(`Missing parameter${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`);
+  }
+  const paidRows = await ee.lake?.readLakeIfPaidEngine(dsRow.tenantId, sql, values);
+  if (paidRows != null) return paidRows;
+  // A plain lake read runs on a worker with a time limit, so a slow one
+  // can't hold the event loop. ATTACHed sources need one connection holding
+  // every file, so that (rare) path stays on the main thread.
+  if (!attaches || attaches.length === 0) {
+    return (await runLakeRead({
+      tenantId: dsRow.tenantId,
+      sql: ds.sql,
+      params: bindParams(ds.sql, params),
+      cap: QUERY_ROW_CAP,
+      capMessage: rowCapMessage(ds.name),
+      timeoutMs: LAKE_QUERY_TIMEOUT_MS,
+      timeoutMessage: `Query "${ds.name}" took longer than ${LAKE_QUERY_TIMEOUT_MS / 1000} seconds and was stopped. ` +
+        `Summarise it in SQL (GROUP BY) or narrow it with a filter.`,
+    })) as Row[];
+  }
+  return runOnSqlite(
+    ds,
+    { ...dsRow, connection: tenantLakePath(dsRow.tenantId) },
+    connCache, params, attaches,
+  );
 }
 
 /** A resolved attach (foreign source) ready for the runner to ATTACH. */
@@ -280,8 +437,14 @@ async function runOnPostgres(
   // alongside better-sqlite3 ones — distinguished by kind, not type.
   let client: PgClient | undefined = connCache.get(ds.dataSourceId);
   if (!client) {
+    await assertWarehouseHost(stored.host);
     client = new PgClient(resolvePgClientConfig(stored));
     await client.connect();
+    // Defense in depth behind assertSelectOnly: the whole session is
+    // read-only, so even a write that somehow got past the guard is refused
+    // by Postgres ("cannot execute … in a read-only transaction"). One
+    // statement per connection, and the runner only ever reads.
+    await client.query("SET default_transaction_read_only = on");
     connCache.set(ds.dataSourceId, client);
   }
   const { sql, values, missing } = translateNamedToPositional(ds.sql, params);
@@ -306,7 +469,12 @@ async function runOnMysql(
   const stored = decodeMyConnection(dsRow.connection);
   let conn = connCache.get(ds.dataSourceId);
   if (!conn) {
+    await assertWarehouseHost(stored.host);
     conn = await createMyConnection(resolveMyClientConfig(stored));
+    // Defense in depth behind assertSelectOnly — the session refuses writes
+    // ("Cannot execute statement in a READ ONLY transaction"). Once per
+    // connection; the runner only reads.
+    await conn.query("SET SESSION TRANSACTION READ ONLY");
     connCache.set(ds.dataSourceId, conn);
   }
   const { sql, values, missing } = translateNamedToQuestionMark(ds.sql, params);
@@ -417,6 +585,31 @@ async function runOnRest(ds: DataSourceDef, dsRow: { connection: string; readOnl
   return [];
 }
 
+/**
+ * Runs a query on the Java engine (lib/engine/client.ts) as the viewer. The engine answers per person — their
+ * row rules and masking — so a run with nobody to speak for (a system job, an anonymous public link) must not
+ * borrow someone's identity or see unfiltered data: it fails with a message instead.
+ */
+async function runOnEngine(
+  ds: DataSourceDef,
+  dsRow: { connection: string },
+  params: Record<string, unknown>,
+  viewer: RunViewer | undefined,
+  tenantId: string,
+): Promise<Row[]> {
+  if (!ds.engine) throw new Error(`Engine query "${ds.name}" names no view to read.`);
+  if (!viewer || viewer.id === ANONYMOUS_VIEWER.id) {
+    throw new Error("Engine data is answered per person: it cannot run anonymously or as the system.");
+  }
+  let target;
+  try {
+    target = resolveEngineTarget(decodeEngineConnection(dsRow.connection));
+  } catch (e: any) {
+    throw new Error(`Engine DataSource "${ds.dataSourceId}" has invalid connection: ${e?.message ?? "unknown error"}`);
+  }
+  return runEngineQuery({ target, viewer, tenantId, query: ds.engine, params });
+}
+
 // ---------- Top-level dispatch ----------
 
 export async function runReport(ctx: RunContext): Promise<Dataset> {
@@ -430,31 +623,29 @@ export async function runReport(ctx: RunContext): Promise<Dataset> {
  * Callers that surface trust/audit UI should use this variant.
  */
 export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
-  const { report, params, viewer } = ctx;
+  const { report, params, tenantId } = ctx;
+  const viewer = ctx.viewer === SYSTEM_RUN ? undefined : ctx.viewer;
   const dataset: Dataset = {};
   const provenance: ProvenanceMap = {};
 
   // Cache sqlite connections so we don't reopen for each query on the same source.
   const connCache = new Map<string, any>();
 
-  // curf_report_run_ms (Harness 11 / docs/SLO.md "Viewer p95 load"). Tenant
-  // is taken from the first DataSource resolved below — this function has
-  // no tenantId of its own, and every dataSourceId in a report belongs to
-  // the same tenant as the report.
+  // curf_report_run_ms (Harness 11 / docs/SLO.md "Viewer p95 load").
   const metricStartedAt = Date.now();
-  let metricTenant = "unknown";
 
   try {
     // Topo-sort so any query referenced via joins[] runs before its consumer.
     // Cycles throw; missing references throw with a clean message that
     // points at the offending alias.
-    const ordered = topoSortQueries(report.dataSources).map((d) =>
+    // A query only drills read runs on the click (the drill route), not here.
+    const drillOnly = drillOnlyQueryIds(report);
+    const ordered = topoSortQueries(report.dataSources.filter((d) => !drillOnly.has(d.id))).map((d) =>
       ctx.forExport ? liftPreviewLimit(d) : d,
     );
     for (const ds of ordered) {
-      const dsRow = await prisma.dataSource.findUnique({ where: { id: ds.dataSourceId } });
+      const dsRow = await prisma.dataSource.findFirst({ where: { id: ds.dataSourceId, tenantId } });
       if (!dsRow) throw new Error(`DataSource not found: ${ds.dataSourceId}`);
-      if (metricTenant === "unknown") metricTenant = dsRow.tenantId;
 
       // Visibility check (defense-in-depth). When a viewer identity is
       // supplied AND they can't see this source, return empty rows + a
@@ -470,7 +661,7 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
           dataSourceName: dsRow.name,
           dataSourceKind: dsRow.kind,
           startedAt: Date.now(),
-          accessDeniedNote: "Hidden by visibility — you don't have access to this source.",
+          accessDeniedNote: HIDDEN_BY_VISIBILITY,
         });
         continue;
       }
@@ -494,8 +685,8 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
         resolvedAttaches = [];
         let blocked = false;
         for (const a of attachInputs) {
-          const foreign = await prisma.dataSource.findUnique({ where: { id: a.dataSourceId } });
-          if (!foreign || foreign.tenantId !== dsRow.tenantId) {
+          const foreign = await prisma.dataSource.findFirst({ where: { id: a.dataSourceId, tenantId } });
+          if (!foreign) {
             blocked = true;
             provenance[ds.id] = buildProvenance({
               ds, rows: [], params,
@@ -543,7 +734,9 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
       // not when the caller passed cacheBust. We key by (tenant, source,
       // sql, params); see lib/reporting/queryCache.ts for the safety notes.
       const hasFan = (resolvedAttaches && resolvedAttaches.length > 0) || (ds.joins && ds.joins.length > 0);
-      const cacheable = !!ds.sql && dsRow.kind !== "rest" && !hasFan && !ctx.cacheBust;
+      // Engine answers are per person (their row rules and masking) and this cache is keyed without the
+      // viewer, so an engine query must never enter it, whatever else is on the query.
+      const cacheable = !!ds.sql && dsRow.kind !== "rest" && dsRow.kind !== "engine" && !hasFan && !ctx.cacheBust;
       // The TypeScript flow analyzer can't follow that the switch below
       // either assigns or throws on the default branch, so we leave `rows`
       // optional during the assignment phase and assert after.
@@ -588,11 +781,7 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
               // tenant's `lake://<id>` verbatim, so trusting it made every new
               // workspace read another tenant's lake: reports came up empty,
               // and same-named tables would have served the other tenant's rows.
-              rows = runOnSqlite(
-                ds,
-                { ...dsRow, connection: tenantLakePath(dsRow.tenantId) },
-                connCache, params, resolvedAttaches,
-              );
+              rows = await runOnLake(ds, dsRow, connCache, params, resolvedAttaches);
               break;
             case "postgres":
               rows = await runOnPostgres(ds, dsRow, connCache, params);
@@ -602,6 +791,9 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
               break;
             case "rest":
               rows = await runOnRest(ds, dsRow, params);
+              break;
+            case "engine":
+              rows = await runOnEngine(ds, dsRow, params, viewer, tenantId);
               break;
             default:
               rows = await runOnWarehouse(ds, dsRow, connCache, params);
@@ -640,38 +832,20 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
         rows = [];
       }
 
-      // Column-level redaction (Phase 3). A lake table's sensitivity tags
-      // apply here exactly the way they already do on the Tables browser
-      // and the free-form SQL surfaces (Notebook, Data Quality, Agent,
-      // Activations) via lib/lake/sqlAccess.ts's checkSqlAccess() +
-      // lib/lake/redaction.ts's applyRedaction() — reused verbatim rather
-      // than re-implementing the table-reference matching or the mask
-      // rules here. Only "lake" queries carry sensitivity metadata at all,
-      // so every other kind (postgres/mysql/rest/warehouse) is untouched.
-      //
-      // Redacts a CLONE, never `rows` in place: on a cache hit, `rows` is
-      // the live array `getCachedRows()` returned from the shared entry
-      // keyed on (tenant, source, sql, params) — every viewer who runs
-      // this same query hits that one entry. Mutating it here would leak
-      // this viewer's redaction (or lack of it) into every other viewer's
-      // read of the same cached rows, in whichever direction lost the
-      // race. `access.error` also denies the query outright when the SQL
-      // references a table this viewer can't read at all (owner-only or
-      // role-restricted) — the same defense-in-depth shape as the
-      // canSeeDataSource() check above, empty rows + a proof note rather
-      // than a hard failure for the rest of the report.
+      // Column-level redaction (Phase 3), through lakeGate(). Only "lake"
+      // queries carry sensitivity metadata at all, so every other kind
+      // (postgres/mysql/rest/warehouse) is untouched. A query whose SQL
+      // reads a table this viewer can't read at all is denied outright —
+      // the same defense-in-depth shape as the canSeeDataSource() check
+      // above, empty rows + a proof note rather than a hard failure for
+      // the rest of the report.
       if (viewer && dsRow.kind === "lake" && !executionError) {
-        const redactionViewer = { id: viewer.id, role: viewer.isAdmin ? "admin" : "member", roleSlugs: viewer.roles };
-        const access = await checkSqlAccess({
-          tenantId: dsRow.tenantId,
-          sql: ds.sql ?? "",
-          viewer: { id: redactionViewer.id, tenantId: dsRow.tenantId, role: redactionViewer.role },
-        });
-        if (!access.ok) {
+        const gate = await lakeGate(dsRow.tenantId, ds.sql ?? "", viewer);
+        if (!gate.ok) {
           rows = [];
-          executionError = access.error;
-        } else if (access.schema.length > 0) {
-          rows = applyRedaction(rows.map((r) => ({ ...r })), access.schema, redactionViewer);
+          executionError = gate.error;
+        } else {
+          rows = gate.redact(rows);
         }
       }
 
@@ -710,7 +884,7 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
           rows = merged.rows;
 
           // Resolve sibling's source for the proof popover.
-          const siblingDsRow = await prisma.dataSource.findUnique({ where: { id: sibling.dataSourceId } });
+          const siblingDsRow = await prisma.dataSource.findFirst({ where: { id: sibling.dataSourceId, tenantId } });
           if (siblingDsRow) {
             joinedSourcesForProof.push({
               name: siblingDsRow.name,
@@ -743,7 +917,7 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
     }
   } finally {
     await closeCachedConnections(connCache);
-    reportRunMs.observe?.({ tenant: metricTenant }, Date.now() - metricStartedAt);
+    reportRunMs.observe?.({ tenant: tenantId }, Date.now() - metricStartedAt);
   }
 
   return { dataset, provenance };
@@ -815,23 +989,25 @@ export { interpolate } from "@/lib/reporting/interpolate";
  * Mirrors the dispatch logic in `runReport` but for one DataSourceDef.
  *
  * Cross-source ATTACHes resolve here too — the designer can preview a JOIN
- * that spans sqlite + excel before saving the report. Tenant scope is the
- * authority; designer is admin-gated upstream so we don't run an extra
- * per-user visibility check here (see runReportWithProof for that).
+ * that spans sqlite + excel before saving the report.
  */
 export async function runSingleQuery(
   ds: DataSourceDef,
   params: Record<string, unknown>,
   /**
-   * Optional — omitted call sites keep the original "designer is admin-
-   * gated upstream" trust documented above. Pass it when a non-admin-
-   * gated caller reuses this function (e.g. the dashboard top-KPI strip)
-   * so a lake query still redacts sensitivity-tagged columns for them.
+   * Whose access the query runs with, as RunContext.viewer: a source (or
+   * ATTACHed source) this viewer can't see throws the runner's "Hidden by
+   * visibility" note, and a lake query redacts sensitivity-tagged columns
+   * for them. SYSTEM_RUN runs it unfiltered.
    */
-  viewer?: RunViewer,
+  runAs: RunViewer | typeof SYSTEM_RUN,
+  /** The workspace the query belongs to — see RunContext.tenantId. */
+  tenantId: string,
 ): Promise<Row[]> {
-  const dsRow = await prisma.dataSource.findUnique({ where: { id: ds.dataSourceId } });
+  const viewer = runAs === SYSTEM_RUN ? undefined : runAs;
+  const dsRow = await prisma.dataSource.findFirst({ where: { id: ds.dataSourceId, tenantId } });
   if (!dsRow) throw new Error(`DataSource not found: ${ds.dataSourceId}`);
+  if (viewer && !canSeeDataSource(dsRow, viewer)) throw new Error(HIDDEN_BY_VISIBILITY);
 
   // Resolve attaches if any. Same kind/tenant guards as runReportWithProof.
   let resolvedAttaches: ResolvedAttach[] | undefined;
@@ -842,12 +1018,15 @@ export async function runSingleQuery(
     }
     resolvedAttaches = [];
     for (const a of attachInputs) {
-      const foreign = await prisma.dataSource.findUnique({ where: { id: a.dataSourceId } });
-      if (!foreign || foreign.tenantId !== dsRow.tenantId) {
+      const foreign = await prisma.dataSource.findFirst({ where: { id: a.dataSourceId, tenantId } });
+      if (!foreign) {
         throw new Error(`Attached source "${a.alias}" is missing or belongs to another tenant.`);
       }
       if (foreign.kind !== "sqlite" && foreign.kind !== "excel") {
         throw new Error(`Attached source "${a.alias}" is kind "${foreign.kind}" — only sqlite and excel can be ATTACHed.`);
+      }
+      if (viewer && !canSeeDataSource(foreign, viewer)) {
+        throw new Error(`Attached source "${a.alias}" is hidden by visibility — you don't have access.`);
       }
       resolvedAttaches.push({ alias: a.alias, connection: foreign.connection, name: foreign.name, kind: foreign.kind });
     }
@@ -869,24 +1048,10 @@ export async function runSingleQuery(
       try {
         // Address the lake by the row's own tenantId — see the note on the
         // other "lake" branch above.
-        let rows = runOnSqlite(
-          ds,
-          { ...dsRow, connection: tenantLakePath(dsRow.tenantId) },
-          cache, params, resolvedAttaches
-        );
-        // Same redaction as runReportWithProof — see its doc comment for
-        // why it's a clone, not an in-place mutation.
-        if (viewer) {
-          const redactionViewer = { id: viewer.id, role: viewer.isAdmin ? "admin" : "member", roleSlugs: viewer.roles };
-          const access = await checkSqlAccess({
-            tenantId: dsRow.tenantId,
-            sql: ds.sql ?? "",
-            viewer: { id: redactionViewer.id, tenantId: dsRow.tenantId, role: redactionViewer.role },
-          });
-          if (!access.ok) return [];
-          if (access.schema.length > 0) rows = applyRedaction(rows.map((r) => ({ ...r })), access.schema, redactionViewer);
-        }
-        return rows;
+        const rows = await runOnLake(ds, dsRow, cache, params, resolvedAttaches);
+        if (!viewer) return rows;
+        const gate = await lakeGate(dsRow.tenantId, ds.sql ?? "", viewer);
+        return gate.ok ? gate.redact(rows) : [];
       } finally {
         await closeCachedConnections(cache);
       }
@@ -909,6 +1074,8 @@ export async function runSingleQuery(
     }
     case "rest":
       return await runOnRest(ds, dsRow, params);
+    case "engine":
+      return await runOnEngine(ds, dsRow, params, viewer, tenantId);
     default:
       // Snowflake / BigQuery open their own sessions per query, so the
       // one-shot cache is only for signature symmetry.

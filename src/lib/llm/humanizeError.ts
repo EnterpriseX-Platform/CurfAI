@@ -84,7 +84,25 @@ export function humanizeLlmError(rawError: string | undefined): {
         "Connection to the AI provider failed or timed out. Please try again.\n(พบปัญหาการเชื่อมต่อกับ AI หรือเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง)",
     };
   }
-  if (lower.includes("rate limit") || raw.includes("429") || lower.includes("insufficient balance") || lower.includes("suspended")) {
+  // The provider account has no credit left. Kimi answers this with HTTP 429
+  // ("suspended due to insufficient balance"), OpenAI with insufficient_quota,
+  // so it has to be told apart before the rate-limit branch: waiting doesn't
+  // fix it. It used to read "rate limit exceeded, wait a moment", and Ask
+  // Curf told a user to retry against an account that needed a top-up
+  // (2026-09-30).
+  if (
+    lower.includes("insufficient balance") || lower.includes("insufficient_balance") || lower.includes("insufficient_quota")
+    || lower.includes("exceeded_current_quota") || lower.includes("exceeded your current quota")
+    || lower.includes("suspended") || lower.includes("credit balance is too low")
+  ) {
+    return {
+      notConfigured: false,
+      canSwitchModel: false,
+      message:
+        "The AI provider's account has run out of credit, so it is refusing every request. Trying again won't help: an admin needs to top up the account with the provider, or connect a different key in Tenant Settings → LLM.\n(บัญชีผู้ให้บริการ AI ไม่มียอดเงินคงเหลือ จึงปฏิเสธทุกคำขอ การลองใหม่ไม่ช่วย ผู้ดูแลต้องเติมเงินกับผู้ให้บริการ หรือเชื่อมต่อคีย์อื่นใน Tenant Settings → LLM)",
+    };
+  }
+  if (lower.includes("rate limit") || lower.includes("rate_limit") || raw.includes("429")) {
     return {
       notConfigured: false,
       canSwitchModel: false,

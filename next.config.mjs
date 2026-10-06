@@ -14,7 +14,7 @@ const nextConfig = {
   experimental: {
     // Keep these native/heavy deps external so Next doesn't try to bundle them
     // into route handlers.
-    serverComponentsExternalPackages: ["puppeteer", "better-sqlite3", "docx", "exceljs", "pg", "mysql2", "snowflake-sdk", "@google-cloud/bigquery", "@duckdb/node-api", "ssh2-sftp-client", "ssh2"],
+    serverComponentsExternalPackages: ["puppeteer", "better-sqlite3", "docx", "exceljs", "pg", "mysql2", "snowflake-sdk", "@google-cloud/bigquery", "@duckdb/node-api", "ssh2-sftp-client", "ssh2", "web-push"],
   },
   async headers() {
     return [

@@ -18,7 +18,8 @@
  */
 import type { DataSourceDef } from "@/lib/reporting/schema";
 import { prisma } from "@/lib/db";
-import { runReport } from "@/lib/reporting/runner";
+import { runQueryStrict } from "@/lib/reporting/runQueryStrict";
+import { SYSTEM_RUN } from "@/lib/reporting/runner";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { createOrReplaceTable, appendRows } from "@/lib/lake/tables";
 import { bustLakeCacheForTenant } from "@/lib/lake/bust";
@@ -101,8 +102,10 @@ export async function runLakePull(pullId: string): Promise<{ rowsWritten: number
 
   let rows: any[] = [];
   try {
-    const dataset = await runReport({ report: synthReport, params: {} });
-    rows = dataset[queryId] ?? [];
+    // Strict: an upstream failure (5xx, timeout, blocked URL) must fail the pull.
+    // runReport() reports it as an empty result, and a "replace" pull would then
+    // wipe the table with nothing and record success.
+    rows = await runQueryStrict({ report: synthReport, params: {}, tenantId: pull.tenantId, viewer: SYSTEM_RUN }, queryId);
   } catch (e: any) {
     await markFailed(pullId, `Pull failed: ${e?.message ?? e}`);
     return { rowsWritten: 0, status: "failed" };
@@ -137,7 +140,7 @@ async function finishPullSuccess(
 
   try {
     if (pull.strategy === "replace") {
-      createOrReplaceTable({
+      await createOrReplaceTable({
         tenantId: pull.tenantId,
         tableName: pull.tableName,
         rows,
@@ -146,7 +149,7 @@ async function finishPullSuccess(
       });
     } else {
       // append — auto-creates the table on first run via appendRows fallthrough.
-      appendRows({ tenantId: pull.tenantId, tableName: pull.tableName, rows });
+      await appendRows({ tenantId: pull.tenantId, tableName: pull.tableName, rows });
     }
   } catch (e: any) {
     await markFailed(pull.id, `Lake write failed: ${e?.message ?? e}`);

@@ -4,18 +4,22 @@
  *   - the viewer (interactive HTML)
  *   - the designer preview pane
  *   - the PDF export pipeline (Puppeteer opens a URL that renders this)
+ *   - dashboards and Story mode, one block at a time (ReportBlock)
  *
  * One grid unit = ~40px tall x 1/12th of page width wide. That ratio is
  * what keeps the designer canvas visually close to the printed output.
  */
 import { BlockRegistry } from "@/components/blocks";
+import { AiNotice } from "@/components/common/AiNotice";
+import { ExpandableCell } from "./ExpandableCell";
 import type { Block, Page, Report } from "@/lib/reporting/schema";
 import type { Dataset } from "@/lib/reporting/interpolate";
 import type { ProvenanceMap } from "@/lib/reporting/provenance";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { CurrencyProvider } from "@/components/providers/CurrencyProvider";
+import { DateStyleProvider } from "@/components/providers/DateStyleProvider";
 import { WhyProvider } from "@/components/blocks/WhyDrawer";
-import { localizeReport } from "@/lib/reporting/localize";
+import { localizeBlock, localizeReport } from "@/lib/reporting/localize";
 
 const ROW_HEIGHT_PX = 40;
 const COLUMNS = 12;
@@ -40,7 +44,7 @@ const PAGE_HEIGHT_MM: Record<string, { portrait: number; landscape: number }> = 
  */
 export type ReportSurface = "paper" | "canvas";
 
-function PageRenderer({
+export function PageRenderer({
   page, report, dataset, params, print, pageIndex, totalPages, provenance, reportDbId, surface = "paper",
 }: {
   page: Page;
@@ -80,7 +84,10 @@ function PageRenderer({
         maxWidth: "100%",
         minHeight: print ? `${heightMm}mm` : undefined,
         padding: "15mm",
-        breakAfter: print ? "page" : undefined,
+        // Never break after the LAST page — forcing one there is what
+        // produces a trailing blank page in the exported PDF (nothing
+        // left to fill the page the break just started).
+        breakAfter: print && pageIndex < totalPages - 1 ? "page" : undefined,
       }}
     >
       {totalPages > 1 && (
@@ -100,32 +107,35 @@ function PageRenderer({
         }}
       >
         {sortedBlocks.map((block) => (
-          <BlockCell key={block.id} block={block}>
+          <BlockCell key={block.id} block={block} expandable={!print}>
             <RenderBlock block={block} report={report} dataset={dataset} params={params} print={print} provenance={provenance} reportDbId={reportDbId} />
           </BlockCell>
         ))}
       </div>
+      {/* A report a model wrote says so on paper too; on screen its quality line does (ReportQualityNote). */}
+      {print && report.quality?.authored === "ai" && pageIndex === totalPages - 1 && <AiNotice className="mt-3" />}
     </section>
   );
 }
 
-function BlockCell({ block, children }: { block: Block; children: React.ReactNode }) {
+// Blocks that hold data a reader may want larger; a title or a KPI doesn't.
+const EXPANDABLE = new Set(["chart", "map", "heatmap", "table", "pivot", "cohort_retention", "funnel"]);
+
+function BlockCell({ block, expandable, children }: { block: Block; expandable?: boolean; children: React.ReactNode }) {
+  const attrs = { "data-block-id": block.id, "data-block-type": block.type, "data-block-h": block.h };
+  // Inline grid coords drive the desktop layout. The mobile media query in
+  // ReportDocument's <style> override switches to flex single-column flow so
+  // each block stacks full-width.
+  const style: React.CSSProperties = {
+    gridColumn: `${block.x + 1} / span ${block.w}`,
+    gridRow: `${block.y + 1} / span ${block.h}`,
+    minWidth: 0,
+    minHeight: 0,
+    overflow: "hidden",
+  };
+  if (expandable && EXPANDABLE.has(block.type)) return <ExpandableCell style={style} attrs={attrs}>{children}</ExpandableCell>;
   return (
-    <div
-      data-block-id={block.id}
-      data-block-type={block.type}
-      data-block-h={block.h}
-      style={{
-        // Inline grid coords drive the desktop layout. The mobile media
-        // query in ReportDocument's <style> override switches to flex
-        // single-column flow so each block stacks full-width.
-        gridColumn: `${block.x + 1} / span ${block.w}`,
-        gridRow: `${block.y + 1} / span ${block.h}`,
-        minWidth: 0,
-        minHeight: 0,
-        overflow: "hidden",
-      }}
-    >
+    <div {...attrs} style={style}>
       {children}
     </div>
   );
@@ -145,11 +155,84 @@ export function RenderBlock(ctx: {
   print?: boolean;
   provenance?: ProvenanceMap;
   reportDbId?: string;
+  /** Without the block's own card chrome, for a surface that draws its own (a dashboard card). */
+  bare?: boolean;
 }) {
   const entry = BlockRegistry[ctx.block.type];
   if (!entry) return <div className="text-xs text-destructive">Unknown block: {ctx.block.type}</div>;
   const C = entry.Component;
   return <C {...ctx} />;
+}
+
+type UserPrefs = { themeOverride?: string | null; mode?: string; density?: string; reducedMotion?: boolean };
+type TenantBrand = { defaultTheme?: string; defaultChartStyle?: string; customPalette?: string[]; logoUrl?: string; accentColor?: string };
+
+/**
+ * What every block of a report renders inside: the theme (userOverride →
+ * reportTheme → tenantDefault), the currency, the Thai date style and the
+ * "Why?" drawer. `doc` is the report already localized.
+ */
+function ReportProviders({ doc, userPrefs, tenantBrand, tenantCurrency, children }: {
+  doc: Report;
+  userPrefs?: UserPrefs;
+  tenantBrand?: TenantBrand;
+  tenantCurrency?: string | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <ThemeProvider
+      reportTheme={(doc as any).theme}
+      userOverride={userPrefs?.themeOverride ?? null}
+      tenantDefault={tenantBrand?.defaultTheme ?? null}
+      tenantCustomPalette={tenantBrand?.customPalette}
+      reportChartStyle={(doc as any).chartStyle}
+      tenantDefaultChartStyle={tenantBrand?.defaultChartStyle ?? null}
+    >
+    <CurrencyProvider reportCurrency={(doc as any).currency} tenantCurrency={tenantCurrency}>
+    <DateStyleProvider reportEra={doc.dateEra}>
+    <WhyProvider>
+      {children}
+    </WhyProvider>
+    </DateStyleProvider>
+    </CurrencyProvider>
+    </ThemeProvider>
+  );
+}
+
+/**
+ * One block of a report on its own, as a dashboard card or a Story slide
+ * shows it: inside the same providers, in the same content locale, as the
+ * block gets in the whole report. The block may be the caller's copy (a
+ * chart with its caption turned off) or one the report doesn't have (a
+ * dashboard's auto chart); the report supplies the theme and currency.
+ */
+export function ReportBlock({
+  block, report, dataset, params, print, provenance, reportDbId, bare,
+  userPrefs, tenantBrand, tenantCurrency, locale,
+}: {
+  block: Block;
+  report: Report;
+  dataset: Dataset;
+  params: Record<string, unknown>;
+  print?: boolean;
+  provenance?: ProvenanceMap;
+  reportDbId?: string;
+  bare?: boolean;
+  userPrefs?: UserPrefs;
+  tenantBrand?: TenantBrand;
+  tenantCurrency?: string | null;
+  locale?: string;
+}) {
+  const doc = localizeReport(report, locale);
+  return (
+    <ReportProviders doc={doc} userPrefs={userPrefs} tenantBrand={tenantBrand} tenantCurrency={tenantCurrency}>
+      <RenderBlock
+        block={locale ? localizeBlock(block, locale) : block}
+        report={doc} dataset={dataset} params={params} print={print}
+        provenance={provenance} reportDbId={reportDbId} bare={bare}
+      />
+    </ReportProviders>
+  );
 }
 
 export function ReportDocument({
@@ -169,8 +252,8 @@ export function ReportDocument({
   reportDbId?: string;
   /** Personalization layer (Slice B/C). Optional — viewer falls back to
    *  report.theme when both are missing. */
-  userPrefs?: { themeOverride?: string | null; mode?: string; density?: string; reducedMotion?: boolean };
-  tenantBrand?: { defaultTheme?: string; defaultChartStyle?: string; customPalette?: string[]; logoUrl?: string; accentColor?: string };
+  userPrefs?: UserPrefs;
+  tenantBrand?: TenantBrand;
   /** Tenant.currency — the fallback every currency-formatted block resolves
    *  to when the report itself has no currency override. Kept separate
    *  from tenantBrand: that panel is Business-gated, currency isn't. */
@@ -188,16 +271,7 @@ export function ReportDocument({
   const motion = userPrefs?.reducedMotion ? "reduce" : "auto";
   const doc = localizeReport(report, locale);
   return (
-    <ThemeProvider
-      reportTheme={(doc as any).theme}
-      userOverride={userPrefs?.themeOverride ?? null}
-      tenantDefault={tenantBrand?.defaultTheme ?? null}
-      tenantCustomPalette={tenantBrand?.customPalette}
-      reportChartStyle={(doc as any).chartStyle}
-      tenantDefaultChartStyle={tenantBrand?.defaultChartStyle ?? null}
-    >
-    <CurrencyProvider reportCurrency={(doc as any).currency} tenantCurrency={tenantCurrency}>
-    <WhyProvider>
+    <ReportProviders doc={doc} userPrefs={userPrefs} tenantBrand={tenantBrand} tenantCurrency={tenantCurrency}>
       {/* Mobile-responsive overrides. Below 640px the rigid 12-col grid
           collapses into a single-column stack — every block becomes full
           width with auto-height so charts and tables don't get squashed
@@ -239,6 +313,8 @@ export function ReportDocument({
           .report-page-responsive .report-grid > div[data-block-type="heatmap"] { min-height: 320px !important; }
           .report-page-responsive .report-grid > div[data-block-type="pivot"] { min-height: 280px !important; }
           .report-page-responsive .report-grid > div[data-block-type="pageBreak"] { display: none !important; }
+          /* An enlarged block (ExpandableCell) fills the window, not the column. */
+          .report-page-responsive .report-grid > div[data-expanded] { width: auto !important; }
         }
       ` }} />
       <div
@@ -265,8 +341,6 @@ export function ReportDocument({
           />
         ))}
       </div>
-    </WhyProvider>
-    </CurrencyProvider>
-    </ThemeProvider>
+    </ReportProviders>
   );
 }

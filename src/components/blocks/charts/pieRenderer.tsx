@@ -5,25 +5,27 @@
  */
 import type { ReactElement } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
-import { TOOLTIP_STYLE, LEGEND_STYLE, formatValue, styleOf, DEEMPHASIS_FILL, type ChartRenderCtx } from "./shared";
+import { TOOLTIP_STYLE, LEGEND_STYLE, formatValue, styleOf, DEEMPHASIS_FILL, type ChartRenderCtx, seriesTooltip } from "./shared";
 import { SeriesGradients, seriesFill } from "./gradients";
 
 export function renderPieChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, cfg, palette, fmt, currency, print, showLegend, showDataLabels, isDonut, drillEnabled, onDrill, blockId, gid } = ctx;
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
   const style = styleOf(ctx);
   // Emphasis: the first N slices carry the palette, the rest recede to grey so
   // the one the title is about is the only thing the eye lands on. A pie is
   // single-series by construction, so there is no multi-series case to gate.
   const emphasisTop = cfg?.emphasisTop as number | undefined;
   const useEmphasis = typeof emphasisTop === "number" && emphasisTop > 0;
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+  const tooltipFormatter = seriesTooltip(ctx, true);
   // Recharts' default slice label (`label={{...styleProps}}`) prints the
   // raw numeric value with no formatting at all — e.g. "22906476639"
   // instead of "22.9B". A function returning a string is Recharts' own
   // supported way to customize label text while keeping its default
   // positioning, so route it through the same formatValue() the tooltip
   // already uses instead of a bare style object.
-  const sliceLabel = (entry: any) => formatValue(Number(entry?.value) || 0, fmt, currency);
+  const sliceLabel = (entry: any) => formatValue(Number(entry?.value) || 0, fmt, currency, numOpts);
   // Pie / Donut share the same component with different inner radius.
   // Slices are flat palette fills separated by a card-coloured seam — the
   // same rule as bars: colour means a category, never decoration.

@@ -1,9 +1,12 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { pinRequestDbContext, withSystemDbContext } from "@/lib/dbContext";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReportWithProof, ANONYMOUS_VIEWER } from "@/lib/reporting/runner";
+import { visibleReport } from "@/lib/reporting/visibleReport";
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { ReportDocument } from "@/components/reports/ReportDocument";
+import { hashInviteToken } from "@/lib/invites";
 
 /**
  * Chromeless, iframe-friendly read-only viewer. Same auth model as
@@ -30,10 +33,14 @@ export default async function EmbedPage({
   params: { token: string };
   searchParams?: { theme?: string; compact?: string; brand?: string };
 }) {
-  const share = await prisma.publicShareToken.findUnique({
-    where: { token: params.token },
-  });
+  // The token is the credential and says whose report this is: look it up
+  // across workspaces, then render as that workspace — also when the
+  // visitor is signed in to a different one (row-level security, BE-TEN-03).
+  const share = await withSystemDbContext(() => prisma.publicShareToken.findUnique({
+    where: { tokenHash: hashInviteToken(params.token) },
+  }));
   if (!share) notFound();
+  pinRequestDbContext({ tenantId: share.tenantId, userId: "public", role: "viewer" });
   if (share.expiresAt && new Date(share.expiresAt) < new Date()) {
     return <ExpiredEmbed expiredAt={new Date(share.expiresAt)} />;
   }
@@ -48,12 +55,13 @@ export default async function EmbedPage({
     select: { currency: true },
   }).catch(() => null);
 
-  const def = ReportSchema.parse(JSON.parse(report.definition));
+  // Same as /share/[token]: role-gated blocks, and queries only they use, stay out.
+  const def = visibleReport(ReportSchema.parse(JSON.parse(report.definition)), ANONYMOUS_VIEWER);
   const pvals: Record<string, unknown> = {};
   for (const p of def.parameters) pvals[p.name] = p.default ?? "";
   // Chromeless public embed — nobody is authenticated here, so any
   // sensitivity-tagged lake column redacts by default (see ANONYMOUS_VIEWER).
-  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, viewer: ANONYMOUS_VIEWER });
+  const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, tenantId: share.tenantId, viewer: ANONYMOUS_VIEWER });
 
   const dark = searchParams?.theme === "dark";
   const compact = searchParams?.compact === "1";

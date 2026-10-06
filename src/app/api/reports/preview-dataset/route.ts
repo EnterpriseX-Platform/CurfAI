@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runReport } from "@/lib/reporting/runner";
 import { ReportSchema } from "@/lib/reporting/schema";
-import { requireUser, blockScopedApiKey } from "@/lib/auth";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { requireAdminOrEditor, blockScopedApiKey } from "@/lib/auth";
 
 /**
  * POST /api/reports/preview-dataset
@@ -12,7 +13,9 @@ import { requireUser, blockScopedApiKey } from "@/lib/auth";
  * runner the viewer uses, and returns the dataset map.
  *
  * Used by the designer's "Run" button to refresh the canvas without having
- * to save + reload the edit page.
+ * to save + reload the edit page. The designer is for builders, and so is
+ * this: it runs whatever SQL the body carries. It runs as the caller, so a
+ * source their role can't see comes back empty, as it does in the viewer.
  */
 const BodySchema = z.object({
   report: ReportSchema,
@@ -23,8 +26,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
   // No existing report id to check against — this runs an arbitrary,
   // client-supplied report definition against any tenant data source, so a
   // report-scoped key (meant to be limited to its allowlisted reports) must
@@ -43,6 +46,8 @@ export async function POST(req: NextRequest) {
     const dataset = await runReport({
       report: parsed.data.report,
       params: parsed.data.params ?? {},
+      tenantId: user.tenantId,
+      viewer: await exportViewer(user),
     });
     // Include a small summary per query so the UI can show status chips.
     const summary: Record<string, { rows: number }> = {};

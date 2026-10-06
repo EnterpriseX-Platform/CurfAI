@@ -8,7 +8,8 @@
  * dialect, a regex tweak) can't silently widen what gets through.
  */
 import { describe, it, expect } from "vitest";
-import { assertSelectOnly, assertRestMethodAllowed } from "./runner";
+import Database from "better-sqlite3";
+import { assertSelectOnly, assertRestMethodAllowed, readRowsCapped, QUERY_ROW_CAP } from "./runner";
 
 describe("assertSelectOnly — accepts read-only queries", () => {
   it("accepts a plain SELECT", () => {
@@ -103,6 +104,16 @@ describe("assertSelectOnly — rejects everything else", () => {
     expect(() => assertSelectOnly("SELECT 1; SELECT 2")).toThrow(/multiple statements/);
   });
 
+  it("is not fooled by a -- inside a string literal hiding a second statement (SEC-7)", () => {
+    // The old comment-strip treated the -- inside '--' as a line comment and
+    // hid the ';SELECT 2' after it; pg's simple protocol then ran both.
+    expect(() => assertSelectOnly("SELECT '--' AS a; SELECT 2 AS b --'")).toThrow(/multiple statements/);
+    expect(() => assertSelectOnly("SELECT '--'; DROP TABLE users")).toThrow();
+    // A ';' or a DDL keyword that only appears inside a string is data, not SQL.
+    expect(() => assertSelectOnly("SELECT 'a; b' AS note")).not.toThrow();
+    expect(() => assertSelectOnly("SELECT 'please DROP by' AS msg")).not.toThrow();
+  });
+
   it("rejects a DDL keyword regardless of case", () => {
     expect(() => assertSelectOnly("select id from users; Drop Table users")).toThrow();
   });
@@ -150,5 +161,37 @@ describe("assertRestMethodAllowed", () => {
   it("is case-insensitive on the method", () => {
     expect(() => assertRestMethodAllowed("get", true)).not.toThrow();
     expect(() => assertRestMethodAllowed("post", true)).toThrow(/read-only/);
+  });
+});
+
+/**
+ * A lake query that selects a million-row table without summarising it
+ * used to pull every row into the server's memory. It now stops at
+ * QUERY_ROW_CAP with a message that says how to fix the query.
+ */
+describe("readRowsCapped", () => {
+  function* rows(n: number) {
+    for (let i = 0; i < n; i++) yield { i };
+  }
+
+  it("returns every row up to the cap", () => {
+    expect(readRowsCapped(rows(3), "q")).toEqual([{ i: 0 }, { i: 1 }, { i: 2 }]);
+    expect(readRowsCapped(rows(QUERY_ROW_CAP), "q")).toHaveLength(QUERY_ROW_CAP);
+  });
+
+  it("refuses one row past the cap instead of truncating", () => {
+    expect(() => readRowsCapped(rows(QUERY_ROW_CAP + 1), "Branch sales"))
+      .toThrow(/Query "Branch sales" returns more than 200,000 rows.*GROUP BY.*LIMIT/);
+  });
+
+  it("stops reading a real SQLite result as soon as it passes the cap", () => {
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE t (n INTEGER)");
+    db.exec(`WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ${QUERY_ROW_CAP + 5}) INSERT INTO t SELECT x FROM c`);
+    const stmt = db.prepare("SELECT n FROM t");
+    expect(() => readRowsCapped(stmt.iterate(), "all rows")).toThrow(/more than 200,000 rows/);
+    // The iterator was closed on the way out, so the connection is usable again.
+    expect(db.prepare("SELECT COUNT(*) AS c FROM t").get()).toEqual({ c: QUERY_ROW_CAP + 5 });
+    db.close();
   });
 });

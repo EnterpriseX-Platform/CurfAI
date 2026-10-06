@@ -1,0 +1,1906 @@
+openapi: 3.1.0
+info:
+  title: Curf Engine API
+  version: 1.0.0
+  summary: Data plane for Curf - connections, governed views, queries, policy and audit.
+  description: |
+    Contract for the Curf engine. Every implementation must pass the shared conformance suite in
+    `engines/conformance`. Errors are RFC 9457 `application/problem+json` with a stable `code`.
+    Milestone M0 covers identity, audit and operations; later milestones add connections, views,
+    queries, reports, exports, sharing and schedules.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: Curf engine maintainers
+    url: https://github.com/EnterpriseX-Platform/CurfAI
+servers:
+  - url: http://localhost:8080/engine/v1
+    description: Local engine
+tags:
+  - name: Identity
+    description: Who the caller is, as resolved from the access token.
+  - name: Audit
+    description: Append-only record of state changes.
+  - name: Connections
+    description: Databases the engine may query, with encrypted credentials.
+  - name: Queries
+    description: Guarded, read-only statement execution.
+  - name: Views
+    description: Governed access to data - row rules and personal-data masking - with a publish step.
+  - name: Policies
+    description: Who holds which attribute values, for identity providers that cannot carry them in the token.
+  - name: Reports
+    description: Reports in Curf's own definition format, with versions, run as the person asking.
+  - name: Exports
+    description: Reports as CSV, XLSX, DOCX and PDF files, kept briefly with their SHA-256.
+  - name: Sharing
+    description: Who may see a report, maker-and-checker publishing, and public links.
+  - name: Public
+    description: Endpoints that need no sign-in; the secret in the path is the credential.
+  - name: Schedules
+    description: Reports sent by email on a timetable, run as the person who saved the schedule.
+  - name: Operations
+    description: Liveness, readiness and metrics.
+security:
+  - bearerAuth: []
+paths:
+  /me:
+    get:
+      operationId: getMe
+      tags: [Identity]
+      summary: Resolved viewer context
+      description: Returns the viewer built from the caller's token, including attributes used for row-level security.
+      responses:
+        "200":
+          description: The caller's viewer context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /audit-events:
+    get:
+      operationId: listAuditEvents
+      tags: [Audit]
+      summary: List audit events for the caller's tenant
+      description: Requires the `audit:read` permission.
+      parameters:
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: entityType, in: query, schema: { type: string } }
+        - { name: entityId, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of audit events, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/InvalidInput"
+  /connections:
+    get:
+      operationId: listConnections
+      tags: [Connections]
+      summary: List connections in the caller's tenant
+      description: Requires `connection:manage`. Passwords are never returned.
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of connections.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionPage" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    post:
+      operationId: createConnection
+      tags: [Connections]
+      summary: Create a connection
+      description: |
+        Requires `connection:manage`. The password is encrypted at rest and write-only. Host and database
+        are validated so they cannot carry extra driver options; link-local and metadata addresses are refused.
+        Use a SELECT-only database account: the connection test reports whether the account can write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectionRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connection" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /connections/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getConnection
+      tags: [Connections]
+      summary: Get a connection
+      description: Requires `connection:manage`. A connection in another tenant is reported as not found.
+      responses:
+        "200":
+          description: The connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connection" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateConnection
+      tags: [Connections]
+      summary: Change a connection
+      description: |
+        `version` must match the current version, otherwise 409 `CURF_STALE_VERSION`. Omit `password` to keep
+        the stored one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectionRequest" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connection" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    delete:
+      operationId: deleteConnection
+      tags: [Connections]
+      summary: Delete a connection
+      description: Requires `connection:manage`. Pooled sessions are closed and the deletion is audited.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /connections/{id}/test:
+    post:
+      operationId: testConnection
+      tags: [Connections]
+      summary: Test a connection
+      description: Connects, reports latency and server version, and inspects the account's privileges.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Result of the test.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionTest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+  /connections/{id}/introspect:
+    post:
+      operationId: introspectConnection
+      tags: [Connections]
+      summary: List schemas, tables and columns
+      description: System schemas are left out. Each column carries a PII suggestion (NONE, MASK or HIDE) from its name.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The database structure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Introspection" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+  /views:
+    get:
+      operationId: listViews
+      tags: [Views]
+      summary: List views
+      description: |
+        Holders of `view:manage` get a page of every view's full definition, drafts included. Everyone else
+        gets the published views they may query, as summaries.
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: A page of views (managers) or an array of summaries (everyone else).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ViewPage" }
+                  - { type: array, items: { $ref: "#/components/schemas/ViewSummary" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    post:
+      operationId: createView
+      tags: [Views]
+      summary: Create a view
+      description: |
+        Requires `view:manage`. The statement is checked by the SQL guard and run for zero rows to read its real
+        columns and types. Columns that look like personal data start masked or hidden. The view is a draft
+        until published.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ViewRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/View" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+  /views/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getView
+      tags: [Views]
+      summary: Get a view
+      description: Managers get the working copy; everyone else gets the summary of the published view, or 404.
+      responses:
+        "200":
+          description: The view.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/View" }
+                  - { $ref: "#/components/schemas/ViewSummary" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateView
+      tags: [Views]
+      summary: Change a view
+      description: |
+        Requires `view:manage`. `version` must match, otherwise 409. Edits change the working copy only; viewers
+        keep seeing the published version until it is published again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ViewRequest" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/View" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    delete:
+      operationId: deleteView
+      tags: [Views]
+      summary: Delete a view
+      description: Requires `view:manage`. Published snapshots are deleted with it.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /views/{id}/summary:
+    get:
+      operationId: getViewSummary
+      tags: [Views]
+      summary: Summary of a published view
+      description: The columns this viewer can see and whether each is masked for them. Unknown, unpublished and not-allowed all return 404.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ViewSummary" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /views/{id}/preview:
+    post:
+      operationId: previewView
+      tags: [Views]
+      summary: Run the working copy as the caller
+      description: |
+        Requires `view:manage`. Applies the caller's own policy, row rules and masking included, so an author
+        sees what a viewer in their position would. At most 1,000 rows.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QueryRequest" }
+      responses:
+        "200":
+          description: The dataset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueryResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /views/{id}/publish:
+    post:
+      operationId: publishView
+      tags: [Views]
+      summary: Publish the working copy
+      description: Requires `view:manage`. Freezes a snapshot of the current version; viewers query it from now on.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The published snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/View" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /views/{id}/unpublish:
+    post:
+      operationId: unpublishView
+      tags: [Views]
+      summary: Withdraw a view from viewers
+      description: Requires `view:manage`. Viewers get 404 until it is published again.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Withdrawn. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /views/{id}/versions:
+    get:
+      operationId: listViewVersions
+      tags: [Views]
+      summary: Published versions of a view
+      description: Requires `view:manage`. Newest first.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The published versions.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ViewVersion" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reports:
+    get:
+      operationId: listReports
+      tags: [Reports]
+      summary: List reports
+      description: |
+        Holders of `report:edit` get a page of every report. Everyone else gets the reports their roles may run.
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: A page of summaries (editors) or an array of runnable reports (everyone else).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ReportPage" }
+                  - { type: array, items: { $ref: "#/components/schemas/RunnableReport" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    post:
+      operationId: createReport
+      tags: [Reports]
+      summary: Save a report
+      description: |
+        Requires `report:edit`. The body carries a report in Curf's own definition format (see `ReportDefinition`), which
+        is stored exactly as sent, as version 1.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportRequest" }
+      responses:
+        "201":
+          description: Saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /reports/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getReport
+      tags: [Reports]
+      summary: Get a report
+      description: |
+        Editors get the stored definition. Someone who may only run the report gets it for rendering, with each query
+        reduced to its `id` and `name`, so SQL, view bindings and data source ids are not handed out. Reports a person may
+        not run answer 404.
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Report" }
+                  - { $ref: "#/components/schemas/RunnableReport" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateReport
+      tags: [Reports]
+      summary: Save a new version of a report
+      description: Requires `report:edit`. `version` must be the current one, otherwise 409. Every save keeps a numbered copy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportRequest" }
+      responses:
+        "200":
+          description: Saved as the next version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    delete:
+      operationId: deleteReport
+      tags: [Reports]
+      summary: Delete a report
+      description: Requires `report:edit`. Its versions are deleted with it.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reports/{id}/versions:
+    get:
+      operationId: listReportVersions
+      tags: [Reports]
+      summary: Saved versions of a report
+      description: Requires `report:edit`. Newest first.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The versions.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ReportVersion" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reports/{id}/versions/{version}:
+    get:
+      operationId: getReportVersion
+      tags: [Reports]
+      summary: A saved version's definition
+      description: Requires `report:edit`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: The definition as it was saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDefinition" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reports/{id}/restore/{version}:
+    post:
+      operationId: restoreReportVersion
+      tags: [Reports]
+      summary: Make an old version the newest
+      description: Requires `report:edit`. Adds a new version holding the old definition; history is never rewritten.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: The restored report, as the newest version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /reports/{id}/run:
+    post:
+      operationId: runReport
+      tags: [Reports]
+      summary: Run a report as the caller
+      description: |
+        Runs every query as the caller, so a viewer's row rules and masking apply. Follows Curf's runner: every declared
+        parameter is bound (its default, or an empty string), and queries used only by a drill-down are skipped. One query
+        failing does not fail the run: its dataset is empty and its provenance carries `executionError` (or
+        `accessDeniedNote` when the caller may not use that data source). The answer is in the shape of Curf's own
+        run response.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                params:
+                  type: object
+                  description: Values by parameter name. Unknown names, malformed values and missing required values are 422.
+                  additionalProperties: { type: [string, number, boolean, "null"] }
+      responses:
+        "200":
+          description: The datasets and where they came from.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /reports/{id}/exports:
+    post:
+      operationId: createExport
+      tags: [Exports]
+      summary: Export a report as a file
+      description: |
+        Runs the report as the caller (their rows, their masks) and writes it as CSV, XLSX, DOCX or PDF. The file is kept
+        for the retention period with its SHA-256, and only its creator can fetch it.
+
+        - **CSV**: one table block (the first, or `blockId`), machine-readable values, UTF-8 with a byte-order mark.
+          Text that a spreadsheet could read as a formula is prefixed with an apostrophe. Refused when the table's data
+          did not load, or the report has no table.
+        - **XLSX**: one sheet per table block (one per query when there are none) plus a provenance sheet. Numbers are
+          numbers, money and percentages carry number formats, dates are real dates (text when a Buddhist-era year is
+          needed). Text is never a formula.
+        - **DOCX**: the tables, totals and a closing table of data sources, with a footer. No charts.
+        - **PDF**: the same content printed by a headless Chromium with the Thai font embedded. Needs the Chromium
+          sidecar (503 `CURF_EXPORT_UNAVAILABLE` without it).
+
+        A result cut short by the row limit is refused with 422 `CURF_ROW_LIMIT` rather than written. Language and
+        calendar default to Thai with Buddhist-era years; a report that fixes `dateEra` or `currency` wins over the request.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExportRequest" }
+      responses:
+        "201":
+          description: The file was written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportInfo" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+        "503":
+          description: PDF export is not available (no Chromium sidecar) or the sidecar failed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+  /reports/{id}/shares:
+    get:
+      operationId: listReportShares
+      tags: [Sharing]
+      summary: Who a report is shared with
+      description: Needs `report:edit`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The shares.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Shares" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: replaceReportShares
+      tags: [Sharing]
+      summary: Replace every share of a report
+      description: |
+        A share gives a person (`USER`, by token subject), a group (`GROUP`) or everyone holding an attribute value
+        (`ATTRIBUTE`, `name=value`) `VIEW` (run the published version) or `EDIT` (also change the report) access, optionally
+        until `expiresAt`. Needs `report:edit`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Shares" }
+      responses:
+        "200":
+          description: The shares now in force.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Shares" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /reports/{id}/publish-requests:
+    get:
+      operationId: listReportPublishRequests
+      tags: [Sharing]
+      summary: Publish requests of one report
+      description: Needs edit access to the report.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Newest first.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PublishRequest" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: requestPublish
+      tags: [Sharing]
+      summary: Ask for the newest version to be published
+      description: |
+        Needs `report:publish-request` and edit access. One request may wait per report (409 `CURF_CONFLICT`), and a
+        report whose newest version is already published cannot be asked again.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Note" }
+      responses:
+        "201":
+          description: The pending request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublishRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /publish-requests:
+    get:
+      operationId: listPublishRequests
+      tags: [Sharing]
+      summary: Publish requests in a state (checkers)
+      description: Needs `report:approve`.
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [PENDING, APPROVED, REJECTED, CANCELLED], default: PENDING } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: A page of requests.
+          content:
+            application/json:
+              schema: { type: object }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /publish-requests/{id}:
+    get:
+      operationId: getPublishRequest
+      tags: [Sharing]
+      summary: One publish request
+      description: Visible to checkers and to the person who asked.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublishRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /publish-requests/{id}/approve:
+    post:
+      operationId: approvePublish
+      tags: [Sharing]
+      summary: Approve a publish request
+      description: |
+        Needs `report:approve`, and the approver must not be the person who asked (403 `CURF_SEGREGATION_OF_DUTIES`).
+        Publishes exactly the requested version; if the report was saved since, the answer is 409 `CURF_STALE_VERSION`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Note" }
+      responses:
+        "200":
+          description: The approved request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublishRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /publish-requests/{id}/reject:
+    post:
+      operationId: rejectPublish
+      tags: [Sharing]
+      summary: Reject a publish request
+      description: Needs `report:approve`. A `note` saying why is required.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Note" }
+      responses:
+        "200":
+          description: The rejected request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublishRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /publish-requests/{id}/cancel:
+    post:
+      operationId: cancelPublish
+      tags: [Sharing]
+      summary: Withdraw a publish request
+      description: Only the person who asked.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The cancelled request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublishRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /reports/{id}/unpublish:
+    post:
+      operationId: unpublishReport
+      tags: [Sharing]
+      summary: Withdraw a published report
+      description: |
+        Needs `report:approve` or `report:edit`, and a `reason`. People who only run reports lose access at once and
+        public links stop working; the history stays.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "204": { description: Withdrawn. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /reports/{id}/public-links:
+    get:
+      operationId: listPublicLinks
+      tags: [Sharing]
+      summary: Public links and embed tokens of a report
+      description: Never includes the secret. Needs edit access.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Newest first.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PublicLinkInfo" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createPublicLink
+      tags: [Sharing]
+      summary: Make a published report available to anyone with the link
+      description: |
+        Needs `report:approve`. The report must be published, hold no raw SQL query, and every view it uses must list the
+        reserved role `public` and pass the exposure check (no row rules, no unmasked personal-looking column). The secret
+        is returned once and only its hash is kept. Expires in 30 days by default, at most 365.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkRequest" }
+      responses:
+        "201":
+          description: The link and its one-time secret.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicLinkCreated" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /reports/{id}/embed-tokens:
+    post:
+      operationId: createEmbedToken
+      tags: [Sharing]
+      summary: A short-lived token for showing a published report on a page
+      description: Same checks as a public link; needs edit access. One hour by default, at most 24.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkRequest" }
+      responses:
+        "201":
+          description: The token and its one-time secret.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicLinkCreated" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /public-links/{id}:
+    delete:
+      operationId: revokePublicLink
+      tags: [Sharing]
+      summary: Revoke a link or token
+      description: Takes effect at once. Needs `report:approve` or edit access to the report.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /public/{token}:
+    get:
+      operationId: openPublicReport
+      tags: [Public]
+      summary: The report as a link holder sees it
+      description: |
+        No sign-in; the secret in the path is the credential. Queries are reduced to id and name. An unknown, expired,
+        revoked or unpublished link all answer the same 404. Responses are never cached.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The published report.
+          content:
+            application/json:
+              schema: { type: object }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/{token}/run:
+    post:
+      operationId: runPublicReport
+      tags: [Public]
+      summary: Run a report through a public link
+      description: |
+        Runs as the reserved `public` viewer: only views built for the public are reachable and personal data never
+        shows. Parameters fixed by the link override anything sent. At most a configured number of runs a minute per link
+        (429 `CURF_TOO_MANY_QUERIES`). Exports are not offered here. Browsers may call it only from configured origins.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                params: { type: object }
+      responses:
+        "200":
+          description: The datasets and where they came from.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunResult" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429":
+          description: Too many runs for this link.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+  /schedules:
+    get:
+      operationId: listSchedules
+      tags: [Schedules]
+      summary: Schedules of the workspace
+      description: Needs `schedule:manage`.
+      responses:
+        "200":
+          description: Schedules by name.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Schedule" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createSchedule
+      tags: [Schedules]
+      summary: Send a report on a timetable
+      description: |
+        Every fire of `cron` (five fields, read in `timezone`, UTC when omitted) runs the report and mails the file to
+        `recipients`. It runs **as the person who saved the schedule**, with their row rules and masking, and the same
+        rights are checked on every run: they must be able to run the report. Needs `schedule:manage`. Recipients must be
+        on `curf.engine.schedules.allowed-recipient-domains`, which is empty by default, so nothing can be mailed out until
+        an operator allows a domain. A schedule may not fire more often than every 5 minutes by default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleRequest" }
+      responses:
+        "201":
+          description: The schedule and its next fire.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /schedules/{id}:
+    get:
+      operationId: getSchedule
+      tags: [Schedules]
+      summary: One schedule
+      description: Needs `schedule:manage`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The schedule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateSchedule
+      tags: [Schedules]
+      summary: Change a schedule
+      description: |
+        Saving runs the schedule as the person saving from now on (their rows, their masks); nobody can make a schedule
+        run with more access than they hold. The report cannot be changed. `enabled: false` switches it off.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleRequest" }
+      responses:
+        "200":
+          description: The schedule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    delete:
+      operationId: deleteSchedule
+      tags: [Schedules]
+      summary: Delete a schedule and its run history
+      description: Needs `schedule:manage`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /schedules/{id}/runs:
+    get:
+      operationId: listScheduleRuns
+      tags: [Schedules]
+      summary: What happened at each fire
+      description: |
+        Newest first. A fire is done once however many engine instances run. A failure that may pass is `RETRY` with the
+        time of the next attempt (growing waits, three attempts by default); one that will not is `FAILED` at once.
+        Delivery is at least once. Needs `schedule:manage`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Up to 100 runs.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ScheduleRun" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /exports:
+    get:
+      operationId: listExports
+      tags: [Exports]
+      summary: The caller's own unexpired exports
+      description: Only the creator sees an export. Expired files are not listed.
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportPage" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /exports/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getExport
+      tags: [Exports]
+      summary: Describe an export
+      description: Only the creator can see it. Expired, unknown and someone else's exports all answer 404.
+      responses:
+        "200":
+          description: The export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportInfo" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteExport
+      tags: [Exports]
+      summary: Delete an export
+      description: Only the creator can delete it.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /exports/{id}/file:
+    get:
+      operationId: downloadExport
+      tags: [Exports]
+      summary: Download the file
+      description: |
+        The bytes, with `Content-Disposition` (an ASCII fallback plus the real, possibly Thai, name as UTF-8),
+        `X-Content-SHA256` (the hash of these bytes) and `X-Curf-As-Of` (when the database answered). Never cached.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The file.
+          headers:
+            X-Content-SHA256: { schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+            X-Curf-As-Of: { schema: { type: string, format: date-time } }
+            Content-Disposition: { schema: { type: string } }
+          content:
+            text/csv: { schema: { type: string, format: binary } }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: { schema: { type: string, format: binary } }
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/entitlements:
+    get:
+      operationId: listEntitlements
+      tags: [Policies]
+      summary: List entitlements
+      description: Requires `policy:manage`.
+      parameters:
+        - { name: subject, in: query, schema: { type: string } }
+        - { name: attribute, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page of entitlements.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntitlementPage" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+    put:
+      operationId: replaceEntitlements
+      tags: [Policies]
+      summary: Replace the values people hold
+      description: |
+        Requires `policy:manage`. For each entry, replaces everything the subject holds for the attribute; an
+        empty list removes it. All-or-nothing. A token claim of the same name, when present, takes precedence.
+        Values are kept out of the audit trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries]
+              properties:
+                entries: { type: array, minItems: 1, maxItems: 500, items: { $ref: "#/components/schemas/EntitlementEntry" } }
+      responses:
+        "200":
+          description: How many entries were applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+  /queries/execute:
+    post:
+      operationId: executeQuery
+      tags: [Queries]
+      summary: Run a guarded SELECT
+      description: |
+        With `viewId`: anyone the view allows can query its published snapshot. The engine applies the caller's row
+        rules and personal-data masking first, so filters, grouping, ordering and aggregates can only reach what
+        the caller may see. Unknown, unpublished and not-allowed views all return 404.
+
+        With `connectionId` and `sql`: the raw lane for `view:manage` holders on connections with `allowRawSql`.
+        Exactly one SELECT is accepted; the engine runs the text rendered from the parsed statement in a read-only
+        transaction that is always rolled back, with a timeout, row cap and byte cap. Named parameters (`:name`)
+        are bound, never interpolated. The raw lane is not subject to row rules; keep it for trusted administrators.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QueryRequest" }
+      responses:
+        "200":
+          description: The dataset with its provenance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueryResult" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidInput" }
+        "429":
+          description: Too many statements are already running for this viewer. Retry after the `Retry-After` seconds.
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "504":
+          description: The statement exceeded its time limit and was cancelled.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [Operations]
+      summary: Health
+      description: Open without a token. `/actuator/health/liveness` and `/actuator/health/readiness` are the probe endpoints.
+      security: []
+      responses:
+        "200":
+          description: The engine is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, examples: [UP] }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthenticated:
+      description: Missing, invalid or untrusted token.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: The caller lacks the required permission.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    InvalidInput:
+      description: The request is malformed or fails validation. For SQL the code is `CURF_SQL_REJECTED` and `errors` says why.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: No such resource in the caller's tenant.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: The resource changed since it was read (`CURF_STALE_VERSION`).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    BadGateway:
+      description: The engine could not reach the customer database (`CURF_CONNECTION_FAILED`).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, examples: ["urn:curf:error:forbidden"] }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code:
+          type: string
+          enum:
+            - CURF_INVALID_INPUT
+            - CURF_SQL_REJECTED
+            - CURF_QUERY_TIMEOUT
+            - CURF_TOO_MANY_QUERIES
+            - CURF_UNAUTHENTICATED
+            - CURF_FORBIDDEN
+            - CURF_SEGREGATION_OF_DUTIES
+            - CURF_NOT_FOUND
+            - CURF_STALE_VERSION
+            - CURF_CONFLICT
+            - CURF_ROW_LIMIT
+            - CURF_EXPORT_UNAVAILABLE
+            - CURF_CONNECTION_FAILED
+            - CURF_INTERNAL
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+    Me:
+      type: object
+      required: [tenantId, subject, username, roles, groups, attributes, permissions]
+      properties:
+        tenantId: { type: string }
+        subject: { type: string }
+        username: { type: string }
+        roles: { type: array, items: { type: string } }
+        groups: { type: array, items: { type: string } }
+        attributes:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+        permissions:
+          type: array
+          items: { type: string, examples: ["audit:read"] }
+    AuditEvent:
+      type: object
+      required: [id, tenantId, occurredAt, actor, action]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actor: { type: string }
+        action: { type: string }
+        entityType: { type: [string, "null"] }
+        entityId: { type: [string, "null"] }
+        details: { type: [string, "null"], description: JSON text. Never contains secrets. }
+    ConnectionKind:
+      type: string
+      enum: [POSTGRESQL, MYSQL, MARIADB, ORACLE, SQLSERVER]
+    TlsMode:
+      type: string
+      enum: [VERIFY, REQUIRE, DISABLE]
+      description: VERIFY checks certificate and host name (default). REQUIRE encrypts without verifying. DISABLE sends everything in clear; both opt-outs are reported as warnings.
+    ConnectionRequest:
+      type: object
+      required: [name, kind, host, database, username]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        kind: { $ref: "#/components/schemas/ConnectionKind" }
+        host: { type: string, description: Host name or IPv4 address. }
+        port: { type: integer, minimum: 1, maximum: 65535, description: Defaults to the kind's standard port. }
+        database: { type: string, pattern: "^[A-Za-z0-9_$.-]{1,128}$" }
+        username: { type: string, maxLength: 128 }
+        password: { type: string, writeOnly: true, description: Required on create; omit on update to keep the stored one. }
+        tlsMode: { $ref: "#/components/schemas/TlsMode" }
+        allowRawSql: { type: boolean, default: false }
+        version: { type: integer, description: Required on update. }
+    Connection:
+      type: object
+      required: [id, name, kind, host, port, database, username, tlsMode, allowRawSql, readOnlyVerified, hasPassword, version]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { $ref: "#/components/schemas/ConnectionKind" }
+        host: { type: string }
+        port: { type: integer }
+        database: { type: string }
+        username: { type: string }
+        tlsMode: { $ref: "#/components/schemas/TlsMode" }
+        allowRawSql: { type: boolean }
+        readOnlyVerified: { type: boolean, description: True when the last test found no write, DDL or admin privilege on the account. }
+        hasPassword: { type: boolean }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+    ConnectionPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/Connection" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    ConnectionTest:
+      type: object
+      required: [ok, latencyMs, serverVersion, readOnlyVerified, warnings]
+      properties:
+        ok: { type: boolean }
+        latencyMs: { type: integer, format: int64 }
+        serverVersion: { type: string }
+        readOnlyVerified: { type: boolean }
+        warnings: { type: array, items: { type: string } }
+    Introspection:
+      type: object
+      required: [schemas, truncated]
+      properties:
+        truncated: { type: boolean }
+        schemas:
+          type: array
+          items:
+            type: object
+            required: [name, tables]
+            properties:
+              name: { type: string }
+              tables:
+                type: array
+                items:
+                  type: object
+                  required: [name, type, columns]
+                  properties:
+                    name: { type: string }
+                    type: { type: string, examples: [TABLE] }
+                    columns:
+                      type: array
+                      items:
+                        type: object
+                        required: [name, type, nullable, piiSuggestion]
+                        properties:
+                          name: { type: string }
+                          type: { type: string }
+                          nullable: { type: boolean }
+                          piiSuggestion: { type: string, enum: [NONE, MASK, HIDE] }
+    QueryRequest:
+      type: object
+      description: |
+        Either a view (`viewId`, with the optional structured parts) or, for `view:manage` holders on connections
+        that allow it, raw SQL (`connectionId` and `sql`). The two cannot be combined.
+      properties:
+        viewId: { type: string, format: uuid, description: Queries the published snapshot of this view under the caller's policy. }
+        connectionId: { type: string, format: uuid }
+        sql: { type: string, description: One SELECT with optional `:name` parameters. Raw lane only. }
+        params:
+          type: object
+          description: Values for the named parameters; text, numbers or booleans. Names starting with `__` are reserved.
+          additionalProperties: { type: [string, number, boolean, "null"] }
+        columns: { type: array, items: { type: string }, description: Visible columns to return; default all. }
+        filters: { type: array, items: { $ref: "#/components/schemas/Filter" }, description: Combined with AND, inside the viewer's row rules. }
+        groupBy: { type: array, items: { type: string } }
+        aggregates: { type: array, items: { $ref: "#/components/schemas/Aggregate" } }
+        orderBy: { type: array, items: { $ref: "#/components/schemas/Order" } }
+        limit: { type: integer, minimum: 1, description: Rows to return; capped by the engine ceiling. }
+        timeoutMs: { type: integer, minimum: 100, description: Capped by the engine ceiling. }
+        maxAgeSeconds: { type: integer, minimum: 0, description: Accept a cached answer up to this old. Cached answers are never shared between viewers with different roles, groups or attributes. }
+    QueryResult:
+      type: object
+      required: [columns, rows, rowCount, truncated, durationMs, asOf, cache, provenance]
+      properties:
+        columns:
+          type: array
+          items:
+            type: object
+            required: [name, type]
+            properties:
+              name: { type: string }
+              type: { type: string }
+        rows:
+          type: array
+          description: Exact numerics (decimals) are returned as strings so no precision is lost.
+          items: { type: array, items: {} }
+        rowCount: { type: integer }
+        truncated: { type: boolean, description: True when the row or byte cap cut the result short. }
+        durationMs: { type: integer, format: int64 }
+        asOf: { type: string, format: date-time, description: When the database answered, also for cache hits. }
+        cache: { type: string, enum: [hit, miss] }
+        provenance:
+          type: object
+          required: [sha256, connectionFingerprint]
+          properties:
+            sha256: { type: string, description: Hash of the executed SQL, bound values and result rows. }
+            connectionFingerprint: { type: string, description: Hash of kind, host, port and database; no credentials. }
+            viewVersion: { type: [integer, "null"] }
+    ExportRequest:
+      type: object
+      required: [format]
+      properties:
+        format: { type: string, enum: [CSV, XLSX, DOCX, PDF] }
+        params: { type: object, description: Report parameters, as for a run., additionalProperties: { type: [string, number, boolean, "null"] } }
+        locale: { type: string, enum: [th, en], description: Language of the words in the file. Default is the engine's (Thai). }
+        calendar: { type: string, enum: [GREGORIAN, BUDDHIST], description: "Year shown in dates. Default: Buddhist for Thai, Gregorian otherwise. A report's `dateEra` wins." }
+        currency: { type: string, pattern: "^[A-Za-z]{3}$", description: "Currency code for money columns. A report's `currency` wins. Default THB." }
+        blockId: { type: string, description: CSV only. The table block to write; the first when omitted. }
+    ExportInfo:
+      type: object
+      required: [id, reportId, reportName, format, fileName, sizeBytes, sha256, asOf, createdAt, expiresAt, downloadUrl]
+      properties:
+        id: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        reportName: { type: string }
+        format: { type: string, enum: [CSV, XLSX, DOCX, PDF] }
+        fileName: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        asOf: { type: string, format: date-time, description: When the database answered. Also written into the file. }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        downloadUrl: { type: string }
+    ExportPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/ExportInfo" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    ReportDefinition:
+      type: object
+      required: [version, name, pages]
+      description: |
+        Curf's report definition, stored as sent (pages, blocks, themes and the rest are presentation the engine does not
+        read). The engine reads `parameters` and `dataSources`, and which queries blocks use (any `queryId` or `*QueryId`
+        value; `config.drilldown.queryId` marks drill-only queries). Each `dataSources[]` entry needs `id`, `name`,
+        `dataSourceId` and exactly one of:
+
+        - `engine`: `{viewId, columns?, filters?, groupBy?, aggregates?, orderBy?, limit?, params?}`, a published view plus
+          structured parts, run as the caller. A value may be `{"$param": "name"}` to use a report parameter; a filter with
+          `skipIfEmpty` is left out when its parameter is empty (Curf's "blank means no filter").
+        - `sql`: a raw SELECT with `:name` parameters on the engine connection `dataSourceId`. Only for `view:manage` holders
+          on connections that allow raw SQL; for everyone else the query is marked `accessDeniedNote`.
+
+        Not supported yet: REST fields, `joins` and `attaches`.
+      properties:
+        version: { type: integer, enum: [1] }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        parameters:
+          type: array
+          items:
+            type: object
+            required: [name, type]
+            properties:
+              name: { type: string, pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$", description: Must not start with `__`. }
+              label: { type: string }
+              type: { type: string, enum: [string, number, date, dateRange, boolean, select] }
+              required: { type: boolean }
+              default: { type: [string, number, boolean] }
+              options:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    value: { type: string }
+                    label: { type: string }
+        dataSources: { type: array, maxItems: 100, items: { type: object } }
+        pages: { type: array, minItems: 1, items: { type: object } }
+      additionalProperties: true
+    ReportRequest:
+      type: object
+      required: [definition]
+      properties:
+        definition: { $ref: "#/components/schemas/ReportDefinition" }
+        runRoles: { type: array, items: { type: string }, description: Roles that may run the report. Editors always may. }
+        version: { type: integer, description: Required on update. }
+        note: { type: string, maxLength: 500, description: Describes the change in the history. }
+    Report:
+      type: object
+      required: [id, name, definition, runRoles, version]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        definition: { $ref: "#/components/schemas/ReportDefinition" }
+        runRoles: { type: array, items: { type: string } }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+    ReportSummary:
+      type: object
+      required: [id, name, version]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        runRoles: { type: array, items: { type: string } }
+        version: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+    ReportPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/ReportSummary" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    RunnableReport:
+      type: object
+      required: [id, name, version]
+      description: A report as someone who may only run it sees it. Queries are reduced to `id` and `name` when a definition is included.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        version: { type: integer }
+        definition: { $ref: "#/components/schemas/ReportDefinition" }
+    ReportVersion:
+      type: object
+      required: [version, savedAt, savedBy]
+      properties:
+        version: { type: integer }
+        savedAt: { type: string, format: date-time }
+        savedBy: { type: string }
+        note: { type: [string, "null"] }
+    Provenance:
+      type: object
+      required: [queryId, queryName, queryHash, runAt, durationMs, rowCount, dataHash, dataSourceName, dataSourceKind]
+      description: |
+        Where one query's data came from, in the shape Curf records. `queryHash` and `dataHash` are computed by Curf's own
+        algorithms (SHA-256, 24 hex characters, `sha256:` prefix), so they equal Curf's for the same SQL, parameters and
+        rows. Date columns are plain dates here, so a result with date columns hashes differently from Curf's.
+      properties:
+        queryId: { type: string }
+        queryName: { type: string }
+        queryHash: { type: string, pattern: "^sha256:[0-9a-f]{24}$" }
+        runAt: { type: string, format: date-time }
+        durationMs: { type: integer, format: int64 }
+        rowCount: { type: integer }
+        dataHash: { type: string, pattern: "^sha256:[0-9a-f]{24}$" }
+        dataSourceName: { type: string }
+        dataSourceKind: { type: string, description: "`postgres` or `mysql` (MariaDB is `mysql`), as Curf names them." }
+        accessDeniedNote: { type: string, description: The caller may not use this data source; the dataset is empty. }
+        executionError: { type: string, maxLength: 500, description: The query failed; the dataset is empty and the rest of the report ran. }
+        truncated: { type: boolean, description: Present and true when the row or byte cap cut the result short. }
+    RunResult:
+      type: object
+      required: [dataset, provenance, params, reportVersion, asOf]
+      properties:
+        dataset:
+          type: object
+          description: Rows keyed by column name, one entry per query that ran. Numerics and (on PostgreSQL) bigints are text, as Curf's drivers return them.
+          additionalProperties:
+            type: array
+            items: { type: object, additionalProperties: true }
+        provenance:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/Provenance" }
+        params: { type: object, description: Every declared parameter as applied, with its default and type conversion. }
+        reportVersion: { type: integer }
+        asOf: { type: string, format: date-time }
+    Filter:
+      type: object
+      required: [column, op]
+      description: Names must be columns the caller can see. Values are bound, converted to the column's type (dates as yyyy-MM-dd, timestamps as yyyy-MM-dd HH:mm[:ss] in the database's time zone).
+      properties:
+        column: { type: string }
+        op: { type: string, enum: [EQ, NE, GT, GE, LT, LE, IN, NOT_IN, LIKE, BETWEEN, IS_NULL, IS_NOT_NULL] }
+        value: { description: For EQ, NE, GT, GE, LT, LE and LIKE (text columns only). }
+        values: { type: array, items: {}, description: For IN and NOT_IN (1 to 1000) and BETWEEN (exactly 2). }
+    Aggregate:
+      type: object
+      required: [fn]
+      properties:
+        fn: { type: string, enum: [COUNT, SUM, AVG, MIN, MAX] }
+        column: { type: string, description: Optional for COUNT (then COUNT(*)). SUM and AVG need a numeric column. }
+        as: { type: string, description: Output name; defaults to fn_column, or count_all. }
+    Order:
+      type: object
+      required: [column]
+      properties:
+        column: { type: string }
+        descending: { type: boolean, default: false }
+    PiiMode:
+      type: string
+      enum: [NONE, MASK, HIDE]
+      description: NONE shows the column. MASK shows a constant for text and NULL for everything else. HIDE removes the column. Viewers holding one of the view's `piiRoles` see all columns as they are.
+    ViewColumn:
+      type: object
+      required: [name, type, pii]
+      properties:
+        name: { type: string }
+        type: { type: string, description: The database's own type name; always read from the database. }
+        label: { type: string }
+        description: { type: string }
+        pii: { $ref: "#/components/schemas/PiiMode" }
+    ColumnOverride:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        label: { type: string }
+        description: { type: string }
+        pii: { $ref: "#/components/schemas/PiiMode" }
+    RlsRule:
+      type: object
+      required: [column, operator, attribute]
+      description: Only rows whose column holds one of the viewer's values for the attribute. A viewer with no value sees no rows.
+      properties:
+        column: { type: string }
+        operator: { type: string, enum: [EQ, IN] }
+        attribute: { type: string, pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$" }
+    ViewRequest:
+      type: object
+      required: [name, connectionId, sql]
+      properties:
+        name: { type: string, maxLength: 100 }
+        description: { type: string }
+        connectionId: { type: string, format: uuid }
+        sql: { type: string, description: One SELECT. Its columns need plain names (alias expressions). }
+        columns:
+          type: array
+          items: { $ref: "#/components/schemas/ColumnOverride" }
+          description: Optional overrides. Columns come from the database; those that look like personal data start as MASK or HIDE until overridden.
+        allowedRoles: { type: array, items: { type: string }, description: Roles that may query the published view. Managers always may. }
+        piiRoles: { type: array, items: { type: string } }
+        bypassRoles: { type: array, items: { type: string }, description: Roles exempt from the row rules. }
+        rlsRules: { type: array, items: { $ref: "#/components/schemas/RlsRule" } }
+        refreshSeconds: { type: integer, minimum: 0, maximum: 86400, description: How old a cached answer may be by default. }
+        sampleParams: { type: object, description: Values for `:name` parameters so the columns can be checked. }
+        version: { type: integer, description: Required on update. }
+    View:
+      type: object
+      required: [id, name, connectionId, sql, columns, version]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        connectionId: { type: string, format: uuid }
+        sql: { type: string }
+        columns: { type: array, items: { $ref: "#/components/schemas/ViewColumn" } }
+        allowedRoles: { type: array, items: { type: string } }
+        piiRoles: { type: array, items: { type: string } }
+        bypassRoles: { type: array, items: { type: string } }
+        rlsRules: { type: array, items: { $ref: "#/components/schemas/RlsRule" } }
+        refreshSeconds: { type: [integer, "null"] }
+        version: { type: integer, description: Working copy version; increases with every edit. }
+        publishedVersion: { type: [integer, "null"], description: The version viewers currently query; null if unpublished. }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+    ViewPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/View" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    ViewSummary:
+      type: object
+      required: [id, name, version, columns]
+      description: What an ordinary viewer learns about a published view they may query. No SQL, row rules or roles.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        version: { type: integer }
+        refreshSeconds: { type: [integer, "null"] }
+        columns:
+          type: array
+          items:
+            type: object
+            required: [name, type, masked]
+            properties:
+              name: { type: string }
+              label: { type: string }
+              description: { type: string }
+              type: { type: string }
+              masked: { type: boolean, description: True when this viewer receives the mask instead of the value. }
+    ViewVersion:
+      type: object
+      required: [version, publishedAt, publishedBy]
+      properties:
+        version: { type: integer }
+        publishedAt: { type: string, format: date-time }
+        publishedBy: { type: string }
+    EntitlementEntry:
+      type: object
+      required: [subject, attribute, values]
+      properties:
+        subject: { type: string, maxLength: 255, description: The user's token subject. }
+        attribute: { type: string, pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$" }
+        values: { type: array, items: { type: string, maxLength: 200 }, maxItems: 1000, description: Replaces what the subject holds for this attribute. Empty removes it. }
+    Entitlement:
+      type: object
+      required: [subject, attribute, value]
+      properties:
+        subject: { type: string }
+        attribute: { type: string }
+        value: { type: string }
+    EntitlementPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/Entitlement" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    AuditEventPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    Note:
+      type: object
+      properties:
+        note: { type: string, maxLength: 500 }
+    Shares:
+      type: object
+      properties:
+        shares:
+          type: array
+          items:
+            type: object
+            required: [subjectType, subjectId, permission]
+            properties:
+              subjectType: { type: string, enum: [USER, GROUP, ATTRIBUTE] }
+              subjectId: { type: string, description: "Token subject, group name, or name=value for an attribute." }
+              permission: { type: string, enum: [VIEW, EDIT] }
+              expiresAt: { type: [string, "null"], format: date-time }
+    PublishRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        version: { type: integer }
+        state: { type: string, enum: [PENDING, APPROVED, REJECTED, CANCELLED] }
+        requestedBy: { type: string }
+        requestedAt: { type: string, format: date-time }
+        requestNote: { type: [string, "null"] }
+        decidedBy: { type: [string, "null"] }
+        decidedAt: { type: [string, "null"], format: date-time }
+        decisionNote: { type: [string, "null"] }
+    LinkRequest:
+      type: object
+      properties:
+        expiresInSeconds: { type: integer, minimum: 1 }
+        params:
+          type: object
+          description: Parameters fixed for this link; whatever a caller sends for them is ignored.
+    PublicLinkInfo:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        kind: { type: string, enum: [PUBLIC, EMBED] }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        expiresAt: { type: string, format: date-time }
+        revokedAt: { type: [string, "null"], format: date-time }
+        revokedBy: { type: [string, "null"] }
+        params: { type: object }
+    PublicLinkCreated:
+      type: object
+      properties:
+        link: { $ref: "#/components/schemas/PublicLinkInfo" }
+        token: { type: string, description: Shown only here. Starts with `cpl_`. }
+        url: { type: string }
+    ScheduleRequest:
+      type: object
+      required: [reportId, name, cron, format, recipients]
+      properties:
+        reportId: { type: string, format: uuid }
+        name: { type: string, maxLength: 200 }
+        cron: { type: string, description: "Five fields: minute hour day-of-month month day-of-week.", examples: ["30 6 * * 1-5"] }
+        timezone: { type: string, description: IANA zone, default: UTC, examples: [Asia/Bangkok] }
+        format: { type: string, enum: [CSV, XLSX, DOCX, PDF] }
+        locale: { type: string, enum: [th, en] }
+        params: { type: object, description: Report parameter values for every run. }
+        recipients: { type: array, maxItems: 20, items: { type: string, format: email } }
+        enabled: { type: boolean, default: true }
+    Schedule:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        name: { type: string }
+        cron: { type: string }
+        timezone: { type: string }
+        format: { type: string, enum: [CSV, XLSX, DOCX, PDF] }
+        locale: { type: [string, "null"] }
+        params: { type: object }
+        recipients: { type: array, items: { type: string } }
+        runAs: { type: string, description: Subject of the person it runs as. }
+        enabled: { type: boolean }
+        nextRunAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+    ScheduleRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        scheduleId: { type: string, format: uuid }
+        scheduledFor: { type: string, format: date-time }
+        state: { type: string, enum: [RUNNING, RETRY, SUCCEEDED, FAILED] }
+        attempt: { type: integer }
+        nextAttemptAt: { type: [string, "null"], format: date-time }
+        startedAt: { type: [string, "null"], format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        error: { type: [string, "null"] }
+        exportId: { type: [string, "null"], format: uuid }
+        deliveredTo: { type: [integer, "null"] }

@@ -1,0 +1,122 @@
+databaseChangeLog:
+  - changeSet:
+      id: 012-engine-report-published-version
+      author: curf-engine
+      changes:
+        - addColumn:
+            tableName: engine_report
+            columns:
+              - column: { name: published_version, type: int }
+      rollback:
+        - dropColumn:
+            tableName: engine_report
+            columnName: published_version
+
+  - changeSet:
+      id: 013-engine-report-share
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_report_share
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: report_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: subject_type, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: subject_id, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: permission, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+        - addUniqueConstraint:
+            tableName: engine_report_share
+            columnNames: report_id, subject_type, subject_id
+            constraintName: uq_engine_report_share
+        - addForeignKeyConstraint:
+            baseTableName: engine_report_share
+            baseColumnNames: report_id
+            referencedTableName: engine_report
+            referencedColumnNames: id
+            constraintName: fk_engine_report_share_report
+            onDelete: CASCADE
+      rollback:
+        - dropTable:
+            tableName: engine_report_share
+
+  - changeSet:
+      id: 014-engine-publish-request
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_publish_request
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: report_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: version, type: int, constraints: { nullable: false } }
+              - column: { name: state, type: varchar(12), constraints: { nullable: false } }
+              - column: { name: requested_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: requested_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: request_note, type: varchar(500) }
+              - column: { name: decided_by, type: varchar(255) }
+              - column: { name: decided_at, type: timestamptz }
+              - column: { name: decision_note, type: varchar(500) }
+        - addForeignKeyConstraint:
+            baseTableName: engine_publish_request
+            baseColumnNames: report_id
+            referencedTableName: engine_report
+            referencedColumnNames: id
+            constraintName: fk_engine_publish_request_report
+            onDelete: CASCADE
+        - createIndex:
+            tableName: engine_publish_request
+            indexName: ix_engine_publish_request_state
+            columns:
+              - column: { name: tenant_id }
+              - column: { name: state }
+              - column: { name: requested_at, descending: true }
+      rollback:
+        - dropTable:
+            tableName: engine_publish_request
+
+  - changeSet:
+      id: 015-engine-public-link
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_public_link
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: report_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: kind, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: token_hash, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: locked_params, type: jsonb }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: revoked_at, type: timestamptz }
+              - column: { name: revoked_by, type: varchar(255) }
+        - addUniqueConstraint:
+            tableName: engine_public_link
+            columnNames: token_hash
+            constraintName: uq_engine_public_link_token
+        - addForeignKeyConstraint:
+            baseTableName: engine_public_link
+            baseColumnNames: report_id
+            referencedTableName: engine_report
+            referencedColumnNames: id
+            constraintName: fk_engine_public_link_report
+            onDelete: CASCADE
+      rollback:
+        - dropTable:
+            tableName: engine_public_link
+
+  - changeSet:
+      id: 016-engine-publish-request-one-pending
+      author: curf-engine
+      changes:
+        - sql:
+            sql: create unique index uq_engine_publish_pending on engine_publish_request (report_id) where state = 'PENDING'
+      rollback:
+        - sql:
+            sql: drop index uq_engine_publish_pending

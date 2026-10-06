@@ -2,8 +2,10 @@
 import { Plus, X } from "lucide-react";
 import { useDesignerStore } from "@/lib/reporting/store";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 export function PageTabs() {
+  const { t } = useT();
   const report = useDesignerStore((s) => s.report);
   const activePageId = useDesignerStore((s) => s.activePageId);
   const setActivePage = useDesignerStore((s) => s.setActivePage);
@@ -15,10 +17,10 @@ export function PageTabs() {
     return (
       <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-4 py-1.5">
         <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Page 1 of 1
+          {t("pageTabs.pageOf").replace("{n}", "1").replace("{total}", "1")}
         </span>
         <Button size="sm" variant="ghost" onClick={addPage} className="h-6 px-2 text-[11px]">
-          <Plus className="mr-1 h-3 w-3" /> Add page
+          <Plus className="mr-1 h-3 w-3" /> {t("pageTabs.addPage")}
         </Button>
       </div>
     );
@@ -43,20 +45,20 @@ export function PageTabs() {
                 onClick={() => setActivePage(p.id)}
                 className="whitespace-nowrap"
               >
-                Page {i + 1}
+                {t("pageTabs.page").replace("{n}", String(i + 1))}
                 <span className="ml-1 font-normal text-muted-foreground/70">
-                  {p.size} · {p.orientation}
+                  {p.size} · {t(p.orientation === "landscape" ? "designerShell.landscape" : "designerShell.portrait")}
                 </span>
               </button>
               {report.pages.length > 1 && (
                 <button
                   type="button"
                   onClick={() => {
-                    if (confirm(`Delete Page ${i + 1}? Blocks on it will be lost.`)) {
+                    if (confirm(t("pageTabs.deleteConfirm").replace("{n}", String(i + 1)))) {
                       removePage(p.id);
                     }
                   }}
-                  title="Delete page"
+                  title={t("pageTabs.deletePage")}
                   className="rounded px-0.5 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                 >
                   <X className="h-3 w-3" />
@@ -67,7 +69,7 @@ export function PageTabs() {
         })}
       </div>
       <Button size="sm" variant="ghost" onClick={addPage} className="h-6 px-2 text-[11px]">
-        <Plus className="mr-1 h-3 w-3" /> Add page
+        <Plus className="mr-1 h-3 w-3" /> {t("pageTabs.addPage")}
       </Button>
     </div>
   );

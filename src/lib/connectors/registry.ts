@@ -96,6 +96,14 @@ export const CONNECTOR_KINDS: ConnectorKindMeta[] = [
     iconName: "Globe",
     capabilities: ["rest", "schemaProbe"],
   },
+  {
+    kind: "engine",
+    label: "Java engine",
+    blurb: "Governed views on Curf's Java engine: each person gets only their own rows, with personal data masked.",
+    iconName: "Layers",
+    capabilities: [],
+    feature: "connector.engine",
+  },
 ];
 
 /**

@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MessageCircle, Send, Check, Trash2, Loader2, X as CloseIcon, Reply, AtSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 
 type Author = { id: string; name: string | null; email: string };
 type Comment = {
@@ -307,15 +307,14 @@ function CommentRow({
   dimmed?: boolean;
   indented?: boolean;
 }) {
-  const initials = (comment.author?.name ?? comment.author?.email ?? "?")
-    .split(/\s+/).map((s) => s[0]?.toUpperCase()).slice(0, 2).join("");
+  const monogram = initials(comment.author?.name ?? comment.author?.email ?? "?");
   return (
     <div className={cn(
       "flex items-start gap-3 px-3 py-2.5",
       indented && "pl-9 border-l-2 border-primary/10 ml-4",
       dimmed && "opacity-70",
     )}>
-      <Avatar initials={initials} />
+      <Avatar initials={monogram} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2 text-[11px]">
           <span className="font-medium text-foreground">
@@ -546,7 +545,7 @@ function Composer({
                   onClick={() => pickMention(u)}
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-muted"
                 >
-                  <Avatar initials={(u.name ?? u.email).slice(0, 2).toUpperCase()} />
+                  <Avatar initials={initials(u.name ?? u.email)} />
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-medium">{u.name ?? u.email}</span>
                     {u.name && <span className="block truncate text-[10px] text-muted-foreground">{u.email}</span>}

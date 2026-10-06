@@ -11,7 +11,9 @@
  *                 do NOT change with theme — meaning is meaning.
  *   typography  — font stacks for heading/body/mono
  *
- * Adding a theme: add to THEME_PRESETS + extend ThemeSchema in schema.ts.
+ * Adding a theme: add to THEME_PRESETS + extend ThemeSchema in schema.ts, and
+ * give it themePreset.<slug> / themePreset.<slug>.desc keys in lib/i18n/dict.ts
+ * (the pickers show the name and blurb in the viewer's language).
  *
  * Why the ramps are hand-picked rather than generated from palette[0]: HSL
  * rotation gave muddy mid-tones on every theme except Default. Five hand-
@@ -36,8 +38,6 @@ export type ThemeSemantic = {
 
 export type ResolvedTheme = {
   slug: Theme;
-  label: string;
-  description: string;
   /** 10-color categorical palette for chart series. */
   palette: string[];
   /** Monochrome ramps for intensity-based visualisations. */
@@ -73,8 +73,6 @@ const FONT_MONO  = '"IBM Plex Mono", Prompt, ui-monospace, SFMono-Regular, Menlo
 export const THEME_PRESETS: Record<Theme, ResolvedTheme> = {
   default: {
     slug: "default",
-    label: "Default",
-    description: "Curf's indigo brand look. Works for almost anything.",
     palette: [
       "#6366f1", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4",
       "#8b5cf6", "#0ea5e9", "#ec4899", "#f97316", "#84cc16",
@@ -89,8 +87,6 @@ export const THEME_PRESETS: Record<Theme, ResolvedTheme> = {
   },
   sunset: {
     slug: "sunset",
-    label: "Sunset",
-    description: "Warm rose / amber. Marketing, creative, brand reports.",
     palette: [
       "#f43f5e", "#f59e0b", "#ec4899", "#fb923c", "#d946ef",
       "#fbbf24", "#f97316", "#e11d48", "#c026d3", "#fb7185",
@@ -109,8 +105,6 @@ export const THEME_PRESETS: Record<Theme, ResolvedTheme> = {
   },
   forest: {
     slug: "forest",
-    label: "Forest",
-    description: "Cool emerald & teal. ESG, sustainability, ops.",
     palette: [
       "#10b981", "#059669", "#65a30d", "#0d9488", "#84cc16",
       "#14b8a6", "#22c55e", "#15803d", "#a3e635", "#34d399",
@@ -129,8 +123,6 @@ export const THEME_PRESETS: Record<Theme, ResolvedTheme> = {
   },
   midnight: {
     slug: "midnight",
-    label: "Midnight",
-    description: "Slate, cyan, violet. Finance & governance.",
     palette: [
       "#475569", "#0891b2", "#7c3aed", "#1d4ed8", "#0e7490",
       "#5b21b6", "#0284c7", "#312e81", "#155e75", "#6d28d9",
@@ -149,8 +141,6 @@ export const THEME_PRESETS: Record<Theme, ResolvedTheme> = {
   },
   candy: {
     slug: "candy",
-    label: "Candy",
-    description: "High-contrast pop. Consumer dashboards, growth.",
     palette: [
       "#ec4899", "#3b82f6", "#22c55e", "#eab308", "#a855f7",
       "#06b6d4", "#f97316", "#ef4444", "#14b8a6", "#8b5cf6",
@@ -169,8 +159,6 @@ export const THEME_PRESETS: Record<Theme, ResolvedTheme> = {
   },
   boardroom: {
     slug: "boardroom",
-    label: "Boardroom",
-    description: "Signal blue, graphite and teal. Board packs, exhibits, print.",
     /**
      * The colour half of the consulting-exhibit look — pair it with the
      * "enterprise" chart style (lib/reporting/chartStyles.ts) for the full

@@ -1,0 +1,15 @@
+{
+  "catalogs": [
+    { "user": "admin|curf_writer", "catalog": "memory", "allow": "all" },
+    { "user": "curf_reader", "catalog": "memory", "allow": "read-only" },
+    { "catalog": "system", "allow": "read-only" }
+  ],
+  "schemas": [
+    { "user": "admin|curf_writer", "owner": true },
+    { "user": "curf_reader", "owner": false }
+  ],
+  "tables": [
+    { "user": "admin|curf_writer", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP"] },
+    { "user": "curf_reader", "privileges": ["SELECT"] }
+  ]
+}

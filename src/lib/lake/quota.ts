@@ -55,8 +55,21 @@ export type LakeUsage = {
   tables: number;
 };
 
+/**
+ * A summary table the retail pack works out from the sales and stock a
+ * workspace imported (retailMetrics.ts's PROVENANCE) — nine of them after
+ * the first sales file. They are the product's, not tables the workspace
+ * made, so they don't use up its table cap: on Community (10 tables) one
+ * sales file filled the cap and the second day's file was refused (2026-09-30).
+ */
+function isPackSummary(sourceConfigJson: string | null): boolean {
+  if (!sourceConfigJson) return false;
+  try { return JSON.parse(sourceConfigJson)?.provenance === "retail-metrics"; } catch { return false; }
+}
+
 export async function getUsageForTenant(tenantId: string): Promise<LakeUsage> {
-  const tables = await prisma.lakeTable.count({ where: { tenantId } });
+  const rows = await prisma.lakeTable.findMany({ where: { tenantId }, select: { sourceConfigJson: true } });
+  const tables = rows.filter((r) => !isPackSummary(r.sourceConfigJson)).length;
   // Disk size is the source of truth; the cached sizeBytes column on the
   // Prisma rows is only used in the UI to avoid a stat per request.
   const bytes = lakeFileSize(tenantId);

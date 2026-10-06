@@ -13,6 +13,10 @@
  * openLake is mocked to a real in-memory better-sqlite3 handle — same
  * "run the real quoting against a real engine" spirit as identifier.test.ts
  * — so these prove the function against real SQL, not a stubbed return.
+ *
+ * distinctColumnValues is async (see its doc comment in tables.ts — a
+ * paid lake engine reads there instead). ee.lake is mocked absent here so
+ * every test exercises the plain SQLite/Community path.
  */
 import { describe, it, expect, vi } from "vitest";
 import Database from "better-sqlite3";
@@ -24,6 +28,8 @@ vi.mock("./storage", async (importOriginal) => {
   return { ...actual, openLake: () => db };
 });
 
+vi.mock("@/ee", () => ({ ee: {} }));
+
 import { distinctColumnValues, qIdent } from "./tables";
 
 function freshDb() {
@@ -31,7 +37,7 @@ function freshDb() {
 }
 
 describe("distinctColumnValues", () => {
-  it("reads real, code-keyed values — not a makeId()-style reconstruction", () => {
+  it("reads real, code-keyed values — not a makeId()-style reconstruction", async () => {
     freshDb();
     db.exec(`CREATE TABLE "retail_stores" (${qIdent("store_code")} TEXT, ${qIdent("store_name")} TEXT)`);
     const ins = db.prepare(`INSERT INTO "retail_stores" VALUES (?, ?)`);
@@ -39,11 +45,11 @@ describe("distinctColumnValues", () => {
     ins.run("S-102", "Northgate Store");
     ins.run("S-103", "Harbour Store");
 
-    const keys = distinctColumnValues("t1", "retail_stores", "store_code");
+    const keys = await distinctColumnValues("t1", "retail_stores", "store_code");
     expect(keys.sort()).toEqual(["S-101", "S-102", "S-103"]);
   });
 
-  it("drops NULL and empty-string values — never a usable FK target", () => {
+  it("drops NULL and empty-string values — never a usable FK target", async () => {
     freshDb();
     db.exec(`CREATE TABLE "t" (${qIdent("code")} TEXT)`);
     const ins = db.prepare(`INSERT INTO "t" VALUES (?)`);
@@ -52,39 +58,39 @@ describe("distinctColumnValues", () => {
     ins.run("");
     ins.run("B");
 
-    expect(distinctColumnValues("t1", "t", "code").sort()).toEqual(["A", "B"]);
+    expect((await distinctColumnValues("t1", "t", "code")).sort()).toEqual(["A", "B"]);
   });
 
-  it("de-duplicates — DISTINCT, not every row", () => {
+  it("de-duplicates — DISTINCT, not every row", async () => {
     freshDb();
     db.exec(`CREATE TABLE "t" (${qIdent("code")} TEXT)`);
     const ins = db.prepare(`INSERT INTO "t" VALUES (?)`);
     ins.run("A"); ins.run("A"); ins.run("A"); ins.run("B");
 
-    expect(distinctColumnValues("t1", "t", "code").sort()).toEqual(["A", "B"]);
+    expect((await distinctColumnValues("t1", "t", "code")).sort()).toEqual(["A", "B"]);
   });
 
-  it("caps the result rather than returning an unbounded list", () => {
+  it("caps the result rather than returning an unbounded list", async () => {
     freshDb();
     db.exec(`CREATE TABLE "t" (${qIdent("code")} TEXT)`);
     const ins = db.prepare(`INSERT INTO "t" VALUES (?)`);
     for (let i = 0; i < 50; i++) ins.run(`v${i}`);
 
-    expect(distinctColumnValues("t1", "t", "code", 10)).toHaveLength(10);
+    expect(await distinctColumnValues("t1", "t", "code", 10)).toHaveLength(10);
   });
 
-  it("degrades to an empty array rather than throwing when the table doesn't exist", () => {
+  it("degrades to an empty array rather than throwing when the table doesn't exist", async () => {
     freshDb();
-    expect(distinctColumnValues("t1", "no_such_table", "code")).toEqual([]);
+    expect(await distinctColumnValues("t1", "no_such_table", "code")).toEqual([]);
   });
 
-  it("degrades to an empty array rather than throwing when the column doesn't exist", () => {
+  it("degrades to an empty array rather than throwing when the column doesn't exist", async () => {
     freshDb();
     db.exec(`CREATE TABLE "t" (${qIdent("other_col")} TEXT)`);
-    expect(distinctColumnValues("t1", "t", "code")).toEqual([]);
+    expect(await distinctColumnValues("t1", "t", "code")).toEqual([]);
   });
 
-  it("a column name that looks like it could break out of the quoting is safely escaped", () => {
+  it("a column name that looks like it could break out of the quoting is safely escaped", async () => {
     freshDb();
     // Same attack shape identifier.test.ts proves against qIdent directly —
     // this checks the FULL function doesn't reintroduce it via string
@@ -92,7 +98,7 @@ describe("distinctColumnValues", () => {
     const evil = 'code" ; DROP TABLE t; --';
     db.exec(`CREATE TABLE "t" (${qIdent(evil)} TEXT)`);
     db.prepare(`INSERT INTO "t" (${qIdent(evil)}) VALUES (?)`).run("v");
-    expect(distinctColumnValues("t1", "t", evil)).toEqual(["v"]);
+    expect(await distinctColumnValues("t1", "t", evil)).toEqual(["v"]);
     // The table is still there — no injected DROP TABLE ran.
     expect(db.prepare(`SELECT COUNT(*) AS n FROM "t"`).get()).toEqual({ n: 1 });
   });

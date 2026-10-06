@@ -34,6 +34,8 @@ export type ConnectionFormFields = {
   zd: { subdomain: string; email: string; apiToken: string };
   /** SFTP — see lib/connections/sftp.ts. Feeds lake pulls, not report queries. */
   sftp: { host: string; port: number; username: string; authMethod: "password" | "privateKey"; password: string; privateKey: string; passphrase: string; remotePath: string };
+  /** Java query engine — no secret (Curf signs its own token). Blank baseUrl = the platform's engine. */
+  engine: { baseUrl: string; audience: string };
 };
 
 /** Builds the POST/PATCH body for /api/data-sources from the current form fields. */
@@ -121,6 +123,18 @@ export function buildConnectionPayload(f: ConnectionFormFields): Record<string, 
         remotePath: f.sftp.remotePath,
         visibility: f.visibility,
       };
+    case "engine": {
+      const baseUrl = f.engine.baseUrl.trim();
+      const audience = f.engine.audience.trim();
+      return {
+        kind, name,
+        // Blank means "the platform's engine": omitted on create, and an
+        // explicit "" on edit so a workspace can switch back from its own.
+        ...(baseUrl ? { baseUrl } : f.editing ? { baseUrl: "" } : {}),
+        ...(audience ? { audience } : f.editing ? { audience: "" } : {}),
+        visibility: f.visibility,
+      };
+    }
     default:
       return { kind, name, connection: f.connection, visibility: f.visibility };
   }
@@ -147,6 +161,9 @@ export function isConnectionKindValid(f: ConnectionFormFields): boolean {
       return !!f.sftp.host && !!f.sftp.username && !!f.sftp.remotePath && (
         f.editing || (f.sftp.authMethod === "password" ? !!f.sftp.password : !!f.sftp.privateKey)
       );
+    case "engine":
+      // The URL is optional — blank uses the platform's engine.
+      return true;
     default:
       return !!f.connection;
   }

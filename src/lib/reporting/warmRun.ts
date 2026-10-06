@@ -27,6 +27,7 @@
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "./schema";
 import { runReportWithProof } from "./runner";
+import { runOutcome } from "@/lib/reporting/queryRunState";
 
 export type WarmRunResult =
   | { ok: true; durationMs: number; rows: number }
@@ -68,6 +69,7 @@ export async function warmRunReport(args: {
     const result = await runReportWithProof({
       report,
       params: pvals,
+      tenantId,
       viewer: { id: userId ?? "system", isAdmin: true, roles: [] },
     });
 
@@ -78,6 +80,7 @@ export async function warmRunReport(args: {
       0,
     );
     const durationMs = Date.now() - started;
+    const outcome = runOutcome(result.provenance);
 
     await prisma.reportRun.create({
       data: {
@@ -85,7 +88,8 @@ export async function warmRunReport(args: {
         reportId,
         format: "html",
         params: JSON.stringify(pvals),
-        status: "completed",
+        status: outcome.status,
+        error: outcome.error ?? null,
         durationMs,
         dataset: snapshot,
         provenance: snapshot ? JSON.stringify(result.provenance ?? {}) : null,

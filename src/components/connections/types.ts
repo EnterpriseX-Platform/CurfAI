@@ -5,7 +5,7 @@
  */
 import type { FeatureKey } from "@/lib/featureGate";
 
-export type DataSourceKind = "sqlite" | "rest" | "excel" | "postgres" | "mysql" | "snowflake" | "bigquery" | "sftp";
+export type DataSourceKind = "sqlite" | "rest" | "excel" | "postgres" | "mysql" | "snowflake" | "bigquery" | "sftp" | "engine";
 
 /**
  * ConnectionForm's kind-picker state. "hubspot"/"zendesk" are guided
@@ -23,6 +23,7 @@ export const KIND_FEATURE: Partial<Record<DataSourceKind, FeatureKey>> = {
   snowflake: "connector.snowflake",
   bigquery:  "connector.bigquery",
   sftp:      "connector.sftp",
+  engine:    "connector.engine",
 };
 
 /**
@@ -104,6 +105,17 @@ export type SftpDetails = {
   hasPrivateKey: boolean;
 };
 
+/**
+ * Engine details for the edit form. There is no secret for this kind (Curf
+ * signs its own token). `usesPlatformEngine` means baseUrl is the platform's
+ * address, not something the admin entered.
+ */
+export type EngineDetails = {
+  baseUrl: string;
+  audience: string;
+  usesPlatformEngine: boolean;
+};
+
 export type DataSourceListItem = {
   id: string;
   name: string;
@@ -134,6 +146,7 @@ export type EditingConnection = {
   sf?: SfDetails;
   bq?: BqDetails;
   sftp?: SftpDetails;
+  engine?: EngineDetails;
   visibility?: VisibilityWire;
   /** REST only — see DataSource.readOnly's doc comment in schema.prisma. */
   readOnly?: boolean;

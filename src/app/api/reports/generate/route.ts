@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
-import { requireUser, requireAdminOrEditor, tenantWhere, getUserRoles, blockScopedApiKey } from "@/lib/auth";
+import { requireAdminOrEditor, tenantWhere, blockScopedApiKey } from "@/lib/auth";
 import { canSeeDataSource } from "@/lib/datasourceAcl";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import type { RunViewer } from "@/lib/reporting/runner";
 import { withTenantContext } from "@/lib/rls";
 import { recordAudit } from "@/lib/audit";
 import { ensureLimit } from "@/lib/rateLimit";
 import { requireReportQuota } from "@/lib/billing";
 import { requireAiCreditsFor } from "@/lib/llm";
 import { callLLM } from "@/lib/llm";
+import { gateGeneratedReport, persistableDefinition } from "@/lib/intelligence/reportGate";
 import { ee } from "@/ee";
-import Database from "better-sqlite3";
+import { openTenantSqlite } from "@/lib/connections/sqlitePath";
+import { tenantLakeEngine, type LakeEngineName } from "@/lib/lake/tenantEngine";
+import { DUCKDB_LAKE_DIALECT_GUIDANCE } from "@/lib/reporting/duckdbDialect";
 
 /**
  * POST /api/reports/generate
@@ -34,7 +39,10 @@ import Database from "better-sqlite3";
  *   6. Extract the first JSON code block from the response.
  *   7. Validate with ReportSchema.safeParse(); on failure, return 422 with
  *      the issues so the user (or a follow-up call) can refine.
- *   8. Persist + redirect to the new report viewer.
+ *   8. Run it through the pre-publish gate (lib/intelligence/reportGate.ts)
+ *      — every query runs as the requester, empty blocks are dropped, a
+ *      "Top N" is held to N, and the fast model checks each title against
+ *      what its query computes — then persist + redirect to the viewer.
  *
  * Falls back gracefully if no LLM provider is configured.
  */
@@ -80,14 +88,11 @@ export async function POST(req: NextRequest) {
     where: tenantWhere(user),
     select: {
       id: true, name: true, kind: true, connection: true, discoveredSchemaJson: true,
-      visibleToRolesJson: true, ownerUserId: true,
+      visibleToRolesJson: true, ownerUserId: true, tenantId: true,
     },
   });
-  const userRoles = await getUserRoles();
-  const isAdmin = (user as any).role === "admin";
-  const dataSources = allDataSources.filter((d: any) =>
-    canSeeDataSource(d, { id: user.id, isAdmin, roles: userRoles }),
-  );
+  const viewer = await exportViewer(user);
+  const dataSources = allDataSources.filter((d: any) => canSeeDataSource(d, viewer));
   if (dataSources.length === 0) {
     return NextResponse.json({
       error: "No data sources you can use are connected. Add a connection first under Data → Connections.",
@@ -102,7 +107,7 @@ export async function POST(req: NextRequest) {
 
   // Introspect tables. SQLite/Excel: better-sqlite3 + PRAGMA. Postgres:
   // information_schema.{tables,columns}. Cap at 50 tables either way.
-  const introspection = await introspectTables(targetDs);
+  const introspection = await introspectTables(targetDs, viewer);
 
   // Cross-source ATTACH: when the primary is file-backed AND the user has
   // OTHER file-backed sources visible, surface them to Claude as candidates
@@ -113,7 +118,7 @@ export async function POST(req: NextRequest) {
           d.id !== targetDs.id && (d.kind === "sqlite" || d.kind === "excel"))
       : [];
   const attachables = await Promise.all(attachableInputs.map(async (d: any) => {
-    const intro = await introspectTables(d);
+    const intro = await introspectTables(d, viewer);
     return {
       dataSourceId: d.id,
       dataSourceName: intro.dataSourceName,
@@ -134,7 +139,7 @@ export async function POST(req: NextRequest) {
     ? []
     : dataSources.filter((d: any) => d.id !== targetDs.id);
   const joinables = await Promise.all(joinableInputs.map(async (d: any) => {
-    const intro = await introspectTables(d);
+    const intro = await introspectTables(d, viewer);
     return {
       dataSourceId: d.id,
       dataSourceName: intro.dataSourceName,
@@ -192,7 +197,21 @@ export async function POST(req: NextRequest) {
     }, { status: 422 });
   }
 
-  const def = validated.data;
+  // The model wrote every word AND every query here, so this is the path
+  // that needs the gate most. A report that fails it isn't saved.
+  const firstText = validated.data.pages.flatMap((p) => p.blocks).find((b) => b.type === "text");
+  const gate = await gateGeneratedReport({
+    report: validated.data, tenantId: user.tenantId, viewer: await exportViewer(user), userId: user.id,
+    authored: "ai", prompt: parsed.data.prompt,
+    caption: (firstText?.config as any)?.text,
+  });
+  if (gate.verdict === "fail") {
+    return NextResponse.json({
+      error: "Generated report didn't pass its checks",
+      checks: gate.checks.filter((c) => c.status !== "pass"),
+    }, { status: 422 });
+  }
+  const def = gate.report;
 
   const created = await withTenantContext(user, (tx) =>
     tx.report.create({
@@ -201,7 +220,7 @@ export async function POST(req: NextRequest) {
         name: def.name,
         description: def.description ?? null,
         category: def.category ?? null,
-        definition: JSON.stringify(def),
+        definition: persistableDefinition(gate),
         createdById: user.id,
       },
     }),
@@ -229,12 +248,20 @@ type TableSchema = {
   sample: Record<string, unknown> | null;
 };
 
-export async function introspectTables(ds: { id: string; name: string; kind: string; connection: string; discoveredSchemaJson?: string | null }): Promise<{
+export async function introspectTables(
+  ds: { id: string; name: string; kind: string; connection: string; discoveredSchemaJson?: string | null; tenantId?: string },
+  /** Who the prompt is built for: a lake source lists only the tables they
+   *  may read, with their sample rows masked (lib/lake/readableRows.ts).
+   *  Callers check the source itself with canSeeDataSource first. */
+  viewer: RunViewer,
+): Promise<{
   dataSourceName: string;
   kind: string;
+  /** Set for a lake source: which engine its SQL runs on, so the prompt can name the right dialect. */
+  engine?: LakeEngineName;
   tables: TableSchema[];
 }> {
-  const out: { dataSourceName: string; kind: string; tables: TableSchema[] } = {
+  const out: { dataSourceName: string; kind: string; engine?: LakeEngineName; tables: TableSchema[] } = {
     dataSourceName: ds.name,
     kind: ds.kind,
     tables: [],
@@ -330,7 +357,7 @@ export async function introspectTables(ds: { id: string; name: string; kind: str
   if (ds.kind === "sqlite" || ds.kind === "excel") {
     let db: any = null;
     try {
-      db = new Database(ds.connection, { readonly: true, fileMustExist: true });
+      db = openTenantSqlite(ds.tenantId ?? "", ds.connection);
       const tables = db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 50")
         .all() as Array<{ name: string }>;
@@ -380,14 +407,17 @@ export async function introspectTables(ds: { id: string; name: string; kind: str
   if (ds.kind === "lake") {
     try {
       const tenantId = ds.connection.replace(/^lake:\/\//, "");
+      out.engine = await tenantLakeEngine(tenantId);
       const { prisma } = await import("@/lib/db");
-      const { previewRows } = await import("@/lib/lake/tables");
-      const rows = await prisma.lakeTable.findMany({
+      const { canReadTable, previewRowsFor } = await import("@/lib/lake/readableRows");
+      // The ACL isn't a column the query can filter on, so the cap of 50
+      // applies after it: unreadable tables don't crowd out readable ones.
+      const all = await prisma.lakeTable.findMany({
         where: { tenantId },
-        select: { name: true, schemaJson: true },
-        take: 50,
+        select: { name: true, tenantId: true, ownerUserId: true, visibleToRolesJson: true, schemaJson: true },
       });
-      for (const r of rows ?? []) {
+      const rows = all.filter((t) => canReadTable(t, viewer)).slice(0, 50);
+      for (const r of rows) {
         let schema: Array<{ name: string; type: string }> = [];
         try {
           const parsed = JSON.parse(r.schemaJson || "[]");
@@ -395,7 +425,7 @@ export async function introspectTables(ds: { id: string; name: string; kind: str
         } catch { /* skip malformed schema */ }
         let sample: Record<string, unknown> | null = null;
         try {
-          const preview = previewRows(tenantId, r.name, 1);
+          const preview = (await previewRowsFor(r, viewer, 1)) ?? [];
           sample = (preview[0] as Record<string, unknown>) ?? null;
         } catch { /* ignore preview failure */ }
         out.tables.push({ name: r.name, columns: schema, sample });
@@ -412,7 +442,7 @@ export async function introspectTables(ds: { id: string; name: string; kind: str
 // ---------------------------------------------------------------------------
 
 function buildSystemPrompt(
-  intro: { dataSourceName: string; kind: string; tables: TableSchema[] },
+  intro: { dataSourceName: string; kind: string; engine?: LakeEngineName; tables: TableSchema[] },
   attachables: Array<{ dataSourceId: string; dataSourceName: string; kind: string; tables: TableSchema[] }> = [],
   joinables: Array<{ dataSourceId: string; dataSourceName: string; kind: string; tables: TableSchema[] }> = [],
 ): string {
@@ -435,6 +465,9 @@ function buildSystemPrompt(
   const isSnowflake = intro.kind === "snowflake";
   const isBigQuery = intro.kind === "bigquery";
   const fileBacked = intro.kind === "sqlite" || intro.kind === "excel";
+  // A lake on DuckDB is not SQLite: SQLite's strftime / date('now') / datetime()
+  // don't run there, so it gets its own dialect section instead of the SQLite one.
+  const isDuckdb = intro.kind === "lake" && intro.engine === "duckdb";
   const hasAttachables = fileBacked && attachables.length > 0;
   const dataSourceShape = isRest
     ? '  "dataSources": [{ "id": "ds_xxx", "name": "Friendly name", "kind": "rest", "method": "GET", "path": "/v3.1/all?fields=name,population,area,region,cca3", "jsonPath": "$" }],'
@@ -462,7 +495,7 @@ function buildSystemPrompt(
         "- Each block can reuse the same query — point queryId at one shared dataSource entry rather than re-fetching for every block.",
       ].join("\n")
     : [
-        `QUERY DESIGN GUIDANCE (${isPostgres ? "Postgres" : isMysql ? "MySQL" : isSnowflake ? "Snowflake" : isBigQuery ? "BigQuery" : "SQLite"} data source):`,
+        `QUERY DESIGN GUIDANCE (${isPostgres ? "Postgres" : isMysql ? "MySQL" : isSnowflake ? "Snowflake" : isBigQuery ? "BigQuery" : isDuckdb ? "DuckDB" : "SQLite"} data source):`,
         "- Each chart/KPI/table block needs its own query in dataSources[].",
         "- Keep query ids short and snake_case (ds_kpi_total, ds_by_channel, ...).",
         "- For aggregates, prefer GROUP BY + ORDER BY rather than client-side magic.",
@@ -478,7 +511,9 @@ function buildSystemPrompt(
               ? "- Reference parameters with :name placeholders. Curf translates :name to ? positional binds for Snowflake automatically — same SQL works on every kind."
               : isBigQuery
                 ? "- Reference parameters with :name placeholders. Curf translates :name to BigQuery's native @name binding — same SQL works on every kind."
-                : "- Reference parameters with :name placeholders. Curf binds them as named parameters on SQLite.",
+                : isDuckdb
+                  ? "- Reference parameters with :name placeholders. Curf binds them for you."
+                  : "- Reference parameters with :name placeholders. Curf binds them as named parameters on SQLite.",
         "",
         "SQL DIALECT:",
         ...(isPostgres ? [
@@ -516,7 +551,7 @@ function buildSystemPrompt(
           "- Casts: CAST(x AS DECIMAL), CAST(x AS DATE), CAST(x AS CHAR). No Postgres-style ::shorthand.",
           "- Quote identifiers with backticks when they contain reserved words or capitals: `MyTable`.`my column`.",
           "- LIMIT n OFFSET m or LIMIT m, n. Avoid SELECT FOR UPDATE — Curf opens read-only sessions.",
-        ] : [
+        ] : isDuckdb ? DUCKDB_LAKE_DIALECT_GUIDANCE : [
           "- This is SQLITE. Date bucketing: strftime('%Y-%m', col) for month, strftime('%Y-W%W', col) for week.",
           "- Current time: date('now') / datetime('now'). Date math: date(col, '-7 days').",
           "- String concat: col1 || col2.",
@@ -576,7 +611,9 @@ function buildSystemPrompt(
             ? "- THIS CONNECTION IS SNOWFLAKE. Use Snowflake-flavoured ANSI SQL with named :parameters (Curf translates them to ? positional binds). Identifiers are UPPERCASE — write `SELECT ID FROM ORDERS`, not `select id from orders`. See SQL DIALECT below for date/time helpers."
             : isBigQuery
               ? "- THIS CONNECTION IS BIGQUERY. Use BigQuery Standard SQL with named :parameters (Curf translates them to BigQuery's @name binding). ALWAYS qualify tables with their dataset prefix and wrap in backticks: `project.dataset.table`. See SQL DIALECT below — DATE_TRUNC takes a part keyword (MONTH, WEEK), || is logical OR not concat (use CONCAT)."
-              : "- Use SQLite-compatible SQL with named :parameters where filters are useful.",
+              : isDuckdb
+                ? "- Use DuckDB SQL with named :parameters where filters are useful."
+                : "- Use SQLite-compatible SQL with named :parameters where filters are useful.",
     "",
     "REPORTSCHEMA SHAPE:",
     "{",

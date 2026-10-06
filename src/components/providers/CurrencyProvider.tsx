@@ -5,16 +5,16 @@
  *
  * Resolution order (mirrors ThemeProvider's cascade):
  *
- *   report.currency  →  tenant.currency  →  "USD"
+ *   report.currency  →  tenant.currency  →  DEFAULT_CURRENCY (THB)
  *
  * Blocks consume it via `useCurrency()`. Kept as its own provider (not
  * folded into ThemeProvider) because currency isn't a design token — it's
  * a data-correctness setting that non-Business tenants must also control.
  */
 import { createContext, useContext, useMemo } from "react";
-import { resolveCurrency } from "@/lib/reporting/currency";
+import { resolveCurrency, DEFAULT_CURRENCY } from "@/lib/reporting/currency";
 
-const CurrencyContext = createContext<string>("USD");
+const CurrencyContext = createContext<string>(DEFAULT_CURRENCY);
 
 export function useCurrency(): string {
   return useContext(CurrencyContext);

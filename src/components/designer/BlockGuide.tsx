@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { HelpCircle, Info } from "lucide-react";
 import { BlockType } from "@/lib/reporting/schema";
 import { useT } from "@/lib/i18n/LocaleContext";
-import { Locale } from "@/lib/i18n/dict";
+import type { Locale } from "@/lib/i18n/locales";
 
 type GuideItem = { label: string; text: string };
 type GuideContent = { title: string; desc: string; items: GuideItem[]; defaultItems?: GuideItem[] };
@@ -21,7 +21,7 @@ const GUIDES: GuidesByLocale = {
         { label: "Format", text: "รูปแบบการแสดงผล (ตัวเลข, สกุลเงิน, เปอร์เซ็นต์)" },
         { label: "Compare Field", text: "คอลัมน์ที่ใช้เทียบค่า (เช่น ค่าของเดือนก่อน) เพื่อแสดงการเติบโตเป็นเปอร์เซ็นต์" },
         { label: "Prefix / Suffix", text: "คำนำหน้าหรือต่อท้ายตัวเลข (เช่น ฿, USD)" },
-        { label: "Spark Positive", text: "ทิศทางของกราฟเล็กๆ (Sparkline) ที่ถือว่าเป็นแง่บวก (Up = เพิ่มขึ้นดี, Down = ลดลงดี)" },
+        { label: "ทิศทางที่ดี", text: "ตัวเลขนี้ดีขึ้นเมื่อเพิ่มหรือลด (เช่น สต็อกต่ำ อัตราคืนสินค้า — ลงคือดี) ใช้กำหนดสีลูกศรการเปลี่ยนแปลงในรายงาน Brief มุมมองผู้บริหาร และอีเมล" },
         { label: "Aggregate", text: "หากข้อมูลมีหลายแถว สามารถเลือกวิธีการรวมค่าได้ (ผลรวม, ค่าเฉลี่ย, จำนวน, ค่าน้อยสุด/มากสุด)" },
       ],
     },
@@ -199,7 +199,7 @@ const GUIDES: GuidesByLocale = {
         { label: "Format", text: "Number formatting (Number, Currency, Percent)." },
         { label: "Compare Field", text: "Column for comparison (e.g., previous month) to show growth percentage." },
         { label: "Prefix / Suffix", text: "Text prepended or appended to the number (e.g., $, USD)." },
-        { label: "Spark Positive", text: "Which sparkline direction is considered positive (Up = good, Down = good)." },
+        { label: "Good direction", text: "Whether this number is better when it rises or falls (low stock, return rate: down is good). It colours the change arrow in the report, the Brief, the Executive view and emails." },
         { label: "Aggregate", text: "Method to aggregate multiple rows (Sum, Avg, Count, Min, Max)." },
       ],
     },
@@ -377,7 +377,7 @@ const GUIDES: GuidesByLocale = {
         { label: "Format", text: "数字格式 (数字, 货币, 百分比)。" },
         { label: "Compare Field", text: "用于比较的列 (例如上个月) 以显示增长百分比。" },
         { label: "Prefix / Suffix", text: "数字前缀或后缀 (例如 $, USD)。" },
-        { label: "Spark Positive", text: "迷你图的正向趋势 (上升 = 好, 下降 = 好)。" },
+        { label: "向好方向", text: "该数字上升还是下降为好（如低库存、退货率：下降为好）。决定报告、简报、高管视图和邮件中变化箭头的颜色。" },
         { label: "Aggregate", text: "汇总多行的方法 (求和, 平均, 计数, 最小, 最大)。" },
       ],
     },

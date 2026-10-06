@@ -3,6 +3,7 @@ import { aggregate, formatCell } from "@/lib/reporting/format";
 import type { BlockRenderContext } from "./types";
 import { cn } from "@/lib/utils";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { queryNotRun } from "@/lib/reporting/queryRunState";
 import { ShowWorkButton } from "./ShowWorkButton";
 import { AskButton } from "./AskButton";
 import { CommentButton } from "./CommentButton";
@@ -10,8 +11,10 @@ import { ActionButton } from "./ActionButton";
 import type { ConditionalFormat, ConditionalRule } from "@/lib/reporting/schema";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { useCurrency } from "@/components/providers/CurrencyProvider";
+import { useDateStyle } from "@/components/providers/DateStyleProvider";
 import { VariantIcon } from "./VariantIcon";
 import { useWhy } from "./WhyDrawer";
+import { useDrillThrough } from "@/components/providers/drill-through-context";
 import { useOperateActions } from "@/components/providers/operate-actions-context";
 import { BlockActions } from "./BlockActions";
 import { compileFormula, evaluateRow, evaluateAggregate, type FormulaResult } from "@/lib/reporting/formula";
@@ -127,7 +130,7 @@ export function TableBlock(props: BlockRenderContext) {
 type TableInnerProps = Omit<BlockRenderContext, "block"> & { block: Extract<BlockRenderContext["block"], { type: "table" }> };
 
 function TableBlockInner({ block, dataset, provenance, print, report, params, reportDbId, bare }: TableInnerProps) {
-  const { queryId, title, columns, stripe, showTotals, actions } = block.config as any;
+  const { queryId, title, columns, stripe, showTotals, actions, emptyText } = block.config as any;
   const { t } = useT();
   // null on surfaces that don't mount OperateActionsProvider (PDF export,
   // anonymous app views) — the row affordance simply isn't rendered there.
@@ -140,6 +143,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
   // primary ramp drives conditional table heatmap intensity.
   const theme = useTheme();
   const currency = useCurrency();
+  const dateStyle = useDateStyle();
   const primaryRgb = hexToRgb(theme.ramps.primary[theme.ramps.primary.length - 1]);
 
   // "Why?" everywhere — clicking a numeric cell decomposes it. Anchor on
@@ -152,6 +156,14 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
     return c?.key ?? null;
   })();
   const whyEnabled = !print && !!openWhy && !!reportDbId && !!firstStringCol;
+
+  // Drill (lib/reporting/drill.ts): the drill column's cells are links that
+  // pass the row's value — to the rows behind it, or to the whole report
+  // re-scoped. Only where the surface handles drills (not PDF, share links).
+  const onDrill = useDrillThrough();
+  const { drilldown, drillParam, drillField } = block.config as { drilldown?: unknown; drillParam?: string; drillField?: string };
+  const drillCol: string | null = drillField ?? firstStringCol;
+  const drillEnabled = !print && !!onDrill && (!!drilldown || !!drillParam) && !!drillCol;
 
   // Pre-compile formula columns once per render. expr-eval's Parser is
   // ~5x slower than executing a parsed expression, so for a 1000-row
@@ -186,7 +198,29 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
   }
 
   if (!queryId || rows.length === 0) {
-    return <BlockEmptyState type="table" blockId={block.id} title={title} description={t("blockEmpty.noData")} />;
+    const notRun = queryNotRun(provenance?.[queryId]);
+    return (
+      <BlockEmptyState
+        type="table" blockId={block.id} title={title} typeLabel={t("blockType.table")}
+        description={notRun ? t(notRun.kind === "failed" ? "blockEmpty.queryFailed" : "blockEmpty.restricted") : (emptyText || t("blockEmpty.noData"))}
+        notRun={notRun}
+      />
+    );
+  }
+
+  // The query ran and returned real rows, but no columns are configured —
+  // TableConfigSchema.columns defaults to [] rather than requiring at
+  // least one. Without this check the table below silently renders every
+  // row with zero data columns (only the trailing Actions column, if any),
+  // which reads as "broken" rather than "unconfigured" since nothing here
+  // signals the gap.
+  if ((columns as any[]).length === 0) {
+    return (
+      <BlockEmptyState
+        type="table" blockId={block.id} title={title} typeLabel={t("blockType.table")}
+        description={t("blockEmpty.noColumns")}
+      />
+    );
   }
 
   return (
@@ -304,7 +338,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
                     ? (typeof rawValue === "string" && rawValue.startsWith("#")
                         ? rawValue
                         : formatCell(rawValue, col.formulaFormat ?? "number", col.format, currency))
-                    : formatCell(rawValue, col.type, col.format, currency);
+                    : formatCell(rawValue, col.type, col.format, currency, dateStyle);
                   const variantClass = matched ? VARIANT_BG[matched.variant] : "";
                   // "Why?" everywhere — numeric cells in tables that have
                   // a string anchor column become clickable, opening the
@@ -350,7 +384,16 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
                             fallback={matched.icon}
                           />
                         )}
-                        {cellText}
+                        {drillEnabled && col.key === drillCol && rawValue != null && rawValue !== "" ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); onDrill!(block.id, rawValue); }}
+                            className="text-left font-medium text-primary-ink underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+                            title={t("drill.openRow")}
+                          >
+                            {cellText}
+                          </button>
+                        ) : cellText}
                       </span>
                     </td>
                   );
@@ -436,7 +479,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
                           "text-right tabular-nums"
                       )}
                     >
-                      {agg == null ? "" : formatCell(agg, col.type === "formula" ? (col.formulaFormat ?? "number") : col.type, col.format, currency)}
+                      {agg == null ? "" : formatCell(agg, col.type === "formula" ? (col.formulaFormat ?? "number") : col.type, col.format, currency, dateStyle)}
                     </td>
                   );
                 })}

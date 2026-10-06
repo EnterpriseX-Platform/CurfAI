@@ -9,11 +9,11 @@
  * in the column's `unredactedForRoles` allowlist.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
-import { requireUser, getUserRoles } from "@/lib/auth";
-import { canSeeDataSource } from "@/lib/datasourceAcl";
+import { requireUser } from "@/lib/auth";
 import { previewRows } from "@/lib/lake/tables";
-import { applyRedaction } from "@/lib/lake/redaction";
+import { applyRedaction, redactSamples } from "@/lib/lake/redaction";
+import { lakeTableFor } from "@/lib/lake/tableAccess";
+import { parseSchemaJson } from "@/lib/lake/schemaGovernance";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,28 +26,22 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
   const limit = Math.min(5000, Math.max(1, Number(url.searchParams.get("limit") ?? 100)));
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
 
-  const tableRow = await prisma.lakeTable.findFirst({
-    where: { tenantId: user.tenantId, name: params.name },
-  }).catch(() => null);
-  if (!tableRow) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // The same door as the internal table routes: the lake ACL (a table the key
+  // can't read is not found), and no report-scoped keys.
+  const access = await lakeTableFor(user, params.name, "read");
+  if (access instanceof NextResponse) return access;
+  const { row: tableRow, viewer } = access;
 
-  const userRoles = await getUserRoles();
-  const isAdmin = user.role === "admin";
-  if (!canSeeDataSource(tableRow, { id: user.id, isAdmin, roles: userRoles })) {
-    // Same status code as not-found so existence is concealed.
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const schema = parseSchemaJson(tableRow.schemaJson);
 
-  let schema: any[] = [];
-  try { schema = JSON.parse(tableRow.schemaJson) ?? []; } catch { /* keep empty */ }
-
-  const rows = previewRows(user.tenantId, params.name, limit, offset);
-  applyRedaction(rows, schema, { id: user.id, role: user.role, roleSlugs: userRoles });
+  const rows = await previewRows(user.tenantId, tableRow.name, limit, offset);
+  applyRedaction(rows, schema, viewer);
 
   return NextResponse.json({
     data: rows,
     rowCount: tableRow.rowCount,
-    schema,
+    // Samples are values from the table: masked like the rows.
+    schema: redactSamples(schema, viewer),
     limit,
     offset,
   });

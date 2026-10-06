@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Database from "better-sqlite3";
+import { openTenantSqlite } from "@/lib/connections/sqlitePath";
 import { prisma } from "@/lib/db";
 import { ee } from "@/ee";
 import { requireUser, tenantWhere, getUserRoles, blockScopedApiKey } from "@/lib/auth";
@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
     // Excel imports live in a per-tenant SQLite file under var/tenants/, so
     // they're enumerated identically to native SQLite via PRAGMA.
     if (ds.kind === "sqlite" || ds.kind === "excel") {
-      connections.push({ id: ds.id, name: ds.name, kind: ds.kind, tables: listTablesSafe(ds) });
+      connections.push({ id: ds.id, name: ds.name, kind: ds.kind, tables: listTablesSafe(ds, user.tenantId) });
     } else if (ds.kind === "postgres") {
       connections.push({ id: ds.id, name: ds.name, kind: ds.kind, tables: await listPgTablesSafe(ds) });
     } else if (ds.kind === "mysql") {
@@ -102,12 +102,12 @@ export async function GET(req: NextRequest) {
   });
 }
 
-function listTablesSafe(ds: { kind: string; connection: string }): string[] {
+function listTablesSafe(ds: { kind: string; connection: string }, tenantId: string): string[] {
   // SQLite and Excel both have a real .db file at `connection`; REST does not.
   if (ds.kind !== "sqlite" && ds.kind !== "excel") return [];
   let db: any = null;
   try {
-    db = new Database(ds.connection, { readonly: true, fileMustExist: true });
+    db = openTenantSqlite(tenantId, ds.connection);
     const rows = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 100")
       .all() as Array<{ name: string }>;

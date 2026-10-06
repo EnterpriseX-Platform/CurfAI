@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm audit --audit-level=high
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm audit signatures
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json --output-format JSON
@@ -127,7 +127,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: ${{ env.SNYK_TOKEN != '' }}
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - name: Install
         if: ${{ env.SNYK_TOKEN != '' }}

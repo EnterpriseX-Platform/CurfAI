@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { LOCALES, type Locale } from "./dict";
+import type { Era } from "./formatDate";
 
 /**
  * The viewer's content locale, read from the `rd_locale` cookie in a Server
@@ -21,4 +22,13 @@ import { LOCALES, type Locale } from "./dict";
 export function serverLocale(): Locale {
   const v = cookies().get("rd_locale")?.value;
   return v && (LOCALES as readonly string[]).includes(v) ? (v as Locale) : "en";
+}
+
+/**
+ * The reader's year style for Thai dates, from the `rd_era` cookie
+ * (RootLayout seeds it from User.preferencesJson.era). Buddhist era unless
+ * they chose Gregorian — the same default as intlLocale().
+ */
+export function serverEra(): Era {
+  return cookies().get("rd_era")?.value === "ce" ? "ce" : "be";
 }

@@ -14,11 +14,13 @@
  */
 import type { ReactElement } from "react";
 import { AreaChart, Area, CartesianGrid, Legend, Tooltip, XAxis } from "recharts";
-import { AXIS_PROPS, TOOLTIP_STYLE, GRID_STROKE, LEGEND_STYLE, formatValue, type ChartRenderCtx } from "./shared";
+import { AXIS_PROPS, TOOLTIP_STYLE, GRID_STROKE, LEGEND_STYLE, formatValue, type ChartRenderCtx, dateTick, dateLabel, seriesName, seriesTooltip } from "./shared";
 
 export function renderStreamgraphChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, palette, fmt, currency, print, showLegend, handleClick, gid } = ctx;
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
+  const tooltipFormatter = seriesTooltip(ctx);
   return (
     <AreaChart
       data={data as any[]}
@@ -27,8 +29,8 @@ export function renderStreamgraphChart(ctx: ChartRenderCtx): ReactElement {
       onClick={handleClick}
     >
       <CartesianGrid strokeDasharray="2 4" stroke={GRID_STROKE} vertical={false} strokeOpacity={0.4} />
-      <XAxis dataKey={xField} {...AXIS_PROPS} />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} />
+      <XAxis dataKey={xField} {...AXIS_PROPS} tickFormatter={dateTick(ctx)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} />
       {(showLegend ?? true) && <Legend wrapperStyle={LEGEND_STYLE} iconType="circle" iconSize={7} />}
       {yFields.map((f, i) => {
         const color = palette[i % palette.length];
@@ -36,7 +38,7 @@ export function renderStreamgraphChart(ctx: ChartRenderCtx): ReactElement {
           <Area
             key={f}
             type="basis"
-            dataKey={f}
+            dataKey={f} name={seriesName(f, ctx.cfg)}
             stackId="stream"
             stroke={color}
             strokeWidth={1.5}

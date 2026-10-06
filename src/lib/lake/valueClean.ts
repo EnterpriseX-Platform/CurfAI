@@ -44,11 +44,48 @@ export function isNullToken(raw: string): boolean {
   return NULL_TOKENS.has(raw.trim().toLowerCase());
 }
 
+/**
+ * Does this raw cell mean "no value" for a column of THIS type?
+ *
+ * The null-token denylist above exists so a single "N/A" among clean
+ * numbers can't poison a column to "text". Applied to a TEXT column it
+ * destroys data instead: "nan" is Nan province, "na" is Namibia's ISO-2
+ * code, and "none"/"unknown"/"tbd"/"-" are real category labels — a
+ * distinct value, not a missing one.
+ *
+ * It also did so invisibly: inferColumns skips these same tokens when
+ * voting, so the column still reports type "text" with a healthy sample
+ * while the cell has already been nulled. Found on a 77-row province
+ * upload where exactly one row — Nan, slug "nan" — came back null and the
+ * map silently rendered 76 provinces with no error anywhere.
+ *
+ * In a text column only a genuinely empty cell is null. Shared by the
+ * SQLite and DuckDB write paths so the two engines can't drift on it.
+ */
+export function meansNull(raw: string, type: CellType): boolean {
+  return type === "text" ? raw.trim() === "" : isNullToken(raw);
+}
+
 // Currency symbols worth stripping before the numeric test. Includes ฿
 // (Thai Baht) alongside the usual set — Curf's primary market ships THB
 // figures through this exact path constantly (see currency.ts's own
 // default-currency handling).
 const CURRENCY_SYMBOLS = /[$€£¥₹฿₩₫]/g;
+
+// The baht written out rather than as ฿ — "1,200 บาท", "THB 1,200",
+// "1,200 Baht" — as Thai POS and accounting exports print it. A symbol
+// alone was stripped; the word left the whole column as text.
+const BAHT_PREFIX = /^(?:thb|baht)\s*/i;
+const BAHT_SUFFIX = /\s*(?:บาท|thb|baht)$/i;
+
+/**
+ * Thai digits (๐-๙) as ASCII. Some Thai government and POS exports print
+ * them; without this a column of "๑,๒๐๐" is text and a date "๑๕/๐๑/๒๕๖๗"
+ * is no date at all.
+ */
+function asciiDigits(s: string): string {
+  return /[๐-๙]/.test(s) ? s.replace(/[๐-๙]/g, (d) => String(d.charCodeAt(0) - 0x0e50)) : s;
+}
 
 /**
  * Attempt to read `raw` as a number, tolerant of the formatting a human
@@ -66,13 +103,15 @@ const CURRENCY_SYMBOLS = /[$€£¥₹฿₩₫]/g;
  * bare-number result here reads correctly either way.
  */
 export function cleanNumericToken(raw: string): string | null {
-  let s = raw.trim();
+  let s = asciiDigits(raw.trim());
   if (s === "") return null;
   let negative = false;
   if (/^\(.*\)$/.test(s)) { negative = true; s = s.slice(1, -1); }
   if (s.startsWith("-")) { negative = true; s = s.slice(1); }
   else if (s.startsWith("+")) { s = s.slice(1); }
-  s = s.replace(CURRENCY_SYMBOLS, "").trim();
+  s = s.replace(CURRENCY_SYMBOLS, "").replace(BAHT_PREFIX, "").replace(BAHT_SUFFIX, "").trim();
+  // "1,200.-" is how a Thai price tag writes a whole-baht amount.
+  if (s.endsWith(".-")) s = s.slice(0, -2);
   if (s.endsWith("%")) s = s.slice(0, -1).trim();
   // Commas are only stripped when they're genuine thousands-grouping
   // ("1,234", "12,345,678.90") — validated BEFORE stripping. A blanket
@@ -103,6 +142,29 @@ const MONTHS: Record<string, number> = {
   sep: 9, sept: 9, september: 9, oct: 10, october: 10,
   nov: 11, november: 11, dec: 12, december: 12,
 };
+
+// Thai month names, full and abbreviated, keyed with dots and spaces
+// removed ("ม.ค." → "มค") so every way people punctuate them matches.
+const THAI_MONTHS: Record<string, number> = {
+  มกราคม: 1, มค: 1, กุมภาพันธ์: 2, กพ: 2, มีนาคม: 3, มีค: 3, เมษายน: 4, เมย: 4,
+  พฤษภาคม: 5, พค: 5, มิถุนายน: 6, มิย: 6, กรกฎาคม: 7, กค: 7, สิงหาคม: 8, สค: 8,
+  กันยายน: 9, กย: 9, ตุลาคม: 10, ตค: 10, พฤศจิกายน: 11, พย: 11, ธันวาคม: 12, ธค: 12,
+};
+
+// "15 ม.ค. 2567", "15 มกราคม พ.ศ. 2567", "15-ม.ค.-67".
+const THAI_MONTH_DATE = /^(\d{1,2})[\s/-]*([ก-๎.]+?)[\s/-]*(?:(พ\.?\s?ศ\.?|ค\.?\s?ศ\.?)\s*)?(\d{2}|\d{4})$/;
+
+/**
+ * A Buddhist-era year (พ.ศ., CE + 543) as the Common-Era year the lake
+ * stores. Thai systems print พ.ศ. — "15/01/2567" is 15 January 2024 — and
+ * reading it literally stored the year 2567, 543 years off, where every
+ * date filter, trend and comparison silently missed it. A year in
+ * 2400-2700 can only be พ.ศ. in business data (CE 1857-2157); anything
+ * outside is left as it is, including sentinels like 9999-12-31.
+ */
+function commonEraYear(y: number): number {
+  return y >= 2400 && y <= 2700 ? y - 543 : y;
+}
 
 function pad2(n: number): string { return n < 10 ? `0${n}` : String(n); }
 
@@ -137,38 +199,53 @@ const SLASH_DATE = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/;
  * they stopped being dates at all.
  */
 export function cleanDateToken(raw: string, order: DateOrder = "mdy"): string | null {
-  const s = raw.trim();
+  const s = asciiDigits(raw.trim());
   if (s === "") return null;
+  const ymd = (y: number, m: number, d: number) => {
+    const year = commonEraYear(y);
+    return isValidYMD(year, m, d) ? `${year}-${pad2(m)}-${pad2(d)}` : null;
+  };
 
-  // Already ISO (date or datetime) — pass through the date part unchanged.
+  // Already ISO (date or datetime) — keep the date part (a พ.ศ. year
+  // becomes its Common-Era year, see commonEraYear()).
   const iso = /^(\d{4})-(\d{2})-(\d{2})(?:[T ]|$)/.exec(s);
-  if (iso) {
-    const [, y, m, d] = iso;
-    return isValidYMD(Number(y), Number(m), Number(d)) ? `${y}-${m}-${d}` : null;
-  }
+  if (iso) return ymd(Number(iso[1]), Number(iso[2]), Number(iso[3]));
 
   const slash = SLASH_DATE.exec(s);
   if (slash) {
     const first = Number(slash[1]), second = Number(slash[2]), y = Number(slash[3]);
     const m = order === "dmy" ? second : first;
     const d = order === "dmy" ? first : second;
-    return isValidYMD(y, m, d) ? `${y}-${pad2(m)}-${pad2(d)}` : null;
+    return ymd(y, m, d);
   }
 
   // "Jan 15, 2024" / "January 15 2024"
   const monFirst = /^([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
   if (monFirst) {
     const mon = MONTHS[monFirst[1].toLowerCase()];
-    const d = Number(monFirst[2]), y = Number(monFirst[3]);
-    if (mon && isValidYMD(y, mon, d)) return `${y}-${pad2(mon)}-${pad2(d)}`;
+    const out = mon ? ymd(Number(monFirst[3]), mon, Number(monFirst[2])) : null;
+    if (out) return out;
   }
 
   // "15 Jan 2024" / "15 January 2024"
   const dayFirst = /^(\d{1,2})\s+([A-Za-z]+)\.?,?\s+(\d{4})$/.exec(s);
   if (dayFirst) {
     const mon = MONTHS[dayFirst[2].toLowerCase()];
-    const d = Number(dayFirst[1]), y = Number(dayFirst[3]);
-    if (mon && isValidYMD(y, mon, d)) return `${y}-${pad2(mon)}-${pad2(d)}`;
+    const out = mon ? ymd(Number(dayFirst[3]), mon, Number(dayFirst[1])) : null;
+    if (out) return out;
+  }
+
+  // "15 ม.ค. 2567" / "15 มกราคม พ.ศ. 2567" / "15 ม.ค. 67". A Thai month
+  // name dates the year in พ.ศ. unless the cell says ค.ศ.; a two-digit
+  // year is the short พ.ศ. form ("67" = 2567).
+  const thai = THAI_MONTH_DATE.exec(s);
+  if (thai) {
+    const mon = THAI_MONTHS[thai[2].replace(/[.\s]/g, "")];
+    const commonEra = !!thai[3] && thai[3].startsWith("ค");
+    let y = Number(thai[4]);
+    if (thai[4].length === 2) y += commonEra ? 2000 : 2500;
+    if (!commonEra && y >= 2400) y -= 543;
+    if (mon && isValidYMD(y, mon, Number(thai[1]))) return `${y}-${pad2(mon)}-${pad2(Number(thai[1]))}`;
   }
 
   return null;
@@ -178,29 +255,42 @@ export function cleanDateToken(raw: string, order: DateOrder = "mdy"): string | 
  * Decide slash-date order for a WHOLE column. One cell can't settle it;
  * a column almost always can, because a day above 12 can only be a day.
  *
- * `ambiguous` means the column offered no proof either way — every value
- * had both components ≤ 12 (rare beyond a handful of rows), or the column
- * contains proof of BOTH orders and so disagrees with itself. Callers with
- * a user present should ask; unattended callers take `order` and move on.
+ * `ambiguous` means the column HAS slash-style values (SLASH_DATE-shaped)
+ * but offered no proof either way — every value had both components ≤ 12
+ * (rare beyond a handful of rows), or the column contains proof of BOTH
+ * orders and so disagrees with itself. Callers with a user present should
+ * ask; unattended callers take `order` and move on.
+ *
+ * A column with NO slash-style values at all — pure ISO (YYYY-MM-DD),
+ * "Jan 15 2024", or empty — is never ambiguous: `order` doesn't apply to
+ * those formats in the first place (cleanDateToken's ISO and month-name
+ * branches above don't consult it), so there's nothing to ask about. Found
+ * live via an A3 Verify upload E2E pass (2026-09-20): a plain ISO-dated CSV
+ * column was flagged "ambiguous" and shown a date-order toggle that had no
+ * effect on how the column would actually be parsed.
  */
 export function detectDateOrder(values: Iterable<string>): { order: DateOrder; ambiguous: boolean } {
   let dmyProof = false;   // first component > 12 — can only be a day
   let mdyProof = false;   // second component > 12 — can only be a day
+  let sawSlashDate = false;
   for (const v of values) {
     if (typeof v !== "string") continue;
-    const m = SLASH_DATE.exec(v.trim());
+    const m = SLASH_DATE.exec(asciiDigits(v.trim()));
     if (!m) continue;
+    sawSlashDate = true;
     if (Number(m[1]) > 12) dmyProof = true;
     if (Number(m[2]) > 12) mdyProof = true;
     if (dmyProof && mdyProof) break;
   }
   if (dmyProof && !mdyProof) return { order: "dmy", ambiguous: false };
   if (mdyProof && !dmyProof) return { order: "mdy", ambiguous: false };
-  // No proof, or contradictory proof. Month-first is the fallback because
-  // it's what this parser has always done — changing the silent default
-  // would retroactively reinterpret every unattended webhook/pull feed
-  // that's been landing correctly. The preview surfaces this case so an
-  // upload with a human present never rides on the fallback.
+  if (!sawSlashDate) return { order: "mdy", ambiguous: false };
+  // Slash-dates ARE present but every one had both components ≤ 12, or the
+  // column disagrees with itself. Month-first is the fallback because it's
+  // what this parser has always done — changing the silent default would
+  // retroactively reinterpret every unattended webhook/pull feed that's
+  // been landing correctly. The preview surfaces this case so an upload
+  // with a human present never rides on the fallback.
   return { order: "mdy", ambiguous: true };
 }
 

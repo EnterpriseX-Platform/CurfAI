@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { refreshMaterializedView, mvTableName } from "@/lib/lake/materialize";
 import { dropTable } from "@/lib/lake/tables";
@@ -17,8 +17,8 @@ export const runtime = "nodejs";
 const ActionSchema = z.object({ action: z.enum(["refresh", "toggle"]) });
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
 
   const mv = await prisma.materializedView.findFirst({
     where: { id: params.id, tenantId: user.tenantId },
@@ -45,8 +45,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
 
   const mv = await prisma.materializedView.findFirst({
     where: { id: params.id, tenantId: user.tenantId },
@@ -55,7 +55,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
   // Drop the cached lake table (if it exists) before deleting the MV
   // row. Best-effort — a stale lake row is recoverable on next refresh.
-  try { dropTable(user.tenantId, mvTableName(mv.name)); } catch { /* fine */ }
+  try { await dropTable(user.tenantId, mvTableName(mv.name)); } catch { /* fine */ }
   await prisma.lakeTable.deleteMany({
     where: { tenantId: user.tenantId, name: mvTableName(mv.name) },
   }).catch(() => null);

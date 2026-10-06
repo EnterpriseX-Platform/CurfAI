@@ -5,7 +5,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireUser, requireAdmin } from "@/lib/auth";
+import { blockScopedApiKey, requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { snapshotTenant } from "@/lib/lake/backup";
 
@@ -15,6 +15,8 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   const items = await prisma.lakeBackup.findMany({
     where: { tenantId: user.tenantId },
     orderBy: { createdAt: "desc" },

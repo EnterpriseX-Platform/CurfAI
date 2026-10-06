@@ -1,0 +1,90 @@
+databaseChangeLog:
+  - changeSet:
+      id: 017-engine-schedule
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_schedule
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: report_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: name, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: cron, type: varchar(100), constraints: { nullable: false } }
+              - column: { name: timezone, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: format, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: locale, type: varchar(10) }
+              - column: { name: params, type: jsonb }
+              - column: { name: recipients, type: jsonb, constraints: { nullable: false } }
+              - column: { name: run_as, type: jsonb, constraints: { nullable: false } }
+              - column: { name: enabled, type: boolean, defaultValueBoolean: true, constraints: { nullable: false } }
+              - column: { name: next_run_at, type: timestamptz }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: updated_by, type: varchar(255), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: engine_schedule
+            baseColumnNames: report_id
+            referencedTableName: engine_report
+            referencedColumnNames: id
+            constraintName: fk_engine_schedule_report
+            onDelete: CASCADE
+        - createIndex:
+            tableName: engine_schedule
+            indexName: ix_engine_schedule_due
+            columns:
+              - column: { name: enabled }
+              - column: { name: next_run_at }
+        - createIndex:
+            tableName: engine_schedule
+            indexName: ix_engine_schedule_tenant
+            columns:
+              - column: { name: tenant_id }
+      rollback:
+        - dropTable:
+            tableName: engine_schedule
+
+  - changeSet:
+      id: 018-engine-schedule-run
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_schedule_run
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: schedule_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: scheduled_for, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: state, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: attempt, type: int, constraints: { nullable: false } }
+              - column: { name: claimed_by, type: varchar(100) }
+              - column: { name: lease_until, type: timestamptz }
+              - column: { name: next_attempt_at, type: timestamptz }
+              - column: { name: started_at, type: timestamptz }
+              - column: { name: finished_at, type: timestamptz }
+              - column: { name: error, type: varchar(500) }
+              - column: { name: export_id, type: uuid }
+              - column: { name: delivered_to, type: int }
+        # One run per schedule and fire time: whichever engine instance inserts it first owns it.
+        - addUniqueConstraint:
+            tableName: engine_schedule_run
+            columnNames: schedule_id, scheduled_for
+            constraintName: uq_engine_schedule_run
+        - addForeignKeyConstraint:
+            baseTableName: engine_schedule_run
+            baseColumnNames: schedule_id
+            referencedTableName: engine_schedule
+            referencedColumnNames: id
+            constraintName: fk_engine_schedule_run_schedule
+            onDelete: CASCADE
+        - createIndex:
+            tableName: engine_schedule_run
+            indexName: ix_engine_schedule_run_state
+            columns:
+              - column: { name: state }
+              - column: { name: next_attempt_at }
+              - column: { name: lease_until }
+      rollback:
+        - dropTable:
+            tableName: engine_schedule_run

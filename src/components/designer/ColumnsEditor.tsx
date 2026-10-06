@@ -10,6 +10,7 @@ import {
 import type { TableColumn, ConditionalFormat } from "@/lib/reporting/schema";
 import { ConditionalEditor } from "./ConditionalEditor";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * Structured editor for a table block's columns[]. Replaces the JSON textarea
@@ -25,6 +26,7 @@ export function ColumnsEditor({
   value: TableColumn[];
   onChange: (next: TableColumn[]) => void;
 }) {
+  const { t } = useT();
   function update(i: number, patch: Partial<TableColumn>) {
     onChange(value.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
   }
@@ -32,7 +34,7 @@ export function ColumnsEditor({
   function add() {
     onChange([
       ...value,
-      { key: `col_${value.length + 1}`, label: `Column ${value.length + 1}`, type: "string", total: "none" },
+      { key: `col_${value.length + 1}`, label: t("columnsEditor.defaultLabel").replace("{n}", String(value.length + 1)), type: "string", total: "none" },
     ]);
   }
   function move(i: number, dir: -1 | 1) {
@@ -47,7 +49,7 @@ export function ColumnsEditor({
     <div className="space-y-2">
       {value.length === 0 && (
         <div className="rounded-md border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-          No columns. Add one to show data in the table.
+          {t("columnsEditor.empty")}
         </div>
       )}
       {value.map((col, i) => (
@@ -63,7 +65,7 @@ export function ColumnsEditor({
       ))}
 
       <Button size="sm" variant="outline" onClick={add} type="button" className="w-full">
-        <Plus className="mr-1.5 h-3.5 w-3.5" /> Add column
+        <Plus className="mr-1.5 h-3.5 w-3.5" /> {t("columnsEditor.add")}
       </Button>
     </div>
   );
@@ -96,6 +98,7 @@ function ColumnRow({
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
 }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const isNumeric =
     col.type === "number" || col.type === "currency" || col.type === "percent" ||
@@ -104,6 +107,7 @@ function ColumnRow({
   const cfActive = !!cf && (
     (cf.heatmap && cf.heatmap !== "off") || cf.bar || (cf.rules ?? []).length > 0
   );
+  const [refPre, refPost] = t("columnsEditor.formulaRef").split("{example}");
 
   return (
     <div className="rounded-md border border-border bg-background p-2.5">
@@ -114,7 +118,7 @@ function ColumnRow({
             type="button"
             onClick={() => onMove(-1)}
             disabled={isFirst}
-            title="Move up"
+            title={t("action.moveUp")}
             className="flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           >
             ▲
@@ -123,7 +127,7 @@ function ColumnRow({
             type="button"
             onClick={() => onMove(1)}
             disabled={isLast}
-            title="Move down"
+            title={t("action.moveDown")}
             className="flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           >
             ▼
@@ -132,14 +136,14 @@ function ColumnRow({
 
         <div className="grid flex-1 gap-2">
           <div className="grid grid-cols-2 gap-2">
-            <FieldTiny label="Key (column in query result)">
+            <FieldTiny label={t("columnsEditor.key")}>
               <Input
                 className="h-7 font-mono text-xs"
                 value={col.key}
                 onChange={(e) => onUpdate({ key: e.target.value })}
               />
             </FieldTiny>
-            <FieldTiny label="Label">
+            <FieldTiny label={t("common.label")}>
               <Input
                 className="h-7 text-xs"
                 value={col.label}
@@ -148,35 +152,35 @@ function ColumnRow({
             </FieldTiny>
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <FieldTiny label="Type">
+            <FieldTiny label={t("common.type")}>
               <Select value={col.type} onValueChange={(v) => onUpdate({ type: v as TableColumn["type"] })}>
                 <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["string", "number", "currency", "percent", "date", "datetime", "formula"].map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  {["string", "number", "currency", "percent", "date", "datetime", "formula"].map((v) => (
+                    <SelectItem key={v} value={v}>{t(`blockOption.${v}`)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </FieldTiny>
-            <FieldTiny label="Align">
+            <FieldTiny label={t("blockField.align")}>
               <Select
                 value={col.align ?? ""}
                 onValueChange={(v) => onUpdate({ align: (v || undefined) as TableColumn["align"] })}
               >
-                <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="auto" /></SelectTrigger>
+                <SelectTrigger className="h-7 text-xs"><SelectValue placeholder={t("blockOption.auto")} /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="left">left</SelectItem>
-                  <SelectItem value="center">center</SelectItem>
-                  <SelectItem value="right">right</SelectItem>
+                  {["left", "center", "right"].map((v) => (
+                    <SelectItem key={v} value={v}>{t(`blockOption.${v}`)}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </FieldTiny>
-            <FieldTiny label="Total">
+            <FieldTiny label={t("columnsEditor.total")}>
               <Select value={col.total ?? "none"} onValueChange={(v) => onUpdate({ total: v as TableColumn["total"] })}>
                 <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["none", "sum", "avg", "count", "min", "max"].map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  {["none", "sum", "avg", "count", "min", "max"].map((v) => (
+                    <SelectItem key={v} value={v}>{t(`blockOption.${v}`)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -192,7 +196,7 @@ function ColumnRow({
           {col.type === "formula" && (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2.5">
               <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <Sigma className="h-3 w-3" /> Formula
+                <Sigma className="h-3 w-3" /> {t("columnsEditor.formula")}
               </div>
               <textarea
                 value={col.formula ?? ""}
@@ -200,25 +204,25 @@ function ColumnRow({
                 className="min-h-[64px] w-full rounded-md border border-input bg-background p-2 font-mono text-xs"
                 placeholder="=spend / leads"
               />
-              <FieldTiny label="Result format">
+              <FieldTiny label={t("columnsEditor.resultFormat")}>
                 <Select
                   value={(col as any).formulaFormat ?? "number"}
                   onValueChange={(v) => onUpdate({ formulaFormat: v as any } as any)}
                 >
                   <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {["number", "currency", "percent", "string"].map((t) => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    {["number", "currency", "percent", "string"].map((v) => (
+                      <SelectItem key={v} value={v}>{t(`blockOption.${v}`)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </FieldTiny>
               <p className="text-[10px] leading-snug text-muted-foreground">
-                Reference column names directly (e.g. <code className="font-mono">spend</code>). Helpers:{" "}
+                {refPre}<code className="font-mono">spend</code>{refPost} {t("columnsEditor.formulaHelpers")}{" "}
                 <code className="font-mono">SUM(col)</code>, <code className="font-mono">AVG(col)</code>,{" "}
                 <code className="font-mono">MIN/MAX/COUNT</code>, <code className="font-mono">IF(cond, a, b)</code>,{" "}
                 <code className="font-mono">ROUND(x, d)</code>, <code className="font-mono">ABS</code>,{" "}
-                <code className="font-mono">LEN/UPPER/LOWER/CONCAT</code>. Sandboxed — no JS access.
+                <code className="font-mono">LEN/UPPER/LOWER/CONCAT</code>. {t("columnsEditor.formulaSandboxed")}
               </p>
             </div>
           )}
@@ -238,10 +242,10 @@ function ColumnRow({
                 )}
               >
                 {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                Conditional formatting
+                {t("columnsEditor.conditional")}
                 {cfActive && (
                   <span className="ml-1 rounded-full bg-primary/10 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider text-primary">
-                    on
+                    {t("columnsEditor.on")}
                   </span>
                 )}
               </button>
@@ -260,7 +264,7 @@ function ColumnRow({
         <button
           type="button"
           onClick={onRemove}
-          title="Remove column"
+          title={t("columnsEditor.remove")}
           className="flex h-7 w-7 items-center justify-center rounded-md text-destructive/80 hover:bg-destructive/10"
         >
           <Trash2 className="h-3.5 w-3.5" />

@@ -26,6 +26,11 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { refineManualOrigin } from "@/lib/lake/originLabel";
+import { usePollAiJob } from "@/hooks/usePollAiJob";
+import { DateOrderToggle } from "./DateOrderToggle";
+import { RetailPackCard } from "./RetailPackCard";
+import { eeClient } from "@/ee/client";
+import { StandardMappingPanel, type StandardMappingState, type StandardTarget, type FieldSource } from "./StandardMappingPanel";
 
 type Schema = Array<{ name: string; type: string }>;
 
@@ -42,6 +47,11 @@ type TableRow = {
    *  failed — see lib/lake/freshness.ts. Absent for upload/webhook/plain
    *  manual tables, which have no ongoing schedule to fail. */
   freshnessIssue?: { error: string; lastAttemptAt?: string } | null;
+  /** Count of this tenant's reports whose SQL references this table —
+   *  see lib/lineage.ts's downstreamOf(). Omitted (not zero) when the
+   *  lineage graph couldn't be built, so the badge just doesn't render
+   *  rather than claiming "0 reports" on a build failure. */
+  usedInReports?: number;
   schema: Schema;
   rowCount: number;
   sizeBytes: number;
@@ -72,11 +82,16 @@ const SOURCE_LABEL_KEYS = {
   manual:    "tables.source.manual",
 } as const;
 
+// The retail weekly summary — paid edition only (src/ee/client.tsx).
+const WeeklyCard = eeClient.tables?.RetailWeeklyCard;
+
 export function TablesManager({
-  initialTables, initialTokens,
+  initialTables, initialTokens, canUpload,
 }: {
   initialTables: TableRow[];
   initialTokens: TokenRow[];
+  /** Admin/developer only — the upload routes refuse anyone else. */
+  canUpload: boolean;
 }) {
   const { t } = useT();
   const router = useRouter();
@@ -92,8 +107,16 @@ export function TablesManager({
     }
   }
 
-  async function deleteTable(name: string) {
-    if (!confirm(t("tables.card.deleteConfirm").replace("{name}", name))) return;
+  async function deleteTable(row: TableRow) {
+    const { name, usedInReports } = row;
+    // Name the blast radius when we know it (FE-DATA-05): the row already
+    // carries its lineage count, the confirm just never showed it.
+    // usedInReports is absent (not 0) when lineage couldn't be built, so
+    // that case falls back to the plain confirm rather than claiming "none".
+    const message = usedInReports && usedInReports > 0
+      ? t("tables.card.deleteConfirmInUse").replace("{name}", name).replace("{n}", String(usedInReports))
+      : t("tables.card.deleteConfirm").replace("{name}", name);
+    if (!confirm(message)) return;
     const r = await fetch(`/api/lake/tables/${encodeURIComponent(name)}`, {
       method: "DELETE", credentials: "include",
     });
@@ -105,7 +128,17 @@ export function TablesManager({
 
   return (
     <div className="space-y-6">
-      <UploadCard onUploaded={async () => { await refreshTables(); router.refresh(); }} />
+      {canUpload && <UploadCard onUploaded={async () => { await refreshTables(); router.refresh(); }} />}
+
+      {tables.some((row) => row.name === "sales_lines" || row.name === "inventory") && (
+        <RetailPackCard
+          dataKey={tables.filter((row) => row.name === "sales_lines" || row.name === "inventory").map((row) => `${row.name}:${row.updatedAt}`).join("|")}
+          canSetUp={canUpload}
+        />
+      )}
+      {WeeklyCard && tables.some((row) => row.name === "sales_lines") && (
+        <WeeklyCard dataKey={tables.filter((row) => row.name === "sales_lines").map((row) => row.updatedAt).join("|")} />
+      )}
 
       {/* Vector DB — "Find by meaning". Renders only when the user has at
           least one table (otherwise there's nothing to search). The panel
@@ -119,7 +152,7 @@ export function TablesManager({
       ) : (
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {tables.map((row) => (
-            <TableCard key={row.id} row={row} onDelete={() => deleteTable(row.name)} />
+            <TableCard key={row.id} row={row} onDelete={() => deleteTable(row)} />
           ))}
         </div>
       )}
@@ -174,64 +207,224 @@ type PreviewColumn = {
   /** Set for date columns: which way round the file's slash dates read. */
   dateOrder?: "mdy" | "dmy";
 };
+type TextRepairKind = "mac_roman" | "cp1252";
 type PreviewData = {
   suggestedName: string;
   columns: PreviewColumn[];
   sampleRows: Array<Record<string, unknown>>;
   rowCount: number;
+  /** rowCount is what the file declared, not a count of every row read. */
+  rowCountIsEstimate: boolean;
   /** Workbook sheet names; empty for CSV/JSON. */
   sheets: string[];
   /** The sheet this preview was read from; null for CSV/JSON. */
   sheet: string | null;
   /** Date columns whose values don't say whether they're day- or month-first. */
   ambiguousDateColumns: string[];
+  /** Exactly Excel's maximum sheet size — the export was probably cut off. */
+  hitsExcelRowLimit: boolean;
+  /** Garbled-text repair the sample looked like it needed, and what this preview applied. */
+  textRepair: { detected: TextRepairKind | null; applied: TextRepairKind | null };
 };
 
+/** What the user confirmed in the preview dialog — everything needed to (re)start the import. */
+type ImportRequest =
+  | {
+      kind: "table";
+      name: string;
+      sheet: string | null;
+      columnTypes: Record<string, PreviewColumn["type"]>;
+      columnDateOrders: Record<string, "mdy" | "dmy">;
+      textRepair: TextRepairKind | null;
+    }
+  | {
+      // Into a standard dataset (sales_lines / inventory), mapped column by column.
+      kind: "standard";
+      dataset: StandardTarget;
+      mapping: Record<string, FieldSource>;
+      dateOrders: Record<string, "mdy" | "dmy">;
+      sheet: string | null;
+      textRepair: TextRepairKind | null;
+    };
+
+type ImportResult = {
+  table: { name: string; rowCount: number };
+  standard?: { dataset: StandardTarget; inserted: number; replaced: number; skipped: Record<string, number> };
+};
+
+/** The request as the import route takes it. */
+function importBody(req: ImportRequest) {
+  const sheet = req.sheet ?? undefined;
+  return req.kind === "table"
+    ? { name: req.name, sheet, columnTypes: req.columnTypes, columnDateOrders: req.columnDateOrders, textRepair: req.textRepair }
+    : { standard: { dataset: req.dataset, mapping: req.mapping, dateOrders: req.dateOrders }, sheet, textRepair: req.textRepair };
+}
+
 /**
- * Upload used to commit blind: pick a file, it's a table. The first
- * feedback about how a column got typed was an empty chart-type picker
- * somewhere else in the product entirely, with nothing explaining why.
+ * Upload used to commit blind: pick a file, it's a table. Then it previewed
+ * first — but by posting the whole file in one request and parsing it in
+ * memory, which stopped at 50 MB (and at 64 MB the ingress refused it
+ * outright): a customer's 127 MB ERP export simply couldn't get in.
  *
- * Now file selection previews first (POST .../preview — parses, infers,
- * writes nothing) and shows the detected schema with a per-column type
- * override before anything is created. Confirming re-sends the SAME File
- * object the browser already holds, plus any corrected types, to the real
- * create endpoint — no server-side session needed to bridge preview and
- * commit across two requests.
+ * Now every file goes up in chunks to a staged upload (POST
+ * /api/lake/uploads, PUT …/[id] per chunk), is previewed from there (the
+ * detected schema, a per-column type override, any sheet choice, a
+ * garbled-text repair), and imports as a background job this card polls —
+ * real progress for a million-row workbook instead of a request that times
+ * out. Staging keeps the file until the import succeeds, so a failed import
+ * can be retried without uploading again.
+ *
+ * Several files dropped at once (a month of daily POS exports, one per
+ * branch) go through the same steps one after another. Each file after the
+ * first opens on the target the one before it went to, so a batch of sales
+ * exports lands in the standard sales table with its saved layout already
+ * filled in — confirm, and the next one comes up.
  */
 function UploadCard({ onUploaded }: { onUploaded: () => void | Promise<void> }) {
   const { t } = useT();
   const fileRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [drag, setDrag] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [phase, setPhase] = useState<"idle" | "uploading" | "reading" | "reviewing" | "importing">("idle");
+  const [uploadPct, setUploadPct] = useState(0);
+  const [filename, setFilename] = useState("");
+  const [uploadId, setUploadId] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewData | null>(null);
+  const [importReq, setImportReq] = useState<ImportRequest | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ name: string; rows: number; replaced?: number; skipped?: number } | null>(null);
+  // A multi-file drop: the files still to go, and where the batch is.
+  const queueRef = useRef<File[]>([]);
+  const [batch, setBatch] = useState<{ index: number; total: number } | null>(null);
+  const lastTarget = useRef<"table" | StandardTarget>("table");
+  const job = usePollAiJob<ImportResult>(jobId);
+  // What the import is called in messages: the new table's name, or the standard table's label.
+  const targetLabel = (req: ImportRequest | null) =>
+    !req ? "" : req.kind === "table" ? req.name : t(`tables.import.target.${req.dataset}`);
+  const inBatch = (label: string) =>
+    batch ? `${t("tables.upload.batch").replace("{n}", String(batch.index)).replace("{total}", String(batch.total))} · ${label}` : label;
 
-  async function startPreview(file: File) {
-    setPreviewing(true); setPreviewError(null);
-    try {
-      const j = await fetchPreview(file);
-      setPendingFile(file);
-      setPreview(j);
-    } catch (e: any) {
-      setPreviewError(e?.message ?? t("tables.upload.failedFallback"));
-    } finally {
-      setPreviewing(false);
-      if (fileRef.current) fileRef.current.value = "";
+  useEffect(() => {
+    if (!jobId || job.status === "running" || job.status === "idle") return;
+    if (job.status === "done") {
+      const std = job.result?.standard;
+      setDone(std
+        ? { name: targetLabel(importReq), rows: std.inserted, replaced: std.replaced, skipped: Object.values(std.skipped).reduce((a, b) => a + b, 0) }
+        : { name: job.result?.table.name ?? targetLabel(importReq), rows: job.result?.table.rowCount ?? 0 });
+      setUploadId(null);
+      setImportReq(null);
+      setJobId(null);
+      setPhase("idle");
+      void onUploaded();
+      nextInBatch();
+    } else if (job.status === "failed") {
+      setError(t("tables.upload.importFailed").replace("{name}", targetLabel(importReq)).replace("{error}", job.error ?? ""));
+      setJobId(null);
+      setPhase("idle");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- react to the job resolving, not to every render
+  }, [job.status, jobId]);
+
+  /** One file or several; several go one after another (nextInBatch). */
+  function startMany(files: File[]) {
+    if (fileRef.current) fileRef.current.value = "";
+    if (files.length === 0) return;
+    queueRef.current = files.slice(1);
+    lastTarget.current = "table";
+    setBatch(files.length > 1 ? { index: 1, total: files.length } : null);
+    void start(files[0]);
+  }
+
+  function nextInBatch() {
+    const next = queueRef.current.shift();
+    if (!next) { setBatch(null); return; }
+    setBatch((b) => (b ? { ...b, index: b.index + 1 } : b));
+    void start(next);
+  }
+
+  function stopBatch() {
+    queueRef.current = [];
+    setBatch(null);
+  }
+
+  async function start(file: File) {
+    if (fileRef.current) fileRef.current.value = "";
+    if (uploadId) discard(uploadId);
+    setError(null); setDone(null); setImportReq(null); setPreview(null);
+    setFilename(file.name); setUploadPct(0); setPhase("uploading");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    // Known from the moment the server creates the upload, so a failure
+    // part-way through still discards what arrived.
+    let startedId: string | null = null;
+    try {
+      const id = await stageFile(file, controller.signal, (x) => { startedId = x; setUploadId(x); }, setUploadPct);
+      setPhase("reading");
+      setPreview(await fetchStagedPreview(id, {}));
+      setPhase("reviewing");
+    } catch (e: any) {
+      if (startedId) discard(startedId);
+      setUploadId(null);
+      setPhase("idle");
+      // A file that can't even be read stops the batch here, with what's left named.
+      const left = queueRef.current.length;
+      stopBatch();
+      if (e?.name !== "AbortError") {
+        const msg = e?.message ?? t("tables.upload.failedFallback");
+        setError(left > 0 ? `${msg} ${t("tables.upload.batchStopped").replace("{n}", String(left))}` : msg);
+      }
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  function cancelUpload() {
+    abortRef.current?.abort();
+  }
+
+  function discard(id: string) {
+    void fetch(`/api/lake/uploads/${id}`, { method: "DELETE", credentials: "include" }).catch(() => null);
+  }
+
+  /** Closing the review skips this file; the rest of a batch carries on. */
+  function closeReview() {
+    if (uploadId) discard(uploadId);
+    setUploadId(null); setPreview(null); setPhase("idle");
+    nextInBatch();
+  }
+
+  /** Starts the import; throws (for the dialog to show) when the server refuses it outright. */
+  async function beginImport(id: string, req: ImportRequest) {
+    const r = await fetch(`/api/lake/uploads/${id}/import`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(importBody(req)),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j?.error ?? `Server returned ${r.status}`);
+    lastTarget.current = req.kind === "table" ? "table" : req.dataset;
+    setError(null);
+    setImportReq(req);
+    setJobId(j.jobId);
+    setPreview(null);
+    setPhase("importing");
+  }
+
+  async function retryImport() {
+    if (!uploadId || !importReq) return;
+    try { await beginImport(uploadId, importReq); }
+    catch (e: any) { setError(e?.message ?? t("tables.upload.failedFallback")); }
   }
 
   function onDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault(); setDrag(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) void startPreview(f);
+    if (phase === "idle") startMany(Array.from(e.dataTransfer.files ?? []));
   }
 
-  function closePreview() {
-    setPreview(null);
-    setPendingFile(null);
-  }
+  const busy = phase !== "idle";
+  const importPct = Math.max(1, job.progressPct);
 
   return (
     <section
@@ -260,88 +453,169 @@ function UploadCard({ onUploaded }: { onUploaded: () => void | Promise<void> }) 
             ref={fileRef}
             type="file"
             className="hidden"
-            accept=".csv,.tsv,.txt,.xlsx,.xls,.json"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void startPreview(f);
-            }}
+            accept=".csv,.tsv,.txt,.xlsx,.json"
+            multiple
+            onChange={(e) => startMany(Array.from(e.target.files ?? []))}
           />
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={previewing}
+            disabled={busy}
             className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            {previewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-            {previewing ? t("tables.upload.previewing") : t("action.upload")}
+            {phase === "reading" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            {phase === "reading" ? t("tables.upload.previewing") : t("action.upload")}
           </button>
         </div>
       </div>
-      {previewError && (
-        <div className="mt-3 flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-          <span>{previewError}</span>
+
+      {phase === "uploading" && (
+        <ProgressLine
+          label={inBatch(t("tables.upload.uploading").replace("{name}", filename).replace("{pct}", String(uploadPct)))}
+          pct={uploadPct}
+          action={
+            <button type="button" onClick={cancelUpload} className="text-[11px] text-muted-foreground hover:text-foreground">
+              {t("action.cancel")}
+            </button>
+          }
+        />
+      )}
+
+      {phase === "importing" && importReq && (
+        <ProgressLine
+          label={inBatch(t("tables.upload.importing").replace("{name}", targetLabel(importReq)).replace("{pct}", String(importPct)))}
+          hint={t("tables.upload.importingHint")}
+          pct={importPct}
+        />
+      )}
+
+      {done && (
+        <div className="mt-3 flex items-start gap-1.5 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs text-success">
+          <Check className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="flex-1">
+            {t("tables.upload.imported").replace("{rows}", done.rows.toLocaleString()).replace("{name}", done.name)}
+            {!!done.replaced && " " + t("tables.upload.replacedNote").replace("{n}", done.replaced.toLocaleString())}
+            {!!done.skipped && " " + t("tables.upload.skippedNote").replace("{n}", done.skipped.toLocaleString())}
+          </span>
+          <button type="button" onClick={() => setDone(null)} aria-label={t("action.close")}>
+            <X className="h-3 w-3" />
+          </button>
         </div>
       )}
 
-      {preview && pendingFile && (
+      {error && (
+        <div className="mt-3 flex flex-wrap items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="min-w-0 flex-1">{error}</span>
+          {uploadId && importReq && (
+            <span className="flex shrink-0 items-center gap-3">
+              <button type="button" onClick={() => void retryImport()} className="font-semibold underline-offset-2 hover:underline">
+                {t("tables.upload.retry")}
+              </button>
+              <button
+                type="button"
+                onClick={() => { discard(uploadId); setUploadId(null); setImportReq(null); setError(null); nextInBatch(); }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {t("tables.upload.discard")}
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {phase === "reviewing" && preview && uploadId && (
         <UploadPreviewDialog
-          file={pendingFile}
+          uploadId={uploadId}
           preview={preview}
-          onClose={closePreview}
-          onCreated={async () => { closePreview(); await onUploaded(); }}
+          initialTarget={batch && batch.index > 1 ? lastTarget.current : "table"}
+          fileLabel={inBatch(filename)}
+          onClose={closeReview}
+          onConfirm={(req) => beginImport(uploadId, req)}
         />
       )}
     </section>
   );
 }
 
-/**
- * Day-first / month-first for one date column. Shown on every date column
- * so a wrong auto-detection is always correctable, and called out only
- * when the file itself proved nothing either way.
- */
-function DateOrderToggle({
-  value, unproven, onChange,
-}: {
-  value: "mdy" | "dmy";
-  unproven: boolean;
-  onChange: (v: "mdy" | "dmy") => void;
-}) {
-  const { t } = useT();
+function ProgressLine({ label, hint, pct, action }: { label: string; hint?: string; pct: number; action?: React.ReactNode }) {
   return (
-    <div className="mt-1 flex items-center gap-1">
-      {(["dmy", "mdy"] as const).map((o) => (
-        <button
-          key={o}
-          type="button"
-          onClick={() => onChange(o)}
-          title={t(o === "dmy" ? "tables.preview.dmyTitle" : "tables.preview.mdyTitle")}
-          className={
-            "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors " +
-            (value === o
-              ? "bg-primary-soft text-primary"
-              : "text-muted-foreground hover:bg-muted")
-          }
-        >
-          {t(o === "dmy" ? "tables.preview.dmy" : "tables.preview.mdy")}
-        </button>
-      ))}
-      {unproven && (
-        <span className="text-[10px] text-warning" title={t("tables.preview.dateUnprovenHint")}>
-          {t("tables.preview.dateUnproven")}
-        </span>
-      )}
+    <div className="mt-3 space-y-1.5">
+      <div className="flex items-center gap-2 text-xs">
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {action}
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${pct}%` }} />
+      </div>
+      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }
 
-async function fetchPreview(file: File, sheet?: string): Promise<PreviewData> {
-  const fd = new FormData();
-  fd.append("file", file);
-  if (sheet) fd.append("sheet", sheet);
-  const r = await fetch("/api/lake/tables/preview", { method: "POST", credentials: "include", body: fd });
-  const j = await r.json();
+/**
+ * Send `file` to a staged upload in the server's chunk size, in order.
+ * A 409 carries the byte count the server actually has, so a chunk whose
+ * response was lost is resumed from there rather than restarted; a network
+ * failure retries the same chunk a few times before giving up.
+ */
+async function stageFile(
+  file: File,
+  signal: AbortSignal,
+  onStarted: (uploadId: string) => void,
+  onProgress: (pct: number) => void,
+): Promise<string> {
+  const r = await fetch("/api/lake/uploads", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, size: file.size }),
+    signal,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error ?? `Server returned ${r.status}`);
+  const { uploadId, chunkSize } = j as { uploadId: string; chunkSize: number };
+  onStarted(uploadId);
+
+  let offset = 0;
+  let failures = 0;
+  while (offset < file.size) {
+    let res: Response;
+    try {
+      res = await fetch(`/api/lake/uploads/${uploadId}?offset=${offset}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file.slice(offset, offset + chunkSize),
+        signal,
+      });
+    } catch (e: any) {
+      if (e?.name === "AbortError" || ++failures > 3) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * failures));
+      continue;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409 && typeof body.received === "number") { offset = body.received; continue; }
+    if (!res.ok) throw new Error(body?.error ?? `Server returned ${res.status}`);
+    failures = 0;
+    offset = body.received;
+    onProgress(Math.floor((offset / file.size) * 100));
+  }
+  return uploadId;
+}
+
+async function fetchStagedPreview(
+  uploadId: string,
+  opts: { sheet?: string; textRepair?: TextRepairKind | null },
+): Promise<PreviewData> {
+  const r = await fetch(`/api/lake/uploads/${uploadId}/preview`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j?.error ?? `Server returned ${r.status}`);
   return j as PreviewData;
 }
@@ -353,47 +627,54 @@ const TYPE_OPTIONS: Array<{ value: PreviewColumn["type"]; labelKey: string }> = 
   { value: "boolean", labelKey: "tableManage.retype.boolean" },
 ];
 
+function typesFor(p: PreviewData): Record<string, PreviewColumn["type"]> {
+  // "unknown" (an entirely empty column) isn't a selectable option below —
+  // same exclusion retypeColumn applies, since it's never a meaningful
+  // target, only something a column starts as. Defaults to text, the
+  // always-safe choice.
+  return Object.fromEntries(p.columns.map((c) => [c.name, c.type === "unknown" ? "text" : c.type]));
+}
+
+function dateOrdersFor(p: PreviewData): Record<string, "mdy" | "dmy"> {
+  return Object.fromEntries(p.columns.filter((c) => c.type === "date").map((c) => [c.name, c.dateOrder ?? "mdy"]));
+}
+
 function UploadPreviewDialog({
-  file, preview: initialPreview, onClose, onCreated,
+  uploadId, preview: initialPreview, onClose, onConfirm, initialTarget = "table", fileLabel,
 }: {
-  file: File;
+  uploadId: string;
   preview: PreviewData;
+  /** Where the previous file of a batch went — this one starts there too. */
+  initialTarget?: "table" | StandardTarget;
+  /** The file's name (and its place in a batch), shown under the heading. */
+  fileLabel?: string;
   onClose: () => void;
-  onCreated: () => void | Promise<void>;
+  onConfirm: (req: ImportRequest) => Promise<void>;
 }) {
   const { t } = useT();
   const [preview, setPreview] = useState(initialPreview);
   const [switching, setSwitching] = useState(false);
   const [name, setName] = useState(preview.suggestedName);
-  const [types, setTypes] = useState<Record<string, PreviewColumn["type"]>>(
-    // "unknown" (an entirely empty column) isn't a selectable option below —
-    // same exclusion retypeColumn applies, since it's never a meaningful
-    // target, only something a column starts as. Defaults to text, the
-    // always-safe choice.
-    () => Object.fromEntries(preview.columns.map((c) => [c.name, c.type === "unknown" ? "text" : c.type])),
-  );
-  const [dateOrders, setDateOrders] = useState<Record<string, "mdy" | "dmy">>(
-    () => Object.fromEntries(
-      preview.columns.filter((c) => c.type === "date").map((c) => [c.name, c.dateOrder ?? "mdy"]),
-    ),
-  );
+  const [types, setTypes] = useState(() => typesFor(preview));
+  const [dateOrders, setDateOrders] = useState(() => dateOrdersFor(preview));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A new table of its own, or rows mapped into a standard dataset.
+  const [target, setTarget] = useState<"table" | StandardTarget>(initialTarget);
+  const [standard, setStandard] = useState<StandardMappingState>({ mapping: {}, dateOrders: {}, ready: false });
 
   // Re-previews on the server rather than parsing the workbook in the
   // browser: one parser, one set of type-inference rules, so the sheet you
-  // confirm is typed by exactly the code that will import it.
-  async function switchSheet(sheet: string) {
-    if (sheet === preview.sheet) return;
+  // confirm is typed by exactly the code that will import it. A repair
+  // toggle re-previews too — it can change column names as well as values.
+  async function repreview(opts: { sheet?: string; textRepair: TextRepairKind | null }, keepName: boolean) {
     setSwitching(true); setError(null);
     try {
-      const next = await fetchPreview(file, sheet);
+      const next = await fetchStagedPreview(uploadId, opts);
       setPreview(next);
-      setName(next.suggestedName);
-      setTypes(Object.fromEntries(next.columns.map((c) => [c.name, c.type === "unknown" ? "text" : c.type])));
-      setDateOrders(Object.fromEntries(
-        next.columns.filter((c) => c.type === "date").map((c) => [c.name, c.dateOrder ?? "mdy"]),
-      ));
+      if (!keepName) setName(next.suggestedName);
+      setTypes(typesFor(next));
+      setDateOrders(dateOrdersFor(next));
     } catch (e: any) {
       setError(e?.message ?? t("tables.upload.failedFallback"));
     } finally {
@@ -404,39 +685,77 @@ function UploadPreviewDialog({
   async function create() {
     setBusy(true); setError(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (name.trim()) fd.append("name", name.trim());
-      if (preview.sheet) fd.append("sheet", preview.sheet);
-      fd.append("columnTypes", JSON.stringify(types));
-      fd.append("columnDateOrders", JSON.stringify(dateOrders));
-      const r = await fetch("/api/lake/tables", { method: "POST", credentials: "include", body: fd });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? `Server returned ${r.status}`);
-      await onCreated();
+      await onConfirm(target === "table"
+        ? {
+            kind: "table",
+            name: name.trim(),
+            sheet: preview.sheet,
+            columnTypes: types,
+            columnDateOrders: dateOrders,
+            textRepair: preview.textRepair.applied,
+          }
+        : {
+            kind: "standard",
+            dataset: target,
+            mapping: standard.mapping,
+            dateOrders: standard.dateOrders,
+            sheet: preview.sheet,
+            textRepair: preview.textRepair.applied,
+          });
     } catch (e: any) {
       setError(e?.message ?? t("tables.upload.failedFallback"));
-    } finally {
       setBusy(false);
     }
   }
 
+  const rows = (preview.rowCountIsEstimate ? "≈" : "") + preview.rowCount.toLocaleString();
+
   return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogIcon variant="primary"><Eye className="h-4 w-4" /></DialogIcon>
           <div>
             <DialogTitle>{t("tables.preview.heading")}</DialogTitle>
             <DialogDescription>
-              {t("tables.preview.subtext")
-                .replace("{rows}", preview.rowCount.toLocaleString())
+              {fileLabel && <span className="block font-mono text-[11px] text-foreground">{fileLabel}</span>}
+              {(target === "table" ? t("tables.preview.subtext") : t("tables.import.mapping.subtext"))
+                .replace("{rows}", rows)
                 .replace("{cols}", String(preview.columns.length))}
             </DialogDescription>
           </div>
         </DialogHeader>
 
         <DialogBody className="space-y-3">
+          {preview.hitsExcelRowLimit && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              <div>
+                <p className="font-semibold">{t("tables.preview.rowLimitTitle")}</p>
+                <p className="mt-0.5 text-muted-foreground">{t("tables.preview.rowLimitBody")}</p>
+              </div>
+            </div>
+          )}
+
+          {preview.textRepair.detected && (
+            <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+              <p className="font-semibold">{t("tables.preview.textRepairTitle")}</p>
+              <p className="mt-0.5 text-muted-foreground">{t("tables.preview.textRepairBody")}</p>
+              <label className="mt-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={preview.textRepair.applied != null}
+                  disabled={busy || switching}
+                  onChange={(e) => void repreview(
+                    { sheet: preview.sheet ?? undefined, textRepair: e.target.checked ? preview.textRepair.detected : null },
+                    true,
+                  )}
+                />
+                <span className="font-medium">{t("tables.preview.textRepairToggle")}</span>
+              </label>
+            </div>
+          )}
+
           {preview.sheets.length > 1 && (
             <div className="rounded-md border border-border bg-muted/30 p-3">
               <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
@@ -444,7 +763,7 @@ function UploadPreviewDialog({
               </label>
               <Select
                 value={preview.sheet ?? undefined}
-                onValueChange={(v) => void switchSheet(v)}
+                onValueChange={(v) => { if (v !== preview.sheet) void repreview({ sheet: v, textRepair: preview.textRepair.applied }, false); }}
                 disabled={busy || switching}
               >
                 <SelectTrigger className="h-8 w-full text-xs">
@@ -464,6 +783,42 @@ function UploadPreviewDialog({
 
           <div>
             <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+              {t("tables.import.target")}
+            </label>
+            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={t("tables.import.target")}>
+              {(["table", "sales_lines", "inventory"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  role="radio"
+                  aria-checked={target === k}
+                  disabled={busy || switching}
+                  onClick={() => setTarget(k)}
+                  className={
+                    "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 " +
+                    (target === k ? "border-primary bg-primary-soft text-primary" : "border-border text-muted-foreground hover:bg-muted")
+                  }
+                >
+                  {t(k === "table" ? "tables.import.target.new" : `tables.import.target.${k}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {target !== "table" ? (
+            <StandardMappingPanel
+              key={`${target}:${preview.sheet ?? ""}:${preview.textRepair.applied ?? ""}`}
+              uploadId={uploadId}
+              dataset={target}
+              sheet={preview.sheet}
+              textRepair={preview.textRepair.applied}
+              disabled={busy || switching}
+              onChange={setStandard}
+            />
+          ) : (
+          <>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
               {t("tables.upload.namePlaceholder")}
             </label>
             <input
@@ -476,7 +831,7 @@ function UploadPreviewDialog({
 
           <div className={"max-h-[45vh] overflow-y-auto rounded-md border border-border transition-opacity " + (switching ? "opacity-40" : "")}>
             <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-muted/60 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <thead className="sticky top-0 z-10 bg-muted text-[10px] uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">{t("tableDetail.colHeaderColumn")}</th>
                   <th className="px-3 py-2 text-left font-medium">{t("tableDetail.colHeaderType")}</th>
@@ -514,7 +869,7 @@ function UploadPreviewDialog({
                         />
                       )}
                     </td>
-                    <td className="px-3 py-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                    <td className="max-w-[16rem] truncate px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
                       {c.sample == null ? <span className="italic">{t("tableDetail.nullLabel")}</span> : String(c.sample).slice(0, 40)}
                     </td>
                   </tr>
@@ -522,6 +877,8 @@ function UploadPreviewDialog({
               </tbody>
             </table>
           </div>
+          </>
+          )}
 
           {error && (
             <div className="flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -543,11 +900,11 @@ function UploadPreviewDialog({
           <button
             type="button"
             onClick={create}
-            disabled={busy || switching || !name.trim()}
+            disabled={busy || switching || (target === "table" ? !name.trim() : !standard.ready)}
             className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-            {t("tables.preview.createButton")}
+            {t(target === "table" ? "tables.preview.createButton" : "tables.import.mapping.importButton")}
           </button>
         </DialogFooter>
       </DialogContent>
@@ -768,11 +1125,11 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
           >
             {row.name}
           </Link>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-            <span>{t(refineManualOrigin(row.sourceKind, row.sourceConfig)?.labelKey ?? SOURCE_LABEL_KEYS[row.sourceKind])}</span>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span className="whitespace-nowrap">{t(refineManualOrigin(row.sourceKind, row.sourceConfig)?.labelKey ?? SOURCE_LABEL_KEYS[row.sourceKind])}</span>
             {row.freshnessIssue && (
               <span
-                className="inline-flex items-center gap-0.5 normal-case tracking-normal text-destructive"
+                className="inline-flex items-center gap-0.5 whitespace-nowrap normal-case tracking-normal text-destructive"
                 title={t("tables.card.freshnessIssueTitle").replace("{error}", row.freshnessIssue.error)}
               >
                 <AlertTriangle className="h-2.5 w-2.5" />
@@ -780,11 +1137,21 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
               </span>
             )}
             <span>·</span>
-            <span>
+            <span className="whitespace-nowrap">
               {t("tables.card.colsLabel")
                 .replace("{n}", String(row.schema.length))
                 .replace("{plural}", row.schema.length === 1 ? "" : "s")}
             </span>
+            {!!row.usedInReports && (
+              <>
+                <span>·</span>
+                <span className="whitespace-nowrap">
+                  {t("tables.card.usedInReports")
+                    .replace("{n}", String(row.usedInReports))
+                    .replace("{plural}", row.usedInReports === 1 ? "" : "s")}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">

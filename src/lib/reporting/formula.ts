@@ -220,6 +220,103 @@ function makeParser(): Parser {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Scalar formulas — What-if driver models
+// ---------------------------------------------------------------------------
+
+/**
+ * The same sandboxed grammar, narrowed for What-if outputs, which must be a
+ * pure function of their named inputs: no member access, no column
+ * aggregates or string helpers, and none of the parser's own array or
+ * non-deterministic functions. Disabling the `random` operator option does
+ * NOT remove the `random()` function (verified against expr-eval-fork
+ * 3.0.3), so the parser's function table is stripped to an allowlist here
+ * rather than trusted to its options.
+ */
+export const SCALAR_FORMULA_MAX_LENGTH = 300;
+
+const SCALAR_PARSER_FUNCTIONS = new Set(["min", "max", "pow", "hypot", "atan2"]);
+
+const SCALAR_HELPERS: Record<string, unknown> = {
+  ...MATH_HELPERS,
+  ...LOGIC_HELPERS,
+  MIN: (...xs: number[]) => Math.min(...xs),
+  MAX: (...xs: number[]) => Math.max(...xs),
+};
+
+/** Function names a scalar formula may call; everything else it names must be a declared variable. */
+export const SCALAR_FUNCTION_NAMES: ReadonlySet<string> = new Set([
+  ...Object.keys(SCALAR_HELPERS),
+  ...SCALAR_PARSER_FUNCTIONS,
+]);
+
+/**
+ * Words a variable must not be named, compared lower-cased. The parser reads
+ * these as operators, functions or constants before it ever treats a word as
+ * a variable — a driver called `round` or `not` would silently become an
+ * operator, one called `e` or `pi` a constant.
+ */
+export const SCALAR_RESERVED_NAMES: ReadonlySet<string> = (() => {
+  const p = new Parser() as any;
+  const words = [
+    ...Object.keys(p.unaryOps ?? {}),
+    ...Object.keys(p.binaryOps ?? {}),
+    ...Object.keys(p.ternaryOps ?? {}),
+    ...Object.keys(p.functions ?? {}),
+    ...Object.keys(p.consts ?? {}),
+    ...Object.keys(SCALAR_HELPERS),
+    ...Object.keys(STRING_HELPERS),
+    "and", "or", "not", "in", "true", "false", "e", "pi",
+  ];
+  return new Set(words.filter((w) => /^[a-z]/i.test(w)).map((w) => w.toLowerCase()));
+})();
+
+function makeScalarParser(): Parser {
+  const p = new Parser({
+    allowMemberAccess: false,
+    operators: {
+      add: true, subtract: true, multiply: true, divide: true,
+      remainder: true, power: true,
+      logical: true, comparison: true, conditional: true,
+      assignment: false, fndef: false, in: false,
+      concatenate: false, factorial: false, length: false, random: false,
+    } as any,
+  });
+  const fns = (p as any).functions as Record<string, unknown>;
+  for (const name of Object.keys(fns)) {
+    if (!SCALAR_PARSER_FUNCTIONS.has(name)) delete fns[name];
+  }
+  return p;
+}
+
+/** Compile a What-if formula. Throws on an empty, over-long or unparsable formula. */
+export function compileScalarFormula(formula: string): Expression {
+  const src = formula.trim().replace(/^=+/, "");
+  if (src === "") throw new Error("Formula is empty");
+  if (src.length > SCALAR_FORMULA_MAX_LENGTH) {
+    throw new Error(`Formula is longer than ${SCALAR_FORMULA_MAX_LENGTH} characters`);
+  }
+  return makeScalarParser().parse(src);
+}
+
+/**
+ * Evaluate a compiled scalar formula against named numbers. Returns null for
+ * anything that isn't a finite number — divide-by-zero, NaN, a name with no
+ * value — so callers show "unavailable" rather than a misleading 0.
+ */
+export function evaluateScalar(expr: Expression, vars: Record<string, number>): number | null {
+  try {
+    const target = (expr as any).functions ?? ((expr as any).functions = {});
+    Object.assign(target, SCALAR_HELPERS);
+    const v = expr.evaluate({ ...vars });
+    if (typeof v === "boolean") return v ? 1 : 0;
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    return Object.is(v, -0) ? 0 : v;
+  } catch {
+    return null;
+  }
+}
+
 function normalize(v: unknown): FormulaResult {
   if (v === null || v === undefined) return null;
   if (typeof v === "number") {

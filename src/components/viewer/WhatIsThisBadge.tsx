@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { ShieldCheck, MousePointerClick, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * Floating bottom-right "What is this?" badge for the report viewer.
@@ -22,28 +23,25 @@ const STORAGE_KEY = "curf-explainer-dismissed-v1";
 const TIPS = [
   {
     icon: ShieldCheck,
-    title: "Every number, provable",
-    body: "Hover any KPI, chart, or table to see the SHA-256 fingerprint of the underlying query and result. Time-travel snapshots let you replay any past run byte-for-byte.",
+    key: "proof",
   },
   {
     icon: MousePointerClick,
-    title: "Click anything to drill",
-    body: "Charts and maps with a CLICK TO DRILL chip open a slide-out panel showing the underlying rows behind the aggregate. CSV export included.",
+    key: "drill",
   },
   {
     icon: SlidersHorizontal,
-    title: "Filter narrows everything",
-    body: "Use the date range, channel, and search filters at the top. Every block re-flows in lockstep — and the URL updates so you can share the filtered view.",
+    key: "filter",
   },
   {
     icon: Sparkles,
-    title: "Generate from a prompt",
-    body: "New report? Click the Generate button on the catalog page. Describe what you want in plain English, click a starter card to skip typing, and get a working dashboard in ~25 seconds.",
+    key: "generate",
   },
 ] as const;
 
 
 export function WhatIsThisBadge() {
+  const { t } = useT();
   // Three-state local model:
   //   "loading"   - first paint, before we've checked localStorage
   //   "dismissed" - user clicked "Got it" previously, never show again
@@ -83,10 +81,10 @@ export function WhatIsThisBadge() {
         className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl"
         aria-expanded={open}
         aria-controls="curf-explainer-panel"
-        title="What can I do here?"
+        title={t("explainer.pillTitle")}
       >
         <Sparkles className="h-3.5 w-3.5" />
-        <span>What is this?</span>
+        <span>{t("explainer.pill")}</span>
       </button>
 
       {/* Expanded explainer panel. */}
@@ -95,7 +93,7 @@ export function WhatIsThisBadge() {
           {/* Soft backdrop — clicking outside closes the panel without dismissing forever. */}
           <button
             type="button"
-            aria-label="Close explainer"
+            aria-label={t("explainer.close")}
             onClick={() => setOpen(false)}
             className="fixed inset-0 z-40 cursor-default bg-black/10 backdrop-blur-[1px]"
           />
@@ -109,17 +107,17 @@ export function WhatIsThisBadge() {
               <div>
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
                   <Sparkles className="h-3 w-3" />
-                  <span>Welcome to Curf</span>
+                  <span>{t("explainer.welcome")}</span>
                 </div>
                 <h3 id="curf-explainer-title" className="mt-0.5 text-sm font-semibold text-foreground">
-                  Four things to try on this page
+                  {t("explainer.heading")}
                 </h3>
               </div>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
                 className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Close"
+                aria-label={t("explainer.close")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -129,16 +127,16 @@ export function WhatIsThisBadge() {
               {TIPS.map((tip, i) => {
                 const Icon = tip.icon;
                 return (
-                  <li key={tip.title} className="flex items-start gap-2.5">
+                  <li key={tip.key} className="flex items-start gap-2.5">
                     <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground`}>
                       <Icon className="h-3.5 w-3.5" />
                     </span>
                     <div className="min-w-0">
                       <div className="text-[12px] font-medium text-foreground">
-                        <span className="text-muted-foreground/70">{i + 1}.</span> {tip.title}
+                        <span className="text-muted-foreground/70">{i + 1}.</span> {t(`explainer.${tip.key}.title`)}
                       </div>
                       <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                        {tip.body}
+                        {t(`explainer.${tip.key}.body`)}
                       </div>
                     </div>
                   </li>
@@ -148,14 +146,14 @@ export function WhatIsThisBadge() {
 
             <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
               <span className="text-[10px] text-muted-foreground/80">
-                You can find this any time in the bottom-right.
+                {t("explainer.findAgain")}
               </span>
               <button
                 type="button"
                 onClick={dismissForever}
                 className="rounded-md bg-foreground px-3 py-1.5 text-[11px] font-medium text-background transition-opacity hover:opacity-90"
               >
-                Got it, hide
+                {t("explainer.hide")}
               </button>
             </div>
           </div>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser, tenantWhere, type CurfSessionUser } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { featureGate } from "@/lib/featureGate";
 
 async function adminGuard(req?: NextRequest): Promise<{ user: CurfSessionUser } | { error: NextResponse }> {
   const user = await requireUser(req);
@@ -25,6 +26,12 @@ export async function POST(req: NextRequest) {
   const guard = await adminGuard(req);
   if ("error" in guard) return guard.error;
   const { user } = guard;
+  // Custom roles are the gov.rbac capability — declared in FEATURE_TIERS
+  // since the feature shipped, read by nothing until now. Only creation is
+  // gated: a tenant that downgrades keeps listing and deleting the roles it
+  // already has, the same way a downgraded report stays readable.
+  const tierBlock = await featureGate(user, "gov.rbac");
+  if (tierBlock) return tierBlock;
   const body = await req.json().catch(() => null) as { slug?: string; label?: string; description?: string } | null;
   if (!body?.slug || !body?.label) {
     return NextResponse.json({ error: "slug and label are required" }, { status: 400 });

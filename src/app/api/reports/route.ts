@@ -4,18 +4,13 @@ import { emptyReport } from "@/lib/reporting/schema";
 import { requireUser, reportWhere, blockScopedApiKey } from "@/lib/auth";
 import { withTenantContext } from "@/lib/rls";
 import { recordAudit } from "@/lib/audit";
+import { appBase } from "@/lib/http/appBase";
 import { emitWebhook } from "@/lib/webhooks";
 import { requireReportQuota, QuotaBlockedError } from "@/lib/billing";
 import { toSafeTableName } from "@/lib/lake/storage";
 import crypto from "node:crypto";
 import { canBuild } from "@/lib/roles";
-
-function appBase(req: NextRequest): string {
-  const proto = req.headers.get("x-forwarded-proto");
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-  if (proto && host) return `${proto}://${host}`;
-  return process.env.NEXTAUTH_URL ?? new URL(req.url).origin;
-}
+import { ensureLakeDataSource } from "@/lib/lake/lakeDataSource";
 
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
@@ -131,18 +126,9 @@ async function seedReportFromLakeTable(
   });
   if (!lakeRow) throw new Error(`Lake table "${rawTableName}" not found`);
 
-  // 2. Get-or-create the per-tenant Curf Tables DataSource. Same upsert as
-  //    the lake table create path — idempotent.
-  const lakeDs = await prisma.dataSource.upsert({
-    where: { tenantId_name: { tenantId: user.tenantId, name: "Curf Tables" } },
-    update: {},
-    create: {
-      tenantId: user.tenantId,
-      name: "Curf Tables",
-      kind: "lake",
-      connection: "lake://" + user.tenantId,
-    },
-  });
+  // 2. Get-or-create the per-tenant Curf Tables DataSource, by kind — the same
+  //    call as the lake table create path — idempotent.
+  const lakeDs = await ensureLakeDataSource(user.tenantId);
 
   // 3. Synthesise the query + block. Use the on-disk safe table name in
   //    the SQL since the runner queries against the actual SQLite table.

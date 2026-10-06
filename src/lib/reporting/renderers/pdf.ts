@@ -3,8 +3,9 @@
  * with ?print=1 and prints to PDF. This is why designer + viewer share the
  * same <ReportDocument>: what you see is exactly what's printed.
  */
-import puppeteer from "puppeteer";
-import { internalBase } from "@/lib/http/appBase";
+import { withBrowserPage } from "@/lib/reporting/renderers/headlessBrowser";
+import { openReportViewer } from "@/lib/reporting/renderers/reportViewerPage";
+import type { RunViewer } from "@/lib/reporting/runner";
 
 const PAGE_SIZE_MAP: Record<string, string> = {
   A4: "A4",
@@ -14,6 +15,30 @@ const PAGE_SIZE_MAP: Record<string, string> = {
 
 export type PdfOptions = {
   reportId: string;
+  /**
+   * Owner of the report. Required: the viewer page takes the tenant it
+   * scopes by from the render token minted from this, so a caller that
+   * cannot name the tenant has no business rendering the report. The cron
+   * and any API-key caller have no user cookie to forward, and this is the
+   * only identity they carry.
+   */
+  tenantId: string;
+  /**
+   * Who the PDF renders as: the caller (lib/reporting/exportCaller.ts
+   * exportViewer()) or a delivery's creator (deliveryViewer()). Required
+   * for the same reason as tenantId: an API key or the cron has no cookie,
+   * and the page applies the data-source ACL and lake redaction for exactly
+   * this identity.
+   */
+  viewer: RunViewer;
+  /**
+   * Show the role-gated blocks `viewer` may see: set by an on-demand export,
+   * so an API key's PDF has the blocks its XLSX/DOCX/CSV have. A scheduled
+   * delivery leaves it off, and its blocks filter as a viewer with no roles
+   * whoever created it (see lib/reporting/exportCaller.ts). A forwarded
+   * session decides blocks either way.
+   */
+  blocksAsViewer?: boolean;
   params: Record<string, unknown>;
   pageSize?: string;
   landscape?: boolean;
@@ -25,46 +50,13 @@ export type PdfOptions = {
    *  who asked for it — this closes that gap for report content carrying
    *  i18n overrides (see lib/reporting/localize.ts). */
   locale?: string;
+  /** The requesting user's rd_era cookie (Thai years). A report's own dateEra still wins. */
+  era?: "be" | "ce";
 };
 
 export async function renderPdf(opts: PdfOptions): Promise<Buffer> {
-  const baseUrl = internalBase();
-  const url = new URL(`/reports/${opts.reportId}`, baseUrl);
-  url.searchParams.set("print", "1");
-  for (const [k, v] of Object.entries(opts.params ?? {})) {
-    if (v != null) url.searchParams.set(`p.${k}`, String(v));
-  }
-
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-  try {
-    const page = await browser.newPage();
-    if (opts.authCookie) {
-      // Forward the caller's session so the viewer doesn't bounce to /login.
-      const [name, value] = opts.authCookie.split("=", 2);
-      if (name && value) {
-        await page.setCookie({
-          name,
-          value: decodeURIComponent(value),
-          domain: new URL(baseUrl).hostname,
-          path: "/",
-        });
-      }
-    }
-    if (opts.locale) {
-      await page.setCookie({
-        name: "rd_locale",
-        value: opts.locale,
-        domain: new URL(baseUrl).hostname,
-        path: "/",
-      });
-    }
-    await page.goto(url.toString(), { waitUntil: "networkidle0", timeout: 60_000 });
-    // Webfonts are `display: swap` — the first paint can be in the fallback
-    // face, and page.pdf() has no font barrier of its own. Wait for them.
-    await page.evaluate(() => document.fonts.ready);
+  return withBrowserPage("pdf", async (page) => {
+    await openReportViewer(page, "PDF export", opts);
     // Allow Recharts to finish laying out.
     await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
     const pdf = await page.pdf({
@@ -74,7 +66,5 @@ export async function renderPdf(opts: PdfOptions): Promise<Buffer> {
       margin: { top: "0", right: "0", bottom: "0", left: "0" },
     });
     return Buffer.from(pdf);
-  } finally {
-    await browser.close();
-  }
+  });
 }

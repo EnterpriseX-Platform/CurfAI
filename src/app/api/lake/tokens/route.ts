@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { blockScopedApiKey, requireUser, requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +21,8 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   const items = await prisma.lakeIngestToken.findMany({
     where: { tenantId: user.tenantId },
     orderBy: { createdAt: "desc" },
@@ -38,8 +40,8 @@ const CreateSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAdminOrEditor(req);
+  if (user instanceof NextResponse) return user;
 
   const body = await req.json().catch(() => ({}));
   const parsed = CreateSchema.safeParse(body);

@@ -78,6 +78,44 @@ describe("reasoning-budget retry", () => {
     });
   });
 
+  describe("design calls that think through every token", () => {
+    // Report/plan design keeps thinking on (it isn't a fast kind), so a
+    // model that can't finish within the budget gets one more try without it.
+    const design = (maxTokens: number) => ({ ...req(maxTokens), kind: "report.generate" });
+
+    it("asks once more with thinking off when the budget was already at the ceiling", () => {
+      call.mockResolvedValueOnce(failed("REASONING_BUDGET_EXHAUSTED"))
+          .mockResolvedValueOnce(ok("{\"blocks\":[]}"));
+      return callLLM(design(4000) as any).then((r) => {
+        expect(r.status).toBe("ok");
+        expect(call).toHaveBeenCalledTimes(2);
+        expect(call.mock.calls[0][0].reasoning).toBeUndefined();
+        expect(call.mock.calls[1][0]).toMatchObject({ reasoning: "off", maxTokens: 4000 });
+      });
+    });
+
+    it("widens first, and only then turns thinking off", () => {
+      call.mockResolvedValueOnce(failed("REASONING_BUDGET_EXHAUSTED"))
+          .mockResolvedValueOnce(failed("REASONING_BUDGET_EXHAUSTED"))
+          .mockResolvedValueOnce(ok("done"));
+      return callLLM(design(500) as any).then((r) => {
+        expect(r.text).toBe("done");
+        expect(call.mock.calls.map((c) => [c[0].maxTokens, c[0].reasoning])).toEqual([
+          [500, undefined], [4000, undefined], [4000, "off"],
+        ]);
+      });
+    });
+
+    it("stops there — a model that fails with thinking off too gets no fourth call", () => {
+      call.mockResolvedValue(failed("REASONING_BUDGET_EXHAUSTED"));
+      return callLLM(design(8000) as any).then((r) => {
+        expect(r.status).toBe("failed");
+        expect(call).toHaveBeenCalledTimes(2);
+        expect(call.mock.calls[1][0]).toMatchObject({ reasoning: "off", maxTokens: 8000 });
+      });
+    });
+  });
+
   it("leaves a successful first call alone", () => {
     call.mockResolvedValueOnce(ok("fine"));
     return callLLM(req(120) as any).then((r) => {

@@ -4,9 +4,12 @@
  * could reuse it. These pin its three format paths since it now has two
  * real callers instead of zero test coverage.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import ExcelJS from "exceljs";
-import { parseUpload, parseUploadWithMeta } from "./parseFile";
+import { openUploadRows, parseUpload, parseUploadWithMeta } from "./parseFile";
 
 describe("parseUpload", () => {
   it("parses CSV with a header row", async () => {
@@ -70,6 +73,19 @@ describe("parseUpload", () => {
     // A quoted field with an unterminated quote is Papa's canonical parse-error case.
     const buf = Buffer.from('name,amount\n"Acme,100\n');
     await expect(parseUpload(buf, "orders.csv")).rejects.toThrow(/CSV parse error/);
+  });
+
+  it("parses a single-column CSV instead of rejecting it", async () => {
+    // Found live via a Tables 2.0 edge-case pass: with no delimiter
+    // character anywhere in the file (a perfectly ordinary one-value-per-
+    // line CSV — a list of emails, IDs, tags), Papa's auto-detector can't
+    // tell "," from "\t" from ";" and reports a non-fatal
+    // "UndetectableDelimiter" entry in `errors` alongside CORRECT `data`
+    // (it still defaults to ","). Treating every `errors` entry as fatal
+    // rejected every single-column upload outright.
+    const buf = Buffer.from("id\n1\n2\n3\n");
+    const rows = await parseUpload(buf, "ids.csv");
+    expect(rows).toEqual([{ id: "1" }, { id: "2" }, { id: "3" }]);
   });
 });
 
@@ -136,5 +152,77 @@ describe("parseUploadWithMeta — workbook sheets", () => {
     const json = await parseUploadWithMeta(Buffer.from('[{"a":1}]'), "x.json");
     expect(json.sheets).toEqual([]);
     expect(json.sheet).toBeNull();
+  });
+});
+
+/**
+ * openUploadRows — the streaming path a staged large upload reads through.
+ * Same header and error rules as parseUpload, from a file on disk, a row at
+ * a time.
+ */
+describe("openUploadRows", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "curf-parse-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function file(name: string, body: string | Buffer): string {
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, body);
+    return p;
+  }
+
+  async function collect(p: string, name: string, opts?: { sheet?: string }) {
+    const src = await openUploadRows(p, name, opts);
+    const rows: Array<Record<string, unknown>> = [];
+    for await (const r of src.rows) rows.push(r);
+    return { src, rows };
+  }
+
+  it("streams a CSV the way parseUpload reads it, byte-order mark and blank headers included", async () => {
+    const p = file("a.csv", "﻿region,,amount\nNorth,x,100\nSouth,y,200\n");
+    const { src, rows } = await collect(p, "a.csv");
+    expect(rows).toEqual([
+      { region: "North", column_2: "x", amount: "100" },
+      { region: "South", column_2: "y", amount: "200" },
+    ]);
+    expect(src.sheets).toEqual([]);
+    expect(await src.expectedRows()).toBe(2);
+  });
+
+  it("keeps up with a CSV far bigger than its read-ahead buffer", async () => {
+    const lines = ["id,label"];
+    for (let i = 0; i < 25_000; i++) lines.push(`${i},row ${i}`);
+    const p = file("big.csv", lines.join("\n"));
+    const { src, rows } = await collect(p, "big.csv");
+    expect(rows).toHaveLength(25_000);
+    expect(rows[24_999]).toEqual({ id: "24999", label: "row 24999" });
+    expect(await src.expectedRows()).toBe(25_000);
+  });
+
+  it("surfaces a CSV parse error instead of importing around it", async () => {
+    const p = file("bad.csv", 'name,amount\n"Acme,100\n');
+    await expect(collect(p, "bad.csv")).rejects.toThrow(/CSV parse error/);
+  });
+
+  it("streams the chosen sheet of a workbook and reports its declared size", async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Q1").addRows([["v"], [1]]);
+    wb.addWorksheet("Q2").addRows([["v"], [2], [3]]);
+    const p = file("book.xlsx", Buffer.from(await wb.xlsx.writeBuffer()));
+    const { src, rows } = await collect(p, "book.xlsx", { sheet: "Q2" });
+    expect(src.sheets).toEqual(["Q1", "Q2"]);
+    expect(src.sheet).toBe("Q2");
+    expect(rows).toEqual([{ v: 2 }, { v: 3 }]);
+    expect(await src.expectedRows()).toBe(2);
+  });
+
+  it("reads a JSON file whole", async () => {
+    const p = file("rows.json", JSON.stringify({ items: [{ a: 1 }, { a: 2 }] }));
+    const { rows } = await collect(p, "rows.json");
+    expect(rows).toEqual([{ a: 1 }, { a: 2 }]);
+  });
+
+  it("refuses a file type it can't read", async () => {
+    const p = file("notes.docx", "x");
+    await expect(openUploadRows(p, "notes.docx")).rejects.toThrow(/can't be imported/);
   });
 });

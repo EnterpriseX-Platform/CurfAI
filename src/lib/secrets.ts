@@ -19,9 +19,19 @@ import { prisma } from "@/lib/db";
 
 const SALT = "curf-secrets-v1";
 
+let cachedKey: { passphrase: string; key: Buffer } | null = null;
+
 function deriveKey(): Buffer {
-  const passphrase = process.env.CURF_SECRET_KEY ?? "curf-dev-secret-please-override-in-prod";
-  return scryptSync(passphrase, SALT, 32);
+  const passphrase = process.env.CURF_SECRET_KEY;
+  // The dev passphrase is public; stored credentials encrypted with it are
+  // readable by anyone. Fail closed in production.
+  if (!passphrase && process.env.NODE_ENV === "production") throw new Error("CURF_SECRET_KEY is not set");
+  const p = passphrase || "curf-dev-secret-please-override-in-prod";
+  // scrypt is deliberately slow (~60 ms of blocking CPU per call), and this
+  // runs on every credential decrypt in a report run. Derive once per
+  // passphrase instead of per call.
+  if (cachedKey?.passphrase !== p) cachedKey = { passphrase: p, key: scryptSync(p, SALT, 32) };
+  return cachedKey.key;
 }
 
 function b64url(buf: Buffer): string {

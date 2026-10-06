@@ -5,15 +5,14 @@
  * data source is wired yet — the user fills in `queryId` + field names from
  * the property panel after dropping.
  *
- * Adding a new template = append an entry below. No registry plumbing — the
- * palette reads this list directly.
+ * Adding a new template = append an entry below, plus its blockTemplate.<id>
+ * (name) and blockTemplate.<id>.desc keys in lib/i18n/dict.ts. No registry
+ * plumbing — the palette reads this list directly.
  */
 import type { BlockTemplateEntry } from "@/lib/reporting/store";
 
 export type BlockTemplate = {
   id: string;
-  label: string;
-  description: string;
   /** Visual hint icon name from lucide-react (resolved in the palette). */
   icon: "DollarSign" | "TrendingUp" | "Table" | "PieChart" | "MessageSquareWarning" | "LayoutDashboard" | "FileText" | "Award";
   blocks: BlockTemplateEntry[];
@@ -23,8 +22,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   // ---------- Single-block presets ----------
   {
     id: "kpi-revenue",
-    label: "Revenue KPI",
-    description: "Currency-formatted single number with compact $1.2M display.",
     icon: "DollarSign",
     blocks: [
       {
@@ -41,8 +38,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "kpi-percent",
-    label: "Percent KPI",
-    description: "Percentage metric — wire to any 0..100 numeric field.",
     icon: "TrendingUp",
     blocks: [
       {
@@ -59,8 +54,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "trend-chart",
-    label: "Trend chart",
-    description: "Area chart with a single y-series — good for time-series.",
     icon: "TrendingUp",
     blocks: [
       {
@@ -80,8 +73,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "category-bar",
-    label: "Category bar chart",
-    description: "Bar chart by category — wire xField to your dimension.",
     icon: "PieChart",
     blocks: [
       {
@@ -101,8 +92,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "top-10-table",
-    label: "Top 10 table",
-    description: "Compact table preset — 10 rows, totals row enabled.",
     icon: "Table",
     blocks: [
       {
@@ -122,8 +111,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "callout-warning",
-    label: "Warning callout",
-    description: "Amber callout — for caveats, anomalies, methodology notes.",
     icon: "MessageSquareWarning",
     blocks: [
       {
@@ -141,8 +128,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   // ---------- Multi-block layouts ----------
   {
     id: "executive-header",
-    label: "Executive header",
-    description: "Title + subtitle text + 3-up KPIs across the top of a page.",
     icon: "LayoutDashboard",
     blocks: [
       {
@@ -169,8 +154,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "kpi-row",
-    label: "KPI row (3-up)",
-    description: "Three side-by-side KPIs — drop in, then wire fields.",
     icon: "Award",
     blocks: [
       {
@@ -192,8 +175,6 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   },
   {
     id: "chart-plus-table",
-    label: "Chart + detail table",
-    description: "Bar chart over a detail table — the staple data-and-rows layout.",
     icon: "FileText",
     blocks: [
       {

@@ -5,7 +5,7 @@
  */
 import { Fragment, useEffect, useState } from "react";
 import { z } from "zod";
-import { Trash2, Copy, LayoutGrid, Settings2, ChevronDown, ShieldCheck } from "lucide-react";
+import { Trash2, Copy, LayoutGrid, Settings2, ChevronDown, ShieldCheck, MousePointerClick } from "lucide-react";
 import { BlockConfigSchemas } from "@/lib/reporting/schema";
 import { useDesignerStore } from "@/lib/reporting/store";
 import { Button } from "@/components/ui/button";
@@ -19,15 +19,23 @@ import { ColumnsEditor } from "./ColumnsEditor";
 import { AnnotationsEditor } from "./AnnotationsEditor";
 import { GaugeZonesEditor } from "./GaugeZonesEditor";
 import { ForecastEditor } from "./ForecastEditor";
+import { SeriesLabelsEditor } from "./SeriesLabelsEditor";
+import { DrillEditor } from "./DrillEditor";
+import { DRILLABLE_BLOCKS } from "@/lib/reporting/drill";
+
+/** Edited together in the "When clicked" section (DrillEditor), not as fields of their own. */
+const DRILL_FIELDS = new Set(["drilldown", "drillParam", "drillField"]);
 import { ChartTypeField } from "./ChartTypeField";
 import { BlockGuide } from "./BlockGuide";
 import { InlineTagManager } from "@/components/common/InlineTagManager";
 import type { Dataset } from "@/lib/reporting/interpolate";
 import { eeClient } from "@/ee/client";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 type MetricOpt = { slug: string; label: string };
 
 export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
+  const { t } = useT();
   // Published metrics — offered alongside the report's own queries in the
   // queryId picker (Roadmap Phase 2.3) so binding a KPI to a governed
   // metric is a dropdown pick, not hand-typing "metric:<slug>" into a
@@ -60,15 +68,14 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
             <Settings2 className="h-4 w-4 text-muted-foreground" />
           </div>
-          <p className="text-sm font-medium">No block selected</p>
-          <p className="mt-1 text-xs text-muted-foreground">Click a block on the canvas to edit its properties.</p>
+          <p className="text-sm font-medium">{t("propertyPanel.noSelection")}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t("propertyPanel.noSelectionHint")}</p>
         </div>
       </div>
     );
   }
 
-  const meta = BlockRegistry[block.type];
-  const MetaIcon = meta.icon;
+  const MetaIcon = BlockRegistry[block.type].icon;
   const schema = BlockConfigSchemas[block.type] as z.ZodObject<any>;
   const shape = schema.shape ?? {};
 
@@ -79,14 +86,14 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
             <MetaIcon className="h-3.5 w-3.5" />
           </span>
-          <span className="text-sm font-medium">{meta.label}</span>
+          <span className="text-sm font-medium">{t(`blockType.${block.type}`)}</span>
         </div>
         <div className="flex items-center gap-1">
           <BlockGuide blockType={block.type} />
-          <Button size="icon" variant="ghost" onClick={() => duplicate(block.id)} title="Duplicate">
+          <Button size="icon" variant="ghost" onClick={() => duplicate(block.id)} title={t("action.duplicate")}>
             <Copy className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={() => remove(block.id)} title="Delete">
+          <Button size="icon" variant="ghost" onClick={() => remove(block.id)} title={t("action.delete")}>
             <Trash2 className="h-4 w-4 text-destructive/80" />
           </Button>
         </div>
@@ -94,19 +101,19 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
 
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
         {/* Layout section */}
-        <Section icon={LayoutGrid} label="Layout">
+        <Section icon={LayoutGrid} label={t("propertyPanel.layout")}>
           <div className="grid grid-cols-4 gap-2">
-            <NumberField label="X"      value={block.x} onChange={(v) => updateLayout(block.id, { ...block, x: clamp(v, 0, 11) })} />
-            <NumberField label="Y"      value={block.y} onChange={(v) => updateLayout(block.id, { ...block, y: Math.max(0, v) })} />
-            <NumberField label="Width"  value={block.w} onChange={(v) => updateLayout(block.id, { ...block, w: clamp(v, 1, 12) })} />
-            <NumberField label="Height" value={block.h} onChange={(v) => updateLayout(block.id, { ...block, h: Math.max(1, v) })} />
+            <NumberField label="X" value={block.x} onChange={(v) => updateLayout(block.id, { ...block, x: clamp(v, 0, 11) })} />
+            <NumberField label="Y" value={block.y} onChange={(v) => updateLayout(block.id, { ...block, y: Math.max(0, v) })} />
+            <NumberField label={t("propertyPanel.width")} value={block.w} onChange={(v) => updateLayout(block.id, { ...block, w: clamp(v, 1, 12) })} />
+            <NumberField label={t("propertyPanel.height")} value={block.h} onChange={(v) => updateLayout(block.id, { ...block, h: Math.max(1, v) })} />
           </div>
           <MmReadout block={block} report={report} />
         </Section>
 
-        <Section icon={Settings2} label="Content">
+        <Section icon={Settings2} label={t("propertyPanel.content")}>
           <div className="grid gap-3">
-            {Object.entries(shape).map(([key, field]) => (
+            {Object.entries(shape).filter(([key]) => !DRILL_FIELDS.has(key)).map(([key, field]) => (
               <Fragment key={key}>
                 <Field
                   name={key}
@@ -123,6 +130,17 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
           </div>
         </Section>
 
+        {(DRILLABLE_BLOCKS as readonly string[]).includes(block.type) && (
+          <Section icon={MousePointerClick} label={t("drill.editor.section")}>
+            <DrillEditor
+              blockType={block.type}
+              config={block.config as any}
+              report={report}
+              onChange={(patch) => update(block.id, patch)}
+            />
+          </Section>
+        )}
+
         <VisibilitySection
           value={(block as any).visibleToRoles ?? []}
           onChange={(next) => updateMeta(block.id, { visibleToRoles: next.length === 0 ? undefined : next })}
@@ -138,6 +156,7 @@ function VisibilitySection({
   value: string[];
   onChange: (next: string[]) => void;
 }) {
+  const { t } = useT();
   const [roles, setRoles] = useState<Array<{ slug: string; label: string }>>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -155,18 +174,15 @@ function VisibilitySection({
   }
 
   return (
-    <Section icon={ShieldCheck} label="Visibility (RBAC)">
-      <p className="mb-2 text-xs text-muted-foreground">
-        Gate this block to specific reader roles. Empty = visible to everyone.
-        Admins always see all blocks.
-      </p>
-      {!loaded && <p className="text-xs text-muted-foreground">Loading roles...</p>}
+    <Section icon={ShieldCheck} label={t("propertyPanel.visibility")}>
+      <p className="mb-2 text-xs text-muted-foreground">{t("propertyPanel.visibilityHint")}</p>
+      {!loaded && <p className="text-xs text-muted-foreground">{t("propertyPanel.loadingRoles")}</p>}
       {loaded && (
         <InlineTagManager options={roles} selected={value} onToggle={toggle} onOptionsChange={setRoles} />
       )}
       {value.length > 0 && (
         <p className="mt-2 text-[10px] text-muted-foreground">
-          Showing for: <span className="font-mono">{value.join(", ")}</span>
+          {t("propertyPanel.showingFor")} <span className="font-mono">{value.join(", ")}</span>
         </p>
       )}
     </Section>
@@ -201,18 +217,21 @@ function Section({
 function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
 
 /**
- * Per-field helper copy for config fields that benefit from a one-liner.
- * Module scope rather than inline in the boolean branch, because number
- * fields want the same treatment (emphasisTop is meaningless without it).
- * Could move into the schema as `.describe(...)` later.
+ * Per-field helper copy for config fields that benefit from a one-liner, as
+ * lib/i18n/dict.ts keys. Module scope rather than inline in the boolean
+ * branch, because number fields want the same treatment (emphasisTop is
+ * meaningless without it).
  */
 const FIELD_HINT: Record<string, string> = {
-  aiCaption: "Asks the AI for a one-line summary under this chart. Business plan.",
-  stacked: "Stack series instead of grouping side-by-side.",
-  showLegend: "Show the colored series labels under the chart.",
-  showDataLabels: "Print each value at the end of its bar/point.",
-  categoricalColor: "Color each bar with a different palette hue. Single-series bar charts only — turns category comparisons from monotone to polychrome.",
-  emphasisTop: "Highlight the first N rows and grey out the rest, so the chart argues a point instead of listing values. Sort the query descending first. Single-series bar and pie only.",
+  aiCaption: "propertyPanel.hint.aiCaption",
+  stacked: "propertyPanel.hint.stacked",
+  sharedYAxis: "propertyPanel.hint.sharedYAxis",
+  showLegend: "propertyPanel.hint.showLegend",
+  showDataLabels: "propertyPanel.hint.showDataLabels",
+  categoricalColor: "propertyPanel.hint.categoricalColor",
+  emphasisTop: "propertyPanel.hint.emphasisTop",
+  plan: "propertyPanel.hint.plan",
+  planField: "propertyPanel.hint.planField",
 };
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
@@ -255,8 +274,9 @@ function Field({
   /** This block's query result rows, for chartType's compatibility check. */
   rows?: Array<Record<string, unknown>>;
 }) {
+  const { t } = useT();
   const inner = unwrap(field);
-  const label = humanize(name);
+  const label = translateOr(t, `blockField.${name}`, humanize(name));
 
   if (name === "columns") {
     return (
@@ -297,6 +317,14 @@ function Field({
       </div>
     );
   }
+  if (name === "seriesLabels") {
+    return (
+      <div className="grid gap-1">
+        <Label>{label}</Label>
+        <SeriesLabelsEditor value={value as any} yFields={(parentConfig?.yFields as string[] | undefined) ?? []} onChange={onChange} />
+      </div>
+    );
+  }
   if (name === "chartType") {
     return (
       <div className="grid gap-1">
@@ -318,10 +346,10 @@ function Field({
       <div className="grid gap-1">
         <Label>{label}</Label>
         <Select value={String(value ?? "")} onValueChange={onChange}>
-          <SelectTrigger><SelectValue placeholder="Select a query" /></SelectTrigger>
+          <SelectTrigger><SelectValue placeholder={t("propertyPanel.selectQuery")} /></SelectTrigger>
           <SelectContent>
             {dataSourceIds.length === 0 && metrics.length === 0 ? (
-              <SelectItem value="__none__" disabled>No queries defined — add one via the Data button</SelectItem>
+              <SelectItem value="__none__" disabled>{t("propertyPanel.noQueries")}</SelectItem>
             ) : (
               <>
                 {dataSourceIds.map((id) => <SelectItem key={id} value={id}>{id}</SelectItem>)}
@@ -334,7 +362,7 @@ function Field({
                   separator primitive to lean on.
                 */}
                 {metrics.map((m) => (
-                  <SelectItem key={`metric:${m.slug}`} value={`metric:${m.slug}`}>★ Metric: {m.label}</SelectItem>
+                  <SelectItem key={`metric:${m.slug}`} value={`metric:${m.slug}`}>{t("propertyPanel.metricOption").replace("{label}", m.label)}</SelectItem>
                 ))}
               </>
             )}
@@ -352,7 +380,7 @@ function Field({
         <Select value={String(value ?? "")} onValueChange={onChange}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            {opts.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+            {opts.map((o) => <SelectItem key={o} value={o}>{translateOr(t, `blockOption.${o}`, o)}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
@@ -363,7 +391,7 @@ function Field({
     // Per-field helper copy for booleans that benefit from a one-liner.
     // We could push this into the schema as `.describe(...)` later, but for
     // now a tiny lookup keeps the UX hint near the UX.
-    const hint = FIELD_HINT[name];
+    const hint = FIELD_HINT[name] && t(FIELD_HINT[name]);
     return (
       <div className="rounded-md border border-border bg-background px-3 py-2">
         <div className="flex items-center justify-between">
@@ -382,7 +410,7 @@ function Field({
   }
 
   if (inner instanceof z.ZodNumber) {
-    const hint = FIELD_HINT[name];
+    const hint = FIELD_HINT[name] && t(FIELD_HINT[name]);
     return (
       <div className="grid gap-1">
         <Label>{label}</Label>
@@ -411,6 +439,7 @@ function Field({
     );
   }
 
+  const stringHint = FIELD_HINT[name] && t(FIELD_HINT[name]);
   return (
     <div className="grid gap-1">
       <Label>{label}</Label>
@@ -418,8 +447,20 @@ function Field({
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value)}
       />
+      {stringHint && <p className="text-[11px] leading-snug text-muted-foreground">{stringHint}</p>}
     </div>
   );
+}
+
+/**
+ * Field labels and option values come from blockField.<name> /
+ * blockOption.<value> in lib/i18n/dict.ts (propertyPanelLabels.test.ts
+ * checks every schema field and enum value has them in all three locales).
+ * The fallback only keeps a field added without its keys readable.
+ */
+function translateOr(t: (key: string) => string, key: string, fallback: string) {
+  const v = t(key);
+  return v === key ? fallback : v;
 }
 
 function humanize(key: string) {

@@ -14,6 +14,7 @@ import { ChevronDown, Sparkles } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 type Snippet = {
   id: string;
@@ -25,12 +26,12 @@ type Snippet = {
 };
 
 export function InsertSnippetButton({
-  kind, onInsert, label = "Insert snippet",
+  kind, onInsert,
 }: {
   kind: "sql" | "rest_path" | "rest_body";
   onInsert: (body: string) => void;
-  label?: string;
 }) {
+  const { t } = useT();
   const [items, setItems] = useState<Snippet[] | null>(null);
   const [loading, setLoading] = useState(false);
   const fetchedRef = useRef(false);
@@ -56,19 +57,19 @@ export function InsertSnippetButton({
           className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Sparkles className="h-3 w-3" />
-          {label}
+          {t("insertSnippet.button")}
           <ChevronDown className="h-3 w-3" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-[60vh] w-[320px] overflow-y-auto">
         {loading && (
-          <div className="px-3 py-2 text-xs text-muted-foreground">Loading…</div>
+          <div className="px-3 py-2 text-xs text-muted-foreground">{t("common.loading")}</div>
         )}
         {items && items.length === 0 && (
           <div className="px-3 py-3 text-xs text-muted-foreground">
-            No saved {kind.replace("_", " ")} snippets yet.
+            {t("insertSnippet.empty").replace("{kind}", t(`insertSnippet.kind.${kind}`))}
             <br />
-            <a href="/admin/snippets" className="mt-2 inline-block text-primary underline">Manage snippets</a>
+            <a href="/admin/snippets" className="mt-2 inline-block text-primary underline">{t("insertSnippet.manage")}</a>
           </div>
         )}
         {items?.map((s) => (

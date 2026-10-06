@@ -1,16 +1,18 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { readSession } from "@/lib/auth";
+import { landingPathFor } from "@/lib/roles";
 import { LandingShell } from "./LandingShell";
 import { TEMPLATES } from "@/lib/templates/registry";
+import { BlockSchema } from "@/lib/reporting/schema";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const session = await getSession();
+  const session = await readSession();
   
-  // Redirect logged-in users to Fast Brief
+  // The one landing decision for signed-in members (login defaults here too).
   if (session) {
-    redirect("/brief");
+    redirect(landingPathFor((session.user as any)?.role));
   }
 
   // Read at request-time from the server env — no NEXT_PUBLIC_ needed, no build-time baking.
@@ -23,6 +25,7 @@ export default async function Home() {
       signedIn={false}
       userName={null}
       docsUrl={docsUrl}
+      blockTypeCount={BlockSchema.options.length}
       teaserTemplates={TEMPLATES.slice(0, 3).map((t) => {
         const built = t.build();
         return {

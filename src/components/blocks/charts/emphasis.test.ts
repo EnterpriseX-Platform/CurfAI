@@ -22,14 +22,17 @@ function fillFor(opts: {
   rowIndex: number;
   isForecastRow?: boolean;
   emphasisTop?: number;
+  emphasisLast?: boolean;
+  rowCount?: number;
   singleSeries?: boolean;
   categorical?: boolean;
 }): string {
-  const { rowIndex, isForecastRow = false, emphasisTop, singleSeries = true, categorical = false } = opts;
+  const { rowIndex, isForecastRow = false, emphasisTop, emphasisLast = false, rowCount = 3, singleSeries = true, categorical = false } = opts;
   const useEmphasis = singleSeries && typeof emphasisTop === "number" && emphasisTop > 0;
+  const useLast = singleSeries && !useEmphasis && emphasisLast;
   const useCategorical = singleSeries && categorical;
   if (isForecastRow) return "FORECAST";
-  if (useEmphasis && rowIndex >= emphasisTop!) return DEEMPHASIS_FILL;
+  if ((useEmphasis && rowIndex >= emphasisTop!) || (useLast && rowIndex < rowCount - 1)) return DEEMPHASIS_FILL;
   if (useCategorical) return `categorical:${rowIndex}`;
   return "SERIES";
 }
@@ -53,6 +56,20 @@ describe("emphasisTop — which rows carry the finding", () => {
     // Colour is already carrying the series there; per-row greying would
     // destroy that mapping rather than add emphasis.
     expect(fillFor({ rowIndex: 4, emphasisTop: 2, singleSeries: false })).toBe("SERIES");
+  });
+});
+
+describe("emphasisLast — the latest period against the ones it follows", () => {
+  it("keeps only the last row in the series colour", () => {
+    // Fiscal 2566, 2567, 2568: the Strategist's chart argues 2568.
+    expect(fillFor({ rowIndex: 0, emphasisLast: true })).toBe(DEEMPHASIS_FILL);
+    expect(fillFor({ rowIndex: 1, emphasisLast: true })).toBe(DEEMPHASIS_FILL);
+    expect(fillFor({ rowIndex: 2, emphasisLast: true })).toBe("SERIES");
+  });
+
+  it("gives way to emphasisTop, and does nothing on multi-series charts", () => {
+    expect(fillFor({ rowIndex: 0, emphasisTop: 1, emphasisLast: true })).toBe("SERIES");
+    expect(fillFor({ rowIndex: 0, emphasisLast: true, singleSeries: false })).toBe("SERIES");
   });
 });
 

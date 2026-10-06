@@ -27,31 +27,33 @@ import {
 import { cn } from "@/lib/utils";
 import type { VariantIconKindT } from "@/lib/reporting/schema";
 import { VARIANT_FG } from "@/components/blocks/VariantIcon";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 type Variant = "success" | "warning" | "danger" | "info" | "neutral";
 
-const VARIANTS: { slug: Variant; label: string; chip: string; ring: string }[] = [
-  { slug: "success", label: "Success", chip: "bg-success/15 text-success ring-success/40", ring: "ring-success" },
-  { slug: "warning", label: "Warning", chip: "bg-warning/15  text-warning  ring-warning/40",  ring: "ring-warning" },
-  { slug: "danger",  label: "Danger",  chip: "bg-destructive/15   text-destructive   ring-destructive/40",   ring: "ring-destructive" },
-  { slug: "info",    label: "Info",    chip: "bg-primary/15 text-primary-ink ring-primary/40", ring: "ring-primary" },
-  { slug: "neutral", label: "Neutral", chip: "bg-muted-foreground/15  text-muted-foreground  ring-faint/40",  ring: "ring-faint" },
+// Chip names are variant.<slug>, icon tooltips variantIcon.<kind>.
+const VARIANTS: { slug: Variant; chip: string; ring: string }[] = [
+  { slug: "success", chip: "bg-success/15 text-success ring-success/40", ring: "ring-success" },
+  { slug: "warning", chip: "bg-warning/15  text-warning  ring-warning/40",  ring: "ring-warning" },
+  { slug: "danger",  chip: "bg-destructive/15   text-destructive   ring-destructive/40",   ring: "ring-destructive" },
+  { slug: "info",    chip: "bg-primary/15 text-primary-ink ring-primary/40", ring: "ring-primary" },
+  { slug: "neutral", chip: "bg-muted-foreground/15  text-muted-foreground  ring-faint/40",  ring: "ring-faint" },
 ];
 
 /** Curated icon set. Order matters — "auto" first, "none" last. */
-const ICON_OPTIONS: { kind: VariantIconKindT; label: string; Icon: LucideIcon }[] = [
-  { kind: "auto",      label: "Auto (match variant)", Icon: Wand2 },
-  { kind: "check",     label: "Check",                Icon: CheckCircle2 },
-  { kind: "warning",   label: "Warning triangle",     Icon: AlertTriangle },
-  { kind: "alert",     label: "Alert / X",            Icon: XCircle },
-  { kind: "info",      label: "Info",                 Icon: Info },
-  { kind: "arrowUp",   label: "Up",                   Icon: ArrowUpRight },
-  { kind: "arrowDown", label: "Down",                 Icon: ArrowDownRight },
-  { kind: "minus",     label: "Neutral / minus",      Icon: MinusCircle },
-  { kind: "star",      label: "Star",                 Icon: Star },
-  { kind: "flag",      label: "Flag",                 Icon: Flag },
-  { kind: "sparkle",   label: "Sparkle",              Icon: Sparkles },
-  { kind: "none",      label: "No icon",              Icon: Ban },
+const ICON_OPTIONS: { kind: VariantIconKindT; Icon: LucideIcon }[] = [
+  { kind: "auto",      Icon: Wand2 },
+  { kind: "check",     Icon: CheckCircle2 },
+  { kind: "warning",   Icon: AlertTriangle },
+  { kind: "alert",     Icon: XCircle },
+  { kind: "info",      Icon: Info },
+  { kind: "arrowUp",   Icon: ArrowUpRight },
+  { kind: "arrowDown", Icon: ArrowDownRight },
+  { kind: "minus",     Icon: MinusCircle },
+  { kind: "star",      Icon: Star },
+  { kind: "flag",      Icon: Flag },
+  { kind: "sparkle",   Icon: Sparkles },
+  { kind: "none",      Icon: Ban },
 ];
 
 export function VariantChips({
@@ -61,6 +63,7 @@ export function VariantChips({
   onChange: (next: Variant) => void;
   size?: "sm" | "md";
 }) {
+  const { t } = useT();
   return (
     <div className="flex flex-wrap gap-1">
       {VARIANTS.map((v) => {
@@ -76,9 +79,9 @@ export function VariantChips({
               active ? "ring-2 " + v.ring : "ring-transparent opacity-60 hover:opacity-100",
               size === "sm" && "px-2 py-px text-[10px]",
             )}
-            title={v.label}
+            title={t(`variant.${v.slug}`)}
           >
-            {v.label}
+            {t(`variant.${v.slug}`)}
           </button>
         );
       })}
@@ -94,18 +97,19 @@ export function IconKindGrid({
   variant: Variant;
   onChange: (next: VariantIconKindT) => void;
 }) {
+  const { t } = useT();
   const fg = VARIANT_FG[variant];
   const current = value ?? "auto";
   return (
     <div className="grid grid-cols-6 gap-1">
-      {ICON_OPTIONS.map(({ kind, label, Icon }) => {
+      {ICON_OPTIONS.map(({ kind, Icon }) => {
         const active = current === kind;
         return (
           <button
             key={kind}
             type="button"
             onClick={() => onChange(kind)}
-            title={label}
+            title={t(`variantIcon.${kind}`)}
             className={cn(
               "flex h-8 items-center justify-center rounded-md border transition-colors",
               active

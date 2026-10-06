@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Download, WifiOff, X } from "lucide-react";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -28,6 +29,7 @@ type BeforeInstallPromptEvent = Event & {
 const INSTALL_DISMISSED_KEY = "curf.pwa.install-dismissed";
 
 export function PwaShell() {
+  const { t } = useT();
   const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [installDismissed, setInstallDismissed] = useState(false);
   const [online, setOnline] = useState(true);
@@ -35,7 +37,10 @@ export function PwaShell() {
   // card popping up over it reads as Curf hijacking someone else's
   // product moment. The offline banner stays: it's about the page the
   // visitor is on, not an upsell.
-  const onPublicApp = usePathname()?.startsWith("/apps/") ?? false;
+  const pathname = usePathname() ?? "";
+  const onPublicApp = pathname.startsWith("/apps/");
+  // The Executive view has a bottom tab bar on phones — sit above it.
+  const aboveTabBar = pathname.startsWith("/executive");
 
   // 1. Service worker registration. We do it lazily on idle so the
   // first paint isn't blocked by SW lifecycle.
@@ -122,41 +127,41 @@ export function PwaShell() {
   return (
     <>
       {!online && (
-        <div className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-2 bg-warning/95 px-4 py-1.5 text-xs font-medium text-warning shadow-md">
+        <div className="no-print fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-2 bg-warning/95 px-4 py-1.5 text-xs font-medium text-warning shadow-md">
           <WifiOff className="h-3.5 w-3.5" />
-          <span>You're offline — reads of cached pages still work, but data may be stale.</span>
+          <span>{t("pwa.offline")}</span>
         </div>
       )}
 
       {installEvent && !installDismissed && !onPublicApp && (
-        <div className="fixed bottom-4 right-4 z-[60] flex max-w-sm items-start gap-3 rounded-lg border bg-card p-3 shadow-lg sm:bottom-6 sm:right-6">
+        <div className={"no-print fixed right-4 z-[60] flex max-w-sm items-start gap-3 rounded-lg border bg-card p-3 shadow-lg sm:right-6 " + (aboveTabBar ? "bottom-20 md:bottom-6" : "bottom-4 sm:bottom-6")}>
           <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
             <Download className="h-5 w-5" />
           </span>
           <div className="flex-1">
-            <p className="text-sm font-medium">Install Curf</p>
+            <p className="text-sm font-medium">{t("pwa.install.title")}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Add Curf to your home screen for one-tap access and faster loads.
+              {t("pwa.install.body")}
             </p>
             <div className="mt-2 flex items-center gap-2">
               <button
                 className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:opacity-90"
                 onClick={handleInstall}
               >
-                Install
+                {t("pwa.install.cta")}
               </button>
               <button
                 className="rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
                 onClick={dismissInstall}
               >
-                Not now
+                {t("pwa.install.later")}
               </button>
             </div>
           </div>
           <button
             className="rounded p-1 text-muted-foreground hover:bg-muted"
             onClick={dismissInstall}
-            aria-label="Dismiss install prompt"
+            aria-label={t("pwa.install.dismiss")}
           >
             <X className="h-3.5 w-3.5" />
           </button>

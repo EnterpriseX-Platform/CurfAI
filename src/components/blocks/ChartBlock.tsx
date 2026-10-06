@@ -11,18 +11,23 @@ import {
 } from "recharts";
 import type { BlockRenderContext } from "./types";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { queryNotRun } from "@/lib/reporting/queryRunState";
 import { ShowWorkButton } from "./ShowWorkButton";
 import { AskButton } from "./AskButton";
 import { CommentButton } from "./CommentButton";
 import { useDrillThrough } from "@/components/providers/drill-through-context";
 import { useTheme, useChartStyle } from "@/components/providers/ThemeProvider";
 import { useCurrency } from "@/components/providers/CurrencyProvider";
+import { useDateStyle } from "@/components/providers/DateStyleProvider";
 import { useWhy } from "@/components/blocks/WhyDrawer";
 import { useT } from "@/lib/i18n/LocaleContext";
 import { BlockActions } from "./BlockActions";
 import { ChartPinOverlay } from "./ChartPinOverlay";
 import { EmbedButton } from "./EmbedButton";
-import { projectSeries, projectSeriesETS, detectCadenceUnit, THAI_MONTHS_ABBR, type CadenceUnit } from "@/lib/reporting/forecast";
+import {
+  projectSeries, projectSeriesETS, detectCadenceUnit, hasForecastHistory, modelForecastValues, drawnForecastMethod, spliceModelValues,
+  THAI_MONTHS_ABBR, type CadenceUnit,
+} from "@/lib/reporting/forecast";
 import { computeForecastBoundary, computeForecastRangeSummary, predictionDecorElements } from "./charts/PredictionOverlay";
 import { formatValue } from "./charts/shared";
 import { buildSnapshotCandidates } from "@/lib/reporting/forecastSnapshot";
@@ -37,6 +42,15 @@ import { renderRadarChart } from "./charts/radarRenderer";
 import { renderStreamgraphChart } from "./charts/streamgraphRenderer";
 import { renderSunburstChart } from "./charts/sunburstRenderer";
 import { renderSankeyChart } from "./charts/sankeyRenderer";
+import { renderBoxPlotChart, renderRadialChart } from "./charts/distributionRenderers";
+import { renderNetworkChart, renderChordChart } from "./charts/networkChordRenderers";
+import { renderParallelChart } from "./charts/parallelRenderer";
+import { Scatter3D } from "./three/Scatter3D";
+import { ChartHoverTip } from "./charts/ChartHoverTip";
+import { ChartZoom } from "./charts/ChartZoom";
+
+/** A gauge or bullet is one number, and the 3D scatter turns its own camera (Stage3D) — nothing for ChartZoom to add. */
+const UNZOOMABLE = new Set(["gauge", "bullet", "scatter3d"]);
 
 // formatValue / AXIS_PROPS / TOOLTIP_STYLE / DEFAULT_PALETTE and the chart
 // ink tokens live in ./charts/shared.ts, used only by the per-chart-type
@@ -133,6 +147,7 @@ function ChartTypeSelector({
   sizeField?: string;
   rows: Array<Record<string, unknown>>;
 }) {
+  const { t } = useT();
   const groups = useMemo(() => {
     const profiles = profileColumns(rows);
     return groupChartTypes({ xField, yFields, sizeField }, profiles);
@@ -143,7 +158,7 @@ function ChartTypeSelector({
       <DropdownMenuTrigger asChild>
         <button
           className="no-print inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          title="Change Chart Type"
+          title={t("chartTypePicker.change")}
         >
           <LucideBarChart className="h-3.5 w-3.5" />
         </button>
@@ -152,7 +167,7 @@ function ChartTypeSelector({
         {groups.map((group, gi) => (
           <div key={group.purpose}>
             {gi > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel className="text-[10px]">{group.label}</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-[10px]">{t(`chartPurpose.${group.purpose}`)}</DropdownMenuLabel>
             {group.items.map((item) => {
               const Icon = CHART_TYPE_ICON[item.value as ChartTypeValue];
               return (
@@ -168,10 +183,10 @@ function ChartTypeSelector({
                   <span
                     className="flex w-full items-center"
                     style={{ pointerEvents: "auto" }}
-                    title={item.eligible ? undefined : item.reason}
+                    title={item.eligible ? undefined : t(item.reasonKey)}
                   >
                     <Icon className="mr-2 h-4 w-4 shrink-0" />
-                    {item.labelEn}
+                    {t(`chartType.${item.value}`)}
                   </span>
                 </DropdownMenuItem>
               );
@@ -443,6 +458,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   const theme = useTheme();
   const chartStyle = useChartStyle();
   const currency = useCurrency();
+  const dateStyle = useDateStyle();
   const { t } = useT();
   const palette = theme.palette;
 
@@ -507,7 +523,12 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // stays trusted even when the x-axis is formatted in a way the cadence
   // detector doesn't recognize (e.g. localized month labels like "ต.ค. 68"
   // instead of ISO "2025-10").
+  //
+  // And, whoever turned it on: too little history (hasForecastHistory), or
+  // the band is ±0% around a line through two points.
+  const enoughHistory = useMemo(() => hasForecastHistory(baseRows, firstYField), [baseRows, firstYField]);
   const canForecast = !!forecast
+    && enoughHistory
     && (!forecastIsViewerOverride || forecastCadence.unit !== "point")
     && (chartType === "line" || chartType === "area" || chartType === "combo" || chartType === "bar");
 
@@ -520,7 +541,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // axis. Showing the icon on a chart where clicking it can never produce a
   // forecast (a ranked list of project names, say) reads as a broken
   // control — a customer clicks it expecting a line and gets nothing.
-  const forecastControlUseful = forecastEligible && (!!reportForecast || forecastCadence.unit !== "point");
+  const forecastControlUseful = forecastEligible && enoughHistory && (!!reportForecast || forecastCadence.unit !== "point");
 
   // Instant, always-available projection — appended for line/area/combo/bar
   // charts. The projection uses the FIRST yField as the basis (multi-series
@@ -557,8 +578,9 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // produces (same x labels, a band re-centered on the new value) — so the
   // chart starts on the instant linear projection and silently upgrades in
   // place once the model responds, rather than blocking the first paint on
-  // a network round trip. Any failure server-side just echoes the linear
-  // values back, so this effect converges to a no-op visual change.
+  // a network round trip. Any failure server-side echoes the linear values
+  // back marked source "linear" (modelForecastValues takes only the model's
+  // own), so the chart stays on the straight line and is labelled as one.
   const [llmValues, setLlmValues] = useState<number[] | null>(null);
   useEffect(() => {
     setLlmValues(null);
@@ -573,26 +595,22 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (!cancelled && Array.isArray(j?.values) && j.values.length === forecast!.periods) {
-          setLlmValues(j.values);
-        }
+        const values = modelForecastValues(j, forecast!.periods);
+        if (!cancelled && values) setLlmValues(values);
       })
       .catch(() => { /* stays on the linear projection already shown */ });
     return () => { cancelled = true; };
   }, [canForecast, forecast?.method, forecast?.periods, baseRows, firstYField]);
+  // What the drawn projection really is — the label and the accuracy record
+  // say this, not the method that was asked for.
+  const drawnMethod = forecast ? drawnForecastMethod(forecast.method, !!llmValues) : undefined;
 
   const projected = useMemo(() => {
     if (!canForecast) return [];
     if (forecast?.method === "ets") return etsProjected;
     if (forecast?.method !== "llm" || !llmValues) return linearProjected;
-    return linearProjected.map((p, i) => {
-      const linearVal = Number(p[firstYField]);
-      const band = Number.isFinite(linearVal) ? Math.abs(Number(p.__upper) - linearVal) : 0;
-      const v = llmValues[i];
-      if (v === undefined) return p;
-      return { ...p, [firstYField]: v, __upper: v + band, __lower: v - band };
-    });
-  }, [canForecast, forecast?.method, llmValues, linearProjected, etsProjected, firstYField]);
+    return spliceModelValues(linearProjected, firstYField, llmValues, baseRows);
+  }, [canForecast, forecast?.method, llmValues, linearProjected, etsProjected, firstYField, baseRows]);
 
   const data = useMemo(() => {
     if (projected.length === 0) return baseRows;
@@ -702,13 +720,13 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
         xField,
         yField: firstYField,
         metricLabel: title || firstYField,
-        method: forecast.method,
+        method: drawnMethod ?? forecast.method,
         candidates,
       }),
     }).catch(() => { /* swallow — recording is best-effort, never blocks the chart */ });
     return () => { abort = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forecast, print, reportDbId, dataKey, xField, firstYField, block.id, queryId, title]);
+  }, [forecast, drawnMethod, print, reportDbId, dataKey, xField, firstYField, block.id, queryId, title]);
 
   // Accuracy badge — how well THIS block's past forecasts have held up.
   // Only fetched when a forecast is actually showing (no point asking for a
@@ -731,7 +749,14 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   }, [forecast, print, reportDbId, block.id]);
 
   if (!queryId || data.length === 0) {
-    return <BlockEmptyState type="chart" blockId={block.id} title={title} description={t("blockEmpty.noData")} />;
+    const notRun = queryNotRun(provenance?.[queryId]);
+    return (
+      <BlockEmptyState
+        type="chart" blockId={block.id} title={title} typeLabel={t("blockType.chart")}
+        description={t(notRun ? (notRun.kind === "failed" ? "blockEmpty.queryFailed" : "blockEmpty.restricted") : "blockEmpty.noData")}
+        notRun={notRun}
+      />
+    );
   }
 
   const fmt = valueFormat ?? "compact";
@@ -759,7 +784,10 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
         ifOverflow="extendDomain"
         label={rl.label ? {
           value: rl.label,
-          position: "right",
+          // Inside the plot, just above a horizontal line at its left end. "right" put the
+          // label outside the plot area, where anything longer than a word was cut off
+          // ("เป้าห…") — the chart's right margin only fits a few characters.
+          position: rl.axis === "y" ? "insideTopLeft" : "insideTop",
           fill: theme.semantic[rl.variant as keyof typeof theme.semantic] ?? theme.semantic.neutral,
           fontSize: 10,
           fontWeight: 500,
@@ -787,14 +815,14 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
     : { boundary: undefined, end: undefined };
   const forecastRange = canForecast && forecast?.showBands ? computeForecastRangeSummary(data, firstYField) : null;
   function renderForecastDecor(yAxisId?: string) {
-    const label = canForecast && forecast ? t(`forecast.chartLabel.${forecast.method}`) : undefined;
+    const label = canForecast && drawnMethod ? t(`forecast.chartLabel.${drawnMethod}`) : undefined;
     const rangeLabels = forecastRange ? {
       value: forecastRange.value,
       upperText: t("forecast.rangeBetter")
-        .replace("{value}", formatValue(forecastRange.upper, fmt, currency))
+        .replace("{value}", formatValue(forecastRange.upper, fmt, currency, { locale: dateStyle?.locale }))
         .replace("{pct}", `+${forecastRange.upperDeltaPct.toFixed(0)}%`),
       lowerText: t("forecast.rangeWorse")
-        .replace("{value}", formatValue(forecastRange.lower, fmt, currency))
+        .replace("{value}", formatValue(forecastRange.lower, fmt, currency, { locale: dateStyle?.locale }))
         .replace("{pct}", `-${forecastRange.lowerDeltaPct.toFixed(0)}%`),
     } : undefined;
     return predictionDecorElements(forecast, forecastBoundary, forecastEnd, label, rangeLabels, yAxisId);
@@ -883,7 +911,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
                 {title}
                 {drillEnabled && (
                   <span data-drill-chip className="rounded-md border border-primary/30 bg-primary-soft px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary-ink">
-                    click to drill
+                    {t("drill.chip")}
                   </span>
                 )}
               </h3>
@@ -897,92 +925,129 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
           BlockActions toolbar (h-6 trigger + top-2 offset ~= 32px) — without
           this the toolbar sits on top of the chart's own top-right content
           (a legend, the first bars/points) instead of above it. */}
-      <div className={"min-h-0 flex-1 " + (bare ? "pt-8 " : "") + cursorClass}>
+      <ChartHoverTip className={"min-h-0 flex-1 " + (bare ? "pt-8 " : "") + cursorClass}>
+        <ChartZoom print={print} enabled={!UNZOOMABLE.has(chartType)} labels={{ zoomIn: t("chart.zoom.in"), zoomOut: t("chart.zoom.out"), reset: t("chart.zoom.reset") }}>
         {chartType === "gauge" ? (
           renderGaugeChart({
-            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency,
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle,
             handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             semantic: theme.semantic,
           })
         ) : chartType === "bullet" ? (
           renderBulletChart({
-            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency,
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle,
             handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             semantic: theme.semantic,
           })
         ) : chartType === "sunburst" ? (
           renderSunburstChart({
-            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency,
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle,
+            print, text: { total: t("chart.sunburst.total"), stepOut: t("chart.sunburst.stepOut"), zoomIn: t("chart.sunburst.zoomIn") },
             handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
           })
         ) : chartType === "sankey" ? (
           renderSankeyChart({
-            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency,
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, emptyText: t("chart.sankeyNoFlows"), text: { all: t("chart.drill.all"), drillIn: t("chart.drill.in") },
+            handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+          })
+        ) : chartType === "boxplot" ? (
+          renderBoxPlotChart({
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, emptyText: t("chart.noRows"),
+            handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+          })
+        ) : chartType === "radial" ? (
+          renderRadialChart({
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, emptyText: t("chart.noRows"), text: { peak: t("chart.radial.peak") },
+            handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+          })
+        ) : chartType === "parallel" ? (
+          renderParallelChart({
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, emptyText: t("chart.noRows"),
+            handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+          })
+        ) : chartType === "network" ? (
+          renderNetworkChart({
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, emptyText: t("chart.noLinks"), text: { strong: t("chart.network.strong"), weak: t("chart.network.weak") },
+            handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+          })
+        ) : chartType === "scatter3d" ? (
+          <Scatter3D
+            palette={palette}
+            ctx={{
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, emptyText: t("chart.noRows"),
+              handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+            }}
+          />
+        ) : chartType === "chord" ? (
+          renderChordChart({
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, emptyText: t("chart.noLinks"), text: { strong: t("chart.network.strong"), weak: t("chart.network.weak") },
             handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
           })
         ) : (
         <ResponsiveContainer width="100%" height="100%">
           {chartType === "waterfall" ? (
             renderWaterfallChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showDataLabels,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showDataLabels,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "bar" ? (
             renderBarChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend, showDataLabels,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
               gid, stacked, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "line" ? (
             renderLineChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend, showDataLabels,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
               forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "area" ? (
             renderAreaChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend,
               gid, stacked, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "combo" ? (
             renderComboChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend, showDataLabels,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
+              text: { abcA: t("chart.pareto.a"), abcB: t("chart.pareto.b"), abcC: t("chart.pareto.c") },
               gid, lineFields, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "treemap" ? (
             renderTreemapChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "funnel" ? (
             renderFunnelChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showDataLabels,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showDataLabels,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
               ramp: theme.ramps.primary, semantic: theme.semantic,
             })
           ) : chartType === "scatter" ? (
             renderScatterChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "radar" ? (
             renderRadarChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "streamgraph" ? (
             renderStreamgraphChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend,
               gid, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : (
             renderPieChart({
-              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, print, showLegend, showDataLabels,
+              data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
               handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
               gid, isDonut, drillEnabled, onDrill: onDrill ?? undefined, blockId: block.id,
             })
           )}
         </ResponsiveContainer>
         )}
-      </div>
+        </ChartZoom>
+      </ChartHoverTip>
       {/* AI caption strip — only renders when (a) the block has aiCaption: true,
           (b) the tenant is on Business (the API 402s otherwise — we never
           show the strip in that case), and (c) the caption call returned
@@ -996,6 +1061,9 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
             {caption.text}
             {caption.source === "rule" && (
               <span className="ml-1 not-italic text-[10px] text-primary/70">(deterministic)</span>
+            )}
+            {caption.source === "ai" && (
+              <span className="ml-1 not-italic text-[10px] text-primary/70">· {t("ai.notice.short")}</span>
             )}
           </span>
         </div>

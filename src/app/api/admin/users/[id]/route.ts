@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { withSystemDbContext } from "@/lib/dbContext";
 import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
@@ -76,12 +77,17 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   // reconcile in the paid cron covers a missed call.
   void ee.billing?.syncSeats(u.tenantId).catch(() => null);
 
-  const remaining = await prisma.membership.count({ where: { userId: target.user.id } });
-  if (remaining === 0) {
-    // No workspace left, still no password set — this account never had
-    // anywhere to sign in. Clean it up rather than leaving a dangling row.
-    await prisma.user.delete({ where: { id: target.user.id } }).catch(() => null);
-  }
+  // Memberships in EVERY workspace, not just this one — under row-level
+  // security this count would otherwise see only the current workspace and
+  // call a person who still belongs elsewhere "left with nothing".
+  await withSystemDbContext(async () => {
+    const remaining = await prisma.membership.count({ where: { userId: target.user.id } });
+    if (remaining === 0) {
+      // No workspace left, still no password set — this account never had
+      // anywhere to sign in. Clean it up rather than leaving a dangling row.
+      await prisma.user.delete({ where: { id: target.user.id } }).catch(() => null);
+    }
+  });
 
   recordAudit({
     user: u, kind: "user.invite.revoke", target: target.user.id, req,

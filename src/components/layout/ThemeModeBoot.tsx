@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/auth";
+import { readSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { parseThemeMode, themeModeBootScript, type ThemeMode } from "@/lib/themeMode";
 
@@ -16,7 +16,7 @@ export async function ThemeModeBoot() {
 }
 
 async function loadThemeMode(): Promise<ThemeMode> {
-  const session = await getSession();
+  const session = await readSession();
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) return "auto";
   // The user's own row, by the id the session vouches for — the same read

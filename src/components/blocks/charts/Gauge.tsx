@@ -59,7 +59,8 @@ export function GaugeChart({
 
   return (
     <div className="flex h-full w-full items-center justify-center">
-      <svg viewBox="0 0 200 160" className="h-full max-h-full w-full max-w-full">
+      {/* 176 tall: the min/max labels sit under the arc's ends (y ≈ 169), which a 160 frame cut off. */}
+      <svg viewBox="0 0 200 176" className="h-full max-h-full w-full max-w-full">
         {zones && zones.length > 0 ? (
           (() => {
             const sorted = [...zones].sort((a, b) => a.upTo - b.upTo);
@@ -124,14 +125,14 @@ export function GaugeChart({
         <text
           x={cx + r * Math.cos((startAngle * Math.PI) / 180)}
           y={cy + r * Math.sin((startAngle * Math.PI) / 180) + 14}
-          textAnchor="end" fontSize={10} fill={TICK_FILL}
+          textAnchor="middle" fontSize={10} fill={TICK_FILL}
         >
           {format(min)}
         </text>
         <text
           x={cx + r * Math.cos((endAngle * Math.PI) / 180)}
           y={cy + r * Math.sin((endAngle * Math.PI) / 180) + 14}
-          textAnchor="start" fontSize={10} fill={TICK_FILL}
+          textAnchor="middle" fontSize={10} fill={TICK_FILL}
         >
           {format(max)}
         </text>
@@ -231,21 +232,48 @@ export function computeGaugeBounds(
  *
  * Walks rows in declared order, computes a running total, and emits the
  * shape needed for a Recharts stacked BarChart with a transparent spacer
- * beneath each visible delta. Total rows (label matches /^total/i) draw
+ * beneath each visible delta. Total rows (a label starting "Total" /
+ * "Subtotal", or the Thai and Chinese words for it — รวม, ยอดรวม, 合计,
+ * 总计, 小计 — since a report's labels are in its reader's language) draw
  * from zero in a distinct accent color.
  *
  * Output row shape:
  *   { ...row, __base, __bar, __delta, __kind }
  */
+const WATERFALL_TOTAL = /^\s*((sub)?total\b|ยอดรวม|รวม|合计|总计|小计)/i;
+
+const OPENING = /ทั้งหมด|ยกมา|เริ่มต้น|ตั้งต้น|เดือนก่อน|ปีก่อน|\b(opening|start(ing)?|begin(ning)?|previous|prior|last (month|year|quarter))\b|期初|上期/i;
+
 export function buildWaterfall(rows: any[], xField: string, yField: string) {
   let running = 0;
-  return rows.map((r) => {
+  let started = false;
+  // A bridge that closes on a total opens on one: "ยอดขาย 1–29 ส.ค." before the
+  // branches' changes and "รวม 1–29 ก.ย." was drawn as a +฿11.9M gain.
+  const closesOnTotal = rows.length > 2 && WATERFALL_TOTAL.test(String(rows[rows.length - 1]?.[xField] ?? ""));
+  return rows.map((r, i) => {
     const label = String(r?.[xField] ?? "");
-    const isTotal = /^\s*(sub)?total\b/i.test(label);
+    const isTotal = WATERFALL_TOTAL.test(label);
     const delta = Number(r?.[yField]);
     if (!Number.isFinite(delta)) {
       return { ...r, __base: 0, __bar: 0, __delta: 0, __kind: "delta" as const };
     }
+    // A total before any change is the opening balance ("รวมเดือนก่อน" — last
+    // month's total): its own value, which the steps then start from. Read as
+    // a running total it was the 0 that had accumulated so far.
+    // So is a first row whose label names a level, not a change: "วงเงินที่ขอ
+    // ทั้งหมด" (all requested), "ยอดยกมา", "opening", "previous month" — the
+    // budget bureau's bridge opened on a green "+20.4 พันล." as if it were a gain.
+    if (!started && (OPENING.test(label) || (closesOnTotal && i === 0))) {
+      started = true;
+      running = delta;
+      return { ...r, __base: 0, __bar: delta, __delta: delta, __kind: "total" as const };
+    }
+    if (isTotal && !started) {
+      started = true;
+      running = delta;
+      return { ...r, __base: 0, __bar: delta, __delta: delta, __kind: "total" as const };
+    }
+    started = true;
     if (isTotal) {
       const total = running;
       return { ...r, __base: 0, __bar: total, __delta: total, __kind: "total" as const };

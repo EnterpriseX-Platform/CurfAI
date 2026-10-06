@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireUser, requireAdminOrEditor, tenantWhere, requireReportInScope } from "@/lib/auth";
+import { requireAdminOrEditor, tenantWhere, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ReportSchema } from "@/lib/reporting/schema";
+import { foreignSourcesBlock } from "@/lib/reporting/sourceOwnership";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string; version: string } }) {
   const user = await requireAdminOrEditor(req);
@@ -22,10 +23,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   if (!target) return NextResponse.json({ error: "Version not found" }, { status: 404 });
 
   // Validate the stored JSON still parses in case the schema has drifted.
-  try { ReportSchema.parse(JSON.parse(target.definition)); }
+  let restored;
+  try { restored = ReportSchema.parse(JSON.parse(target.definition)); }
   catch (e: any) {
     return NextResponse.json({ error: `Stored version is no longer valid: ${e?.message}` }, { status: 400 });
   }
+  // A version saved before sources were checked on save may name another
+  // workspace's: it doesn't come back.
+  const foreign = await foreignSourcesBlock(existing.tenantId, restored);
+  if (foreign) return foreign;
 
   // Snapshot current before restoring (so restore is also reversible).
   await prisma.reportVersion.create({

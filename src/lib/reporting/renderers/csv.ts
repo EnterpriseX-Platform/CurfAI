@@ -11,7 +11,9 @@
  *      importers, and a column of them sums to nothing.
  */
 import Papa from "papaparse";
-import { runReport, type RunViewer } from "@/lib/reporting/runner";
+import { runReportWithProof, ANONYMOUS_VIEWER, type RunViewer } from "@/lib/reporting/runner";
+import { queryErrors } from "@/lib/reporting/queryRunState";
+import { visibleReport } from "@/lib/reporting/visibleReport";
 import type { Report } from "@/lib/reporting/schema";
 
 /**
@@ -49,12 +51,22 @@ function csvCell(value: unknown, type: string): string | number | boolean | null
 export async function renderCsv(
   report: Report,
   params: Record<string, unknown>,
-  blockId?: string,
-  /** A downloaded file leaves the app entirely, so redaction matters here
-   *  at least as much as on-screen — pass the requesting user's viewer. */
-  viewer?: RunViewer,
+  opts: {
+    /** The workspace the report belongs to — see RunContext.tenantId. */
+    tenantId: string;
+    /** The table to export; the first one when omitted. */
+    blockId?: string;
+    /** A downloaded file leaves the app entirely, so redaction matters here
+     *  at least as much as on-screen — pass the requesting user's viewer.
+     *  Omitted, the file renders as nobody: blocks and data both. */
+    viewer?: RunViewer;
+  },
 ): Promise<string> {
-  const dataset = await runReport({ report, params, forExport: true, viewer });
+  const { tenantId, blockId, viewer } = opts;
+  // A table hidden from this caller is not "the first table", and ?block=
+  // can't name it either.
+  report = visibleReport(report, viewer);
+  const { dataset, provenance } = await runReportWithProof({ report, params, tenantId, forExport: true, viewer: viewer ?? ANONYMOUS_VIEWER });
 
   const tableBlock = report.pages
     .flatMap((p) => p.blocks)
@@ -62,6 +74,13 @@ export async function renderCsv(
 
   if (!tableBlock || tableBlock.type !== "table") {
     throw new Error("No table block to export as CSV");
+  }
+
+  // A CSV has no room for a marker, and a header-only file reads as "no rows". If the
+  // table's query didn't run there is nothing honest to write, so say why instead.
+  const notRun = queryErrors(provenance)[tableBlock.config.queryId];
+  if (notRun !== undefined) {
+    throw new Error(`This table's data didn't load, so there is nothing to export: ${notRun}`);
   }
 
   const rows = dataset[tableBlock.config.queryId] ?? [];

@@ -10,6 +10,7 @@ import {
   parseExcelToSqlite,
   MAX_FILE_BYTES,
   MAX_ROWS_PER_SHEET,
+  tenantUploadRoot,
 } from "@/lib/connections/excelImport";
 
 export const runtime = "nodejs";
@@ -104,7 +105,7 @@ export async function POST(req: NextRequest) {
   // Pre-mint the DataSource id so the file path is stable before the row
   // exists. 24 hex chars matches the rough length of cuid ids elsewhere.
   const dsId = "ex_" + randomBytes(12).toString("hex");
-  const tenantUploadDir = path.join(process.cwd(), "var", "tenants", user.tenantId, "uploads");
+  const tenantUploadDir = path.join(tenantUploadRoot(user.tenantId), "uploads");
   const dbPath = path.join(tenantUploadDir, dsId + ".db");
 
   const parseResult = await parseExcelToSqlite(buf, dbPath, originalFilename);

@@ -1,17 +1,24 @@
 /**
  * Currency resolution cascade — mirrors the theme cascade in
- * lib/reporting/themes.ts (report override → tenant default → "USD").
+ * lib/reporting/themes.ts (report override → tenant default → DEFAULT_CURRENCY).
  *
  * Curf shipped hardcoded to USD for a while; every currency-formatted
  * surface (KPI cards, charts, tables, AI narration) now resolves through
  * this one function instead of assuming the reader's currency.
  */
 
+/**
+ * The currency a workspace reads in until an admin picks one (Tenant.currency
+ * null). Curf's customers are Thai businesses and agencies, so baht — a
+ * workspace that reports in dollars sets USD under Admin → Workspace.
+ */
+export const DEFAULT_CURRENCY = "THB";
+
 export function resolveCurrency(
   reportCurrency?: string | null,
   tenantDefault?: string | null,
 ): string {
-  return reportCurrency || tenantDefault || "USD";
+  return reportCurrency || tenantDefault || DEFAULT_CURRENCY;
 }
 
 /**
@@ -52,9 +59,30 @@ export function isKnownCurrencyCode(code: string): boolean {
  */
 export function currencySymbol(code: string): string {
   try {
-    const parts = new Intl.NumberFormat("en-US", { style: "currency", currency: code }).formatToParts(0);
+    const parts = new Intl.NumberFormat("en-US", { style: "currency", currency: code, currencyDisplay: currencyDisplay(code) }).formatToParts(0);
     return parts.find((p) => p.type === "currency")?.value ?? code;
   } catch {
     return code;
+  }
+}
+
+/**
+ * How Intl should show a currency in Curf's en-US number formatting. en-US
+ * has its own symbol for the dollar, euro, pound, yen, won… but spells baht
+ * out as "THB" ("THB 1,234.50"), where a Thai reader expects "฿". So: the
+ * narrow symbol when en-US has none of its own (฿, Rp, RM) — unless that
+ * narrow symbol is a bare "$", which would read as US dollars (SGD stays
+ * "SGD"). Pass as `currencyDisplay` wherever Intl formats a currency.
+ */
+export function currencyDisplay(code: string): "symbol" | "narrowSymbol" {
+  try {
+    const part = (currencyDisplay: "symbol" | "narrowSymbol") =>
+      new Intl.NumberFormat("en-US", { style: "currency", currency: code, currencyDisplay }).formatToParts(0)
+        .find((p) => p.type === "currency")?.value;
+    if (part("symbol") !== code.toUpperCase()) return "symbol";
+    const narrow = part("narrowSymbol");
+    return narrow && !narrow.includes("$") ? "narrowSymbol" : "symbol";
+  } catch {
+    return "symbol";
   }
 }

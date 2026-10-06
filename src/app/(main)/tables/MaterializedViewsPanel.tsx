@@ -235,7 +235,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                   onChange={(e) => setSql(e.target.value)}
                   required
                   rows={4}
-                  placeholder={'SELECT "stage", SUM(CAST("value" AS REAL)) AS total\nFROM "sales_pipeline"\nGROUP BY "stage"'}
+                  placeholder={'SELECT "stage", SUM(CAST("value" AS DOUBLE)) AS total\nFROM "sales_pipeline"\nGROUP BY "stage"'}
                   className="mt-1 w-full rounded border border-border bg-background p-2 font-mono text-xs"
                 />
               </label>

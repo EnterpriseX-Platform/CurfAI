@@ -16,6 +16,8 @@
  * idle viewers (no heartbeat in 30s) are reaped on next read.
  */
 
+import { initials } from "./utils";
+
 export type PresenceUser = {
   /** Stable key — the userId for logged-in viewers, or a session token for anon. */
   key: string;
@@ -121,9 +123,5 @@ export function hashHue(seed: string): number {
 
 /** Initials from a display name or email. Two-letter cap. */
 export function deriveInitials(name?: string | null, email?: string | null): string {
-  const src = (name && name.trim()) || (email ? email.split("@")[0] : "?");
-  const parts = src.split(/[\s._-]+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
+  return initials((name && name.trim()) || email || "?");
 }

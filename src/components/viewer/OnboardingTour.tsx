@@ -31,44 +31,45 @@ export type Step = {
   body: string;
 };
 
-const STEPS: Step[] = [
+/** The report viewer's four steps, in the reader's language. */
+const reportSteps = (t: (key: string) => string): Step[] => [
   {
     // The proof badge is the small chat-bubble / shield icon in the top-right
     // of every block. Components render it with `data-proof-badge` so we can
     // target it without coupling to internal class names.
     selector: "[data-proof-badge]",
     placement: "left",
-    title: "Hover for cryptographic proof",
-    body: "Every cell carries a SHA-256 fingerprint of its query and result. Hover to inspect — or click to unfold the full SQL and bound parameters.",
+    title: t("tour.proof.title"),
+    body: t("tour.proof.body"),
   },
   {
-    // The "CLICK TO DRILL" chip sits next to drill-enabled chart/map titles.
+    // The "click to drill" chip sits next to drill-enabled chart/map titles.
     // We tag it with data-drill-chip in ChartBlock and MapBlock.
     selector: "[data-drill-chip]",
     placement: "bottom",
-    title: "Click any chart to drill",
-    body: "Bars, points, and countries with this chip open a slide-out panel showing the underlying rows behind the aggregate. Date filters ride along automatically.",
+    title: t("tour.drill.title"),
+    body: t("tour.drill.body"),
   },
   {
     // The shared filter bar is in the viewer shell, anchored at the top.
     selector: "[data-filter-bar]",
     placement: "bottom",
-    title: "Filters narrow everything",
-    body: "Pick a date range or channel and every block re-flows in lockstep. The URL updates so you can share the filtered view in one click.",
+    title: t("tour.filter.title"),
+    body: t("tour.filter.body"),
   },
   {
     // The What is this? pill from A3.
     selector: "[data-explainer-pill]",
     placement: "top",
-    title: "Want a refresher?",
-    body: "This pill is always here in the bottom-right. Click it any time to revisit the four core interactions.",
+    title: t("tour.refresher.title"),
+    body: t("tour.refresher.body"),
   },
 ];
 
 const PULSE_CLASS = "curf-tour-pulse";
 
 export function OnboardingTour({
-  steps = STEPS, storageKey = STORAGE_KEY,
+  steps: given, storageKey = STORAGE_KEY,
 }: {
   /** D6 — a second caller (AppTour) reuses this whole engine with its own
    *  step list; ReportViewerShell's own call passes neither and gets the
@@ -79,6 +80,7 @@ export function OnboardingTour({
   storageKey?: string;
 }) {
   const { t } = useT();
+  const steps = given ?? reportSteps(t);
   const [active, setActive] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   // Bounding rect of the current step's target. We re-measure on every step

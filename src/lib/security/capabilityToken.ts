@@ -4,6 +4,12 @@
  * link) doesn't reimplement the same HMAC logic. This module knows nothing
  * about payload shape or which fields are required; callers own that.
  *
+ * Every capability is signed with the same key, so a verifier must require
+ * something no other capability's payload carries, or it accepts theirs
+ * too. The render token checked only t and r, which an embed token also
+ * has: a one-block embed link opened the whole report (lib/reporting/
+ * renderToken.ts now requires its own k: "render").
+ *
  * Format: `<base64url(payload)>.<base64url(hmac)>`
  *
  * Why HMAC instead of a JWT lib: JWT brings JWS algorithm sprawl + a
@@ -13,7 +19,11 @@
 import crypto from "node:crypto";
 
 function getSecret(): string {
-  return process.env.CURF_EMBED_SECRET || process.env.AUTH_SECRET || "curf-embed-dev-secret-change-me";
+  const s = process.env.CURF_EMBED_SECRET || process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+  // The dev fallback is public, so tokens signed with it could be forged for
+  // any tenant. Fail closed in production rather than sign with it.
+  if (!s && process.env.NODE_ENV === "production") throw new Error("CURF_EMBED_SECRET is not set");
+  return s || "curf-embed-dev-secret-change-me";
 }
 
 function b64u(buf: Buffer | string): string {

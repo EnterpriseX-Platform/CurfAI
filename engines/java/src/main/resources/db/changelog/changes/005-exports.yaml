@@ -1,0 +1,36 @@
+databaseChangeLog:
+  - changeSet:
+      id: 011-engine-export
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_export
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: report_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: report_name, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: format, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: file_name, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: size_bytes, type: bigint, constraints: { nullable: false } }
+              - column: { name: sha256, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: as_of, type: varchar(40), constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: content, type: bytea, constraints: { nullable: false } }
+        - createIndex:
+            tableName: engine_export
+            indexName: ix_engine_export_creator
+            columns:
+              - column: { name: tenant_id }
+              - column: { name: created_by }
+              - column: { name: created_at, descending: true }
+        - createIndex:
+            tableName: engine_export
+            indexName: ix_engine_export_expiry
+            columns:
+              - column: { name: expires_at }
+      rollback:
+        - dropTable:
+            tableName: engine_export

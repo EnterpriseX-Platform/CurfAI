@@ -33,6 +33,19 @@ const LAKE_DIR = process.env.CURF_LAKE_DIR
   : path.join(process.cwd(), "lake");
 
 /**
+ * The directory everything the lake writes lives under — tenant files,
+ * backups, branches. On a deployment it is the mounted volume
+ * (CURF_LAKE_DIR); the app's own directory is read-only there. Backups and
+ * branches used to default to process.cwd()/lake/... instead, so on prod
+ * every snapshot — manual, the 02:00 nightly, restore's safety copy,
+ * Master Builder's pre-rebuild copy — failed with EACCES on /app/lake and
+ * not one backup was ever written (found on the 2026-09-24 retest).
+ */
+export function lakeRoot(): string {
+  return LAKE_DIR;
+}
+
+/**
  * Lazy-init the lake directory. Idempotent — many calls per request,
  * the cost is one stat per call which is fine.
  */
@@ -129,17 +142,22 @@ export function dropLake(tenantId: string): void {
  * context to debug without consulting the platform DB.
  */
 function bootstrapMeta(db: DB): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS __lake_meta (
-      table_name TEXT PRIMARY KEY,
-      source_kind TEXT NOT NULL,
-      source_config_json TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      row_count INTEGER NOT NULL DEFAULT 0
-    )
-  `);
+  db.exec(LAKE_META_DDL_SQLITE);
 }
+
+/** The SQLite __lake_meta DDL. Exported so the engine migration creates the
+ *  exact same table on a fresh SQLite file instead of keeping a second copy
+ *  that could drift (the defaults matter: other writers rely on them). */
+export const LAKE_META_DDL_SQLITE = `
+  CREATE TABLE IF NOT EXISTS __lake_meta (
+    table_name TEXT PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    source_config_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    row_count INTEGER NOT NULL DEFAULT 0
+  )
+`;
 
 /**
  * Convert a free-form table name to the safe identifier we use as the

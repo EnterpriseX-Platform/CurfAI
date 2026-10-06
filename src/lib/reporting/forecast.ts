@@ -43,6 +43,25 @@ export type ForecastPoint = {
 };
 
 /**
+ * The fewest real points a chart forecasts from. A line through two points
+ * fits them exactly, so its band is ±0% and it reads as certain; with three,
+ * the band rests on one residual. A client's two year-end balances were
+ * projected six years ahead that way (2026-09-28).
+ */
+export const MIN_FORECAST_POINTS = 4;
+
+/** Whether `rows` hold enough real values of `yField` to forecast from. */
+export function hasForecastHistory(rows: Array<Record<string, unknown>>, yField: string | undefined): boolean {
+  if (!yField) return false;
+  let n = 0;
+  for (const r of rows) {
+    const v = r?.[yField];
+    if (v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v))) n++;
+  }
+  return n >= MIN_FORECAST_POINTS;
+}
+
+/**
  * Ordinary-least-squares slope + intercept over (x_i = i, y_i = values[i]).
  * Returns null if the input is degenerate (fewer than 2 finite points or
  * zero variance in x — though x is just the index so the latter is only
@@ -135,6 +154,60 @@ export function projectSeries(
     out.push(point);
   }
   return out;
+}
+
+/**
+ * The model's own projection out of /api/reports/forecast-llm's answer, or
+ * null. That route never fails: when the provider does (no credit left, a
+ * timeout, a malformed answer) it sends the straight-line values back with
+ * source "linear" — the projection the chart is already showing. Only
+ * source "llm" is the model's.
+ */
+export function modelForecastValues(answer: unknown, periods: number): number[] | null {
+  const a = answer as { values?: unknown; source?: unknown } | null;
+  if (!a || a.source !== "llm" || !Array.isArray(a.values) || a.values.length !== periods) return null;
+  return a.values.every((v) => typeof v === "number" && Number.isFinite(v)) ? (a.values as number[]) : null;
+}
+
+/**
+ * The method the drawn projection really came from, for its label and its
+ * accuracy record: "llm" only once the model's numbers are in. A chart set
+ * to the AI forecast shows the straight line until they arrive and keeps
+ * showing it when the provider fails; it used to say "AI forecast" over a
+ * straight line either way (2026-09-30, a provider account out of credit).
+ */
+export function drawnForecastMethod<M extends string>(method: M, hasModelValues: boolean): M | "linear" {
+  return method === "llm" && !hasModelValues ? "linear" : method;
+}
+
+/**
+ * The model's values on the straight-line projection's points: the same x
+ * labels, the line's band re-centred on each new value. Held to the sign of
+ * the observed history like the projections above — the band around a
+ * model's value used to reach below zero for sales ("as low as -2K").
+ */
+export function spliceModelValues(
+  projected: ForecastPoint[],
+  yField: string,
+  values: number[],
+  history: Array<Record<string, unknown>>,
+): ForecastPoint[] {
+  const allNonNegative = history.every((r) => {
+    const v = Number(r?.[yField]);
+    return !Number.isFinite(v) || v >= 0;
+  });
+  return projected.map((p, i) => {
+    const raw = values[i];
+    if (raw === undefined) return p;
+    const line = Number(p[yField]);
+    const band = Number.isFinite(line) ? Math.abs(p.__upper - line) : 0;
+    return {
+      ...p,
+      [yField]: clampToObservedSign(raw, allNonNegative),
+      __upper: clampToObservedSign(raw + band, allNonNegative),
+      __lower: clampToObservedSign(raw - band, allNonNegative),
+    };
+  });
 }
 
 /**

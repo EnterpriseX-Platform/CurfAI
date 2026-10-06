@@ -101,6 +101,12 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // globals.css has always defined --popover; without it here every
+        // bg-popover (select menus, block actions, chart tooltips) was transparent.
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar))",
           border: "hsl(var(--sidebar-border))",

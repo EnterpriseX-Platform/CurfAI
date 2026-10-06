@@ -36,6 +36,8 @@ export function LandingShell({
   userName: string | null;
   docsUrl: string;
   teaserTemplates: TeaserTemplate[];
+  /** Same props as the Cloud shell (src/app/page.tsx is shared); this page shows no stats row. */
+  blockTypeCount?: number;
 }) {
   const { t, locale } = useT();
   const safe = (locale === "th" || locale === "zh" ? locale : "en") as TemplateLocale;

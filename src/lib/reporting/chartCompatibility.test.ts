@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { profileColumns, checkChartTypeEligibility, rankChartTypes, CHART_TYPE_META } from "./chartCompatibility";
+import {
+  profileColumns, checkChartTypeEligibility, rankChartTypes, CHART_TYPE_META,
+  type ChartFieldConfig, type ColumnProfile,
+} from "./chartCompatibility";
+import { DICT, LOCALES } from "@/lib/i18n/dict";
 
 describe("profileColumns", () => {
   it("classifies numeric, date, categorical, and high-cardinality text columns", () => {
@@ -92,4 +96,39 @@ describe("rankChartTypes", () => {
       expect(ranked.slice(0, firstIneligibleIdx).every((r) => r.eligible)).toBe(true);
     }
   });
+});
+
+describe("chart type labels", () => {
+  // Every name, group heading and ineligibility reason the two pickers can
+  // show resolves through lib/i18n/dict.ts, so each needs all three locales.
+  const profiles = profileColumns([{ region: "North", revenue: 100 }, { region: "South", revenue: 200 }]);
+  const cases: Array<[ChartFieldConfig, Record<string, ColumnProfile>]> = [
+    [{}, {}],
+    [{}, profiles],
+    [{ yFields: ["revenue"] }, profiles],
+    [{ xField: "region", yFields: ["region"] }, profiles],
+    [{ xField: "region", yFields: ["revenue"] }, profiles],
+  ];
+  const reasonKeys = new Set<string>();
+  for (const m of CHART_TYPE_META) {
+    for (const [config, p] of cases) {
+      const r = checkChartTypeEligibility(m.value, config, p);
+      if (!r.eligible) reasonKeys.add(r.reasonKey);
+    }
+  }
+  const needed = [
+    ...CHART_TYPE_META.map((m) => `chartType.${m.value}`),
+    ...CHART_TYPE_META.map((m) => `chartPurpose.${m.purpose}`),
+    ...reasonKeys,
+  ];
+
+  it("exercises every ineligibility reason", () => {
+    expect(reasonKeys.size).toBe(9); // + needsTwoNumeric (parallel axes), needsThreeNumeric (3D scatter)
+  });
+
+  for (const locale of LOCALES) {
+    it(`has a ${locale} label for every chart type, purpose and reason`, () => {
+      expect(needed.filter((k) => !DICT[locale][k])).toEqual([]);
+    });
+  }
 });

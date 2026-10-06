@@ -82,7 +82,7 @@ export default async function ConnectionsPage() {
   return (
     <AppShell breadcrumbs={[{ label: "Admin" }, { label: "Connections" }]}>
       <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
-        <PageHeader title={<>Connections</>} description={<>Incremental sync from external sources into your tenant lake. Cursor-based, bandwidth-light, idempotent. Configure schedule + objects per connection.</>} actions={<><Link href="/admin/connections/new" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground hover:opacity-90" > <Plus className="h-4 w-4" /> New connection </Link></>} />
+        <PageHeader title={<>Connections</>} description={<>Keeps a copy of your data up to date automatically — only pulls what changed since the last run. Configure schedule + objects per connection.</>} actions={<><Link href="/admin/connections/new" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground hover:opacity-90" > <Plus className="h-4 w-4" /> New connection </Link></>} />
 
 
         {connections.length === 0 ? (

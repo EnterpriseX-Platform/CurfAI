@@ -56,4 +56,10 @@ export type EeClientRegistry = {
      *  place, and the component itself is Cloud billing UI. */
     PastDueBanner?: ComponentType<{ isAdmin: boolean }>;
   };
+
+  tables?: {
+    /** The retail weekly summary under the retail reports card on the Tables page
+     *  (lib/retail/weekly.ts — email and LINE delivery are paid, like the Brief). */
+    RetailWeeklyCard?: ComponentType<{ dataKey: string }>;
+  };
 };

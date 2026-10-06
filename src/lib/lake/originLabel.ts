@@ -43,6 +43,9 @@ export function refineManualOrigin(
   if (cfg.provenance === "workspace-template") {
     return { labelKey: "tables.source.workspaceTemplate" };
   }
+  if (cfg.provenance === "retail-metrics") {
+    return { labelKey: "tables.source.retailMetrics" };
+  }
   if (cfg.provenance === "sync") {
     const detail = str(cfg.sourceObject);
     switch (str(cfg.connectorKind)) {

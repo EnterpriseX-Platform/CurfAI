@@ -15,6 +15,24 @@
  * row is saved, so there's no separate migration step.
  */
 import { encryptSecret, decryptSecret } from "@/lib/secrets";
+import { assertPublicHttpUrl } from "@/lib/security/ssrfGuard";
+
+/**
+ * Save-time check of a REST base URL, against the same SSRF guard every
+ * request to it already passes (guardedFetch). That egress guard is what
+ * actually protects the network; this stops a connection from being stored
+ * pointing somewhere it can never be allowed to reach, and says so while the
+ * person saving it can still fix it (BE-CONN-05: a baseUrl of
+ * http://169.254.169.254/ used to save with 200). "" when allowed.
+ */
+export async function restBaseUrlError(baseUrl: string): Promise<string> {
+  try {
+    await assertPublicHttpUrl(baseUrl);
+    return "";
+  } catch (e: any) {
+    return e?.message ?? "This base URL is not allowed";
+  }
+}
 
 export type RestConnectionInput = {
   baseUrl: string;

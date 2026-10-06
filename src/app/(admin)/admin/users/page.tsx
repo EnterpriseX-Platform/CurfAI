@@ -28,14 +28,15 @@ export default async function UsersAdminPage() {
 
   const members = await prisma.membership.findMany({
     where: { tenantId: user.tenantId },
-    include: { user: { select: { id: true, email: true, name: true } } },
+    include: { user: { select: { id: true, email: true, name: true, passwordHash: true } } },
     orderBy: { user: { email: "asc" } },
   });
   const roles = await prisma.role.findMany({ where: { tenantId: user.tenantId }, orderBy: { slug: "asc" } });
   const items = members.map((m: any) => {
     let roleSlugs: string[] = [];
     try { roleSlugs = JSON.parse(m.rolesJson ?? "[]"); } catch { /* */ }
-    return { id: m.user.id, email: m.user.email, name: m.user.name, authRole: m.role, roles: roleSlugs };
+    // Only whether a password is set leaves the server — never the hash.
+    return { id: m.user.id, email: m.user.email, name: m.user.name, authRole: m.role, roles: roleSlugs, pendingInvite: !m.user.passwordHash };
   });
 
   // The waitlist is the GLOBAL signup queue (prospects' emails + free-text
@@ -71,7 +72,7 @@ export default async function UsersAdminPage() {
       <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "nav.usersRoles")} description={t(locale, "adminUsers.pageSubtitle")} />
 
-        <UsersManager initialUsers={items} allRoles={roles} />
+        <UsersManager initialUsers={items} allRoles={roles} currentUserId={user.id} />
         {showOrganizationPanel && (
           <>
             <hr className="my-10 border-border" />

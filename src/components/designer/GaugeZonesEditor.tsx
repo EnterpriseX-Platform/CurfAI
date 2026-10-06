@@ -21,16 +21,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 type Color = "danger" | "warning" | "success" | "info" | "neutral";
 type Zone = { upTo: number; color: Color };
 
-const COLOR_CHIP: Record<Color, { label: string; bg: string; ring: string }> = {
-  danger:  { label: "Danger",  bg: "bg-destructive/15",    ring: "ring-destructive" },
-  warning: { label: "Warning", bg: "bg-warning/15",   ring: "ring-warning" },
-  success: { label: "Good",    bg: "bg-success/15", ring: "ring-success" },
-  info:    { label: "Info",    bg: "bg-primary-soft",  ring: "ring-primary" },
-  neutral: { label: "Neutral", bg: "bg-muted/70",   ring: "ring-faint" },
+const COLOR_CHIP: Record<Color, { labelKey: string; bg: string; ring: string }> = {
+  danger:  { labelKey: "variant.danger",  bg: "bg-destructive/15",    ring: "ring-destructive" },
+  warning: { labelKey: "variant.warning", bg: "bg-warning/15",   ring: "ring-warning" },
+  success: { labelKey: "gaugeZones.good", bg: "bg-success/15", ring: "ring-success" },
+  info:    { labelKey: "variant.info",    bg: "bg-primary-soft",  ring: "ring-primary" },
+  neutral: { labelKey: "variant.neutral", bg: "bg-muted/70",   ring: "ring-faint" },
 };
 
 const PREVIEW_FILL: Record<Color, string> = {
@@ -47,6 +48,7 @@ export function GaugeZonesEditor({
   min?: number;
   max?: number;
 }) {
+  const { t } = useT();
   const list = value ?? [];
   const sorted = [...list].sort((a, b) => a.upTo - b.upTo);
   const span = (max - min) || 1;
@@ -99,14 +101,14 @@ export function GaugeZonesEditor({
 
       {list.length === 0 && (
         <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-[11px] text-muted-foreground">
-          No zones. Add one to paint a colored band on the gauge track.
+          {t("gaugeZones.empty")}
         </p>
       )}
 
       {list.map((z, i) => (
         <div key={i} className="flex items-center gap-2 rounded-md border border-border bg-background p-2">
           <div className="grid gap-0.5">
-            <Label className="text-[10px]">Up to</Label>
+            <Label className="text-[10px]">{t("gaugeZones.upTo")}</Label>
             <Input
               type="number"
               value={z.upTo}
@@ -115,7 +117,7 @@ export function GaugeZonesEditor({
             />
           </div>
           <div className="grid flex-1 gap-0.5">
-            <Label className="text-[10px]">Color</Label>
+            <Label className="text-[10px]">{t("common.color")}</Label>
             <div className="flex flex-wrap gap-1">
               {(Object.keys(COLOR_CHIP) as Color[]).map((c) => {
                 const cfg = COLOR_CHIP[c];
@@ -125,7 +127,7 @@ export function GaugeZonesEditor({
                     key={c}
                     type="button"
                     onClick={() => patchOne(i, { color: c })}
-                    title={cfg.label}
+                    title={t(cfg.labelKey)}
                     className={cn(
                       "h-6 w-6 rounded-md ring-1 transition-shadow",
                       cfg.bg,
@@ -139,7 +141,7 @@ export function GaugeZonesEditor({
           <button
             type="button"
             onClick={() => remove(i)}
-            title="Remove zone"
+            title={t("gaugeZones.remove")}
             className="flex h-7 w-7 items-center justify-center rounded-md text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -148,7 +150,7 @@ export function GaugeZonesEditor({
       ))}
 
       <Button size="sm" variant="outline" onClick={add} type="button" className="w-full">
-        <Plus className="mr-1.5 h-3.5 w-3.5" /> Add zone
+        <Plus className="mr-1.5 h-3.5 w-3.5" /> {t("gaugeZones.add")}
       </Button>
     </div>
   );

@@ -3,9 +3,11 @@
  * ForecastEditor — bespoke UI for ChartConfigSchema.forecast.
  *
  * Renders three controls:
- *   - Method: linear (free for Team via ai.forecast_linear) or LLM (Business
- *     via ai.forecast_llm). Each option carries a one-line explainer so
- *     authors understand the trade-off (deterministic vs richer narrative).
+ *   - Method: linear or smoothed (ai.forecast_linear) or LLM
+ *     (ai.forecast_llm). Each option carries a one-line explainer so
+ *     authors understand the trade-off (deterministic vs richer narrative),
+ *     and a plan badge read from FEATURE_TIERS so it can't drift from the
+ *     real gate.
  *   - Periods: stepper 1..24, with a hint of what 4 / 12 / 24 typically
  *     mean in dashboard time (a quarter / a year / two years for monthly).
  *   - Show bands: toggle for the shaded confidence-region overlay.
@@ -17,6 +19,9 @@ import { Sparkles, Activity, TrendingUp } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/LocaleContext";
+import { FEATURE_TIERS, type FeatureKey } from "@/lib/featureTiers";
+import { planForTier } from "@/lib/plans";
 
 type Forecast = {
   method: "linear" | "ets" | "llm";
@@ -30,6 +35,7 @@ export function ForecastEditor({
   value: Forecast | undefined;
   onChange: (next: Forecast | undefined) => void;
 }) {
+  const { t } = useT();
   const enabled = !!value;
   const fc: Forecast = value ?? { method: "linear", periods: 4, showBands: true };
 
@@ -47,10 +53,8 @@ export function ForecastEditor({
     <div className="space-y-3 rounded-md border border-border bg-muted/30 p-2.5">
       <div className="flex items-center justify-between">
         <div>
-          <Label className="text-[11px]">Forecast projection</Label>
-          <p className="text-[10px] text-muted-foreground">
-            Extends the chart with a projected continuation.
-          </p>
+          <Label className="text-[11px]">{t("forecastEditor.title")}</Label>
+          <p className="text-[10px] text-muted-foreground">{t("forecastEditor.hint")}</p>
         </div>
         <input
           type="checkbox"
@@ -79,14 +83,12 @@ export function ForecastEditor({
                 >
                   <div className="flex items-center gap-1.5">
                     <Icon className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-[11px] font-medium">{opt.label}</span>
-                    {opt.tier && (
-                      <span className="rounded-full bg-muted px-1.5 py-0 text-[9px] uppercase tracking-wider text-muted-foreground">
-                        {opt.tier}
-                      </span>
-                    )}
+                    <span className="text-[11px] font-medium">{t(`forecast.method.${opt.slug}.label`)}</span>
+                    <span className="rounded-full bg-muted px-1.5 py-0 text-[9px] uppercase tracking-wider text-muted-foreground">
+                      {planForTier(FEATURE_TIERS[opt.feature]).name}
+                    </span>
                   </div>
-                  <p className="text-[10px] leading-snug text-muted-foreground">{opt.hint}</p>
+                  <p className="text-[10px] leading-snug text-muted-foreground">{t(`forecastEditor.method.${opt.slug}.hint`)}</p>
                 </button>
               );
             })}
@@ -94,7 +96,7 @@ export function ForecastEditor({
 
           {/* Periods stepper */}
           <div className="grid gap-1">
-            <Label className="text-[10px]">Periods ahead</Label>
+            <Label className="text-[10px]">{t("forecastEditor.periods")}</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="number"
@@ -105,7 +107,7 @@ export function ForecastEditor({
                 className="h-7 w-20 text-xs"
               />
               <p className="text-[10px] text-muted-foreground">
-                ~{fc.periods === 4 ? "a quarter" : fc.periods === 12 ? "a year" : fc.periods === 52 ? "a year (weekly)" : `${fc.periods} steps`}
+                ~{fc.periods === 4 ? t("forecastEditor.aQuarter") : fc.periods === 12 ? t("forecastEditor.aYear") : fc.periods === 52 ? t("forecastEditor.aYearWeekly") : t("forecastEditor.nSteps").replace("{n}", String(fc.periods))}
               </p>
             </div>
           </div>
@@ -113,8 +115,8 @@ export function ForecastEditor({
           {/* Bands toggle */}
           <div className="flex items-center justify-between rounded-md border border-border bg-background px-2.5 py-1.5">
             <div>
-              <Label className="text-[11px]">Confidence band</Label>
-              <p className="text-[10px] text-muted-foreground">Shade the projected region.</p>
+              <Label className="text-[11px]">{t("forecastEditor.band")}</Label>
+              <p className="text-[10px] text-muted-foreground">{t("forecastEditor.bandHint")}</p>
             </div>
             <input
               type="checkbox"
@@ -129,26 +131,11 @@ export function ForecastEditor({
   );
 }
 
-const METHOD_OPTIONS: { slug: "linear" | "ets" | "llm"; label: string; tier?: string; Icon: typeof Activity; hint: string }[] = [
-  {
-    slug: "linear",
-    label: "Linear",
-    tier: "Team",
-    Icon: Activity,
-    hint: "Deterministic OLS regression. Fast, repeatable, math-first.",
-  },
-  {
-    slug: "ets",
-    label: "Smoothed",
-    tier: "Team",
-    Icon: TrendingUp,
-    hint: "Weights recent points more. Reacts faster to a trend change.",
-  },
-  {
-    slug: "llm",
-    label: "AI",
-    tier: "Business",
-    Icon: Sparkles,
-    hint: "AI considers seasonality + recent inflection. Slower.",
-  },
+// Names are forecast.method.<slug>.label (shared with the viewer's forecast
+// control); the author-facing hints are forecastEditor.method.<slug>.hint.
+// `feature` is the gate the report save route checks for that method.
+const METHOD_OPTIONS: { slug: "linear" | "ets" | "llm"; feature: FeatureKey; Icon: typeof Activity }[] = [
+  { slug: "linear", feature: "ai.forecast_linear", Icon: Activity },
+  { slug: "ets",    feature: "ai.forecast_linear", Icon: TrendingUp },
+  { slug: "llm",    feature: "ai.forecast_llm",    Icon: Sparkles },
 ];

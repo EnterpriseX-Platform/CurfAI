@@ -229,8 +229,21 @@ describe("detectDateOrder — decided per column, not per cell", () => {
       .toEqual({ order: "dmy", ambiguous: false });
   });
 
-  it("returns the fallback for a column with no dates in it", () => {
-    expect(detectDateOrder([])).toEqual({ order: "mdy", ambiguous: true });
+  it("is NOT ambiguous for a column with no slash dates in it — nothing to disambiguate", () => {
+    expect(detectDateOrder([])).toEqual({ order: "mdy", ambiguous: false });
+  });
+
+  // Found live via an A3 Verify upload E2E pass (2026-09-20): a pure-ISO
+  // date column was flagged ambiguous and shown a date-order toggle whose
+  // value cleanDateToken's ISO branch never even reads.
+  it("is NOT ambiguous for a column that's entirely ISO dates — order doesn't apply to that format", () => {
+    expect(detectDateOrder(["2026-08-01", "2026-08-03", "2026-08-28"]))
+      .toEqual({ order: "mdy", ambiguous: false });
+  });
+
+  it("is NOT ambiguous for a column mixing ISO dates with junk/empty values but no slash dates", () => {
+    expect(detectDateOrder(["2024-01-15", "N/A", "", "hello"]))
+      .toEqual({ order: "mdy", ambiguous: false });
   });
 });
 
@@ -279,5 +292,76 @@ describe("cleanForType — applies the column's decided order", () => {
 
   it("defaults to month-first when no order is supplied", () => {
     expect(cleanForType("03/04/2024", "date")).toBe("2024-03-04");
+  });
+});
+
+/**
+ * Thai data. A พ.ศ. year used to be stored as-is — "15/01/2567" became
+ * the year 2567, 543 years off, so every date filter and trend silently
+ * missed it — and Thai month names, Thai digits and "บาท" made the whole
+ * column text.
+ */
+describe("Thai dates and amounts", () => {
+  it("stores a พ.ศ. year as its Common-Era year, in every date format", () => {
+    expect(cleanDateToken("15/01/2567", "dmy")).toBe("2024-01-15");
+    expect(cleanDateToken("2567-01-15")).toBe("2024-01-15");
+    expect(cleanDateToken("2567-01-15T08:30:00")).toBe("2024-01-15");
+    expect(cleanDateToken("15 Jan 2567")).toBe("2024-01-15");
+  });
+
+  it("checks the day against the Common-Era calendar (29 Feb 2567 = 2024, a leap year)", () => {
+    expect(cleanDateToken("29/02/2567", "dmy")).toBe("2024-02-29");
+    expect(cleanDateToken("29/02/2566", "dmy")).toBeNull();
+  });
+
+  it("leaves Common-Era years and far-future sentinels alone", () => {
+    expect(cleanDateToken("15/01/2024", "dmy")).toBe("2024-01-15");
+    expect(cleanDateToken("9999-12-31")).toBe("9999-12-31");
+  });
+
+  it("reads Thai month names, full or abbreviated, with or without dots", () => {
+    expect(cleanDateToken("15 ม.ค. 2567")).toBe("2024-01-15");
+    expect(cleanDateToken("15 มกราคม 2567")).toBe("2024-01-15");
+    expect(cleanDateToken("1 ธ.ค. 2566")).toBe("2023-12-01");
+    expect(cleanDateToken("15 มีค 2567")).toBe("2024-03-15");
+    expect(cleanDateToken("15-ก.พ.-2567")).toBe("2024-02-15");
+  });
+
+  it("reads the short พ.ศ. year and an explicit era", () => {
+    expect(cleanDateToken("15 ม.ค. 67")).toBe("2024-01-15");
+    expect(cleanDateToken("15 มกราคม พ.ศ. 2567")).toBe("2024-01-15");
+    expect(cleanDateToken("15 มกราคม ค.ศ. 2024")).toBe("2024-01-15");
+    expect(cleanDateToken("15 ม.ค. 2024")).toBe("2024-01-15");
+  });
+
+  it("rejects a Thai date that doesn't exist", () => {
+    expect(cleanDateToken("31 ก.พ. 2567")).toBeNull();
+    expect(cleanDateToken("15 ไม่ใช่เดือน 2567")).toBeNull();
+  });
+
+  it("reads Thai digits in dates and numbers", () => {
+    expect(cleanDateToken("๑๕/๐๑/๒๕๖๗", "dmy")).toBe("2024-01-15");
+    expect(cleanNumericToken("๑,๒๐๐")).toBe("1200");
+  });
+
+  it("reads amounts written with บาท / THB / Baht / .-", () => {
+    expect(cleanNumericToken("1,200 บาท")).toBe("1200");
+    expect(cleanNumericToken("1,200บาท")).toBe("1200");
+    expect(cleanNumericToken("THB 1,200.50")).toBe("1200.5");
+    expect(cleanNumericToken("1,200 Baht")).toBe("1200");
+    expect(cleanNumericToken("1,200.-")).toBe("1200");
+    expect(cleanNumericToken("(1,200 บาท)")).toBe("-1200");
+    expect(cleanNumericToken("-350 บาท")).toBe("-350");
+  });
+
+  it("still refuses text that only looks like an amount", () => {
+    expect(cleanNumericToken("2,500 บาท/เดือน")).toBeNull();
+    expect(cleanNumericToken("บาท")).toBeNull();
+  });
+
+  it("types a column of Thai dates and baht amounts correctly", () => {
+    expect(detectCellType("15 ม.ค. 2567")).toBe("date");
+    expect(detectCellType("1,200 บาท")).toBe("number");
+    expect(detectDateOrder(["๑๕/๐๑/๒๕๖๗", "๓/๐๒/๒๕๖๗"]).order).toBe("dmy");
   });
 });

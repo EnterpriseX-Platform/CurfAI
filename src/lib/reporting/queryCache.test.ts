@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getCachedRows, setCachedRows } from "@/lib/reporting/queryCache";
+import { getCachedRows, setCachedRows, buildCacheKey } from "@/lib/reporting/queryCache";
 import { buildProvenance, hashRows } from "@/lib/reporting/provenance";
 import type { DataSourceDef } from "@/lib/reporting/schema";
 
@@ -58,5 +58,21 @@ describe("buildProvenance dataHash reuse", () => {
       startedAt: Date.now(),
     });
     expect(record.dataHash).toBe(hashRows(rows));
+  });
+});
+
+describe("buildCacheKey — referenced params only", () => {
+  const base = { tenantId: "t1", dataSourceId: "ds1", sql: "SELECT SUM(x) * (1 + :shock / 100.0) FROM t WHERE (:branch = '' OR b = :branch)" };
+
+  it("ignores params the SQL doesn't read", () => {
+    const a = buildCacheKey({ ...base, params: { shock: 10, branch: "" } });
+    const b = buildCacheKey({ ...base, params: { shock: 10, branch: "", price_change: 5 } });
+    expect(a).toBe(b);
+  });
+
+  it("still separates entries by every param the SQL does read", () => {
+    const a = buildCacheKey({ ...base, params: { shock: 10, branch: "" } });
+    expect(buildCacheKey({ ...base, params: { shock: 20, branch: "" } })).not.toBe(a);
+    expect(buildCacheKey({ ...base, params: { shock: 10, branch: "S-111" } })).not.toBe(a);
   });
 });

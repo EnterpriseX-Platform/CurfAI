@@ -32,6 +32,7 @@
 
 import { createHash } from "crypto";
 import type { Row } from "@/lib/reporting/interpolate";
+import { referencedParamNames } from "./namedParams";
 
 const DEFAULT_TTL_MS = 30 * 1000;
 // Per-tenant cap. Very rough — a 100k-row result is ~50MB; capping at 256
@@ -96,6 +97,11 @@ function getTenantCache(tenantId: string): TenantCache {
  * Key the cache on the *content* of (tenantId, dataSourceId, sql, params).
  * Sorting param keys gives us insensitivity to call-site iteration order,
  * which would otherwise produce duplicate entries for identical queries.
+ *
+ * Only the params the SQL actually references count: a report passes all of
+ * its parameters to every query, so a What-if driver bound to one parameter
+ * (or an app filter) used to miss the cache for every query in the report,
+ * not just the ones that read it.
  */
 export function buildCacheKey(parts: {
   tenantId: string;
@@ -103,7 +109,8 @@ export function buildCacheKey(parts: {
   sql: string;
   params: Record<string, unknown>;
 }): string {
-  const sortedParamKeys = Object.keys(parts.params).sort();
+  const referenced = referencedParamNames(parts.sql);
+  const sortedParamKeys = Object.keys(parts.params).filter((k) => referenced.has(k)).sort();
   const canonical = JSON.stringify({
     t: parts.tenantId,
     d: parts.dataSourceId,

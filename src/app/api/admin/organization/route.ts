@@ -25,6 +25,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, MEMBERSHIP_ROLES } from "@/lib/auth";
 import { requireOrgPlatformAdmin } from "@/lib/orgAdmin";
+import { withSystemDbContext } from "@/lib/dbContext";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -35,47 +36,52 @@ export async function GET(req: NextRequest) {
   const gate = await requireOrgPlatformAdmin(user);
   if (gate instanceof NextResponse) return gate;
 
-  const [organization, tenants, platformAdmins] = await Promise.all([
-    prisma.organization.findUnique({ where: { id: gate.organizationId } }),
-    prisma.tenant.findMany({
-      where: { organizationId: gate.organizationId },
-      select: { id: true, name: true, slug: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.orgMembership.findMany({
-      where: { organizationId: gate.organizationId, role: "platform_admin" },
-      select: { userId: true },
-    }),
-  ]);
-  const platformAdminIds = new Set(platformAdmins.map((p) => p.userId));
+  // Past the gate this reads and writes across every workspace in the
+  // organization by design, so it runs outside the caller's row-level
+  // security filter (BE-TEN-03); requireOrgPlatformAdmin is the check.
+  return withSystemDbContext(async () => {
+    const [organization, tenants, platformAdmins] = await Promise.all([
+      prisma.organization.findUnique({ where: { id: gate.organizationId } }),
+      prisma.tenant.findMany({
+        where: { organizationId: gate.organizationId },
+        select: { id: true, name: true, slug: true },
+        orderBy: { name: "asc" },
+      }),
+      prisma.orgMembership.findMany({
+        where: { organizationId: gate.organizationId, role: "platform_admin" },
+        select: { userId: true },
+      }),
+    ]);
+    const platformAdminIds = new Set(platformAdmins.map((p) => p.userId));
 
-  const memberships = await prisma.membership.findMany({
-    where: { tenantId: { in: tenants.map((t) => t.id) } },
-    include: { user: { select: { id: true, email: true, name: true } } },
-  });
-  const tenantById = new Map(tenants.map((t) => [t.id, t]));
+    const memberships = await prisma.membership.findMany({
+      where: { tenantId: { in: tenants.map((t) => t.id) } },
+      include: { user: { select: { id: true, email: true, name: true } } },
+    });
+    const tenantById = new Map(tenants.map((t) => [t.id, t]));
 
-  const byUser = new Map<string, {
-    userId: string; email: string; name: string | null; isPlatformAdmin: boolean;
-    tenantRoles: { tenantId: string; tenantName: string; role: string }[];
-  }>();
-  for (const m of memberships as any[]) {
-    const entry = byUser.get(m.userId) ?? {
-      userId: m.userId,
-      email: m.user.email,
-      name: m.user.name,
-      isPlatformAdmin: platformAdminIds.has(m.userId),
-      tenantRoles: [] as { tenantId: string; tenantName: string; role: string }[],
-    };
-    const tenant = tenantById.get(m.tenantId);
-    if (tenant) entry.tenantRoles.push({ tenantId: tenant.id, tenantName: tenant.name, role: m.role });
-    byUser.set(m.userId, entry);
-  }
+    const byUser = new Map<string, {
+      userId: string; email: string; name: string | null; isPlatformAdmin: boolean;
+      tenantRoles: { tenantId: string; tenantName: string; role: string }[];
+    }>();
+    for (const m of memberships as any[]) {
+      const entry = byUser.get(m.userId) ?? {
+        userId: m.userId,
+        email: m.user.email,
+        name: m.user.name,
+        isPlatformAdmin: platformAdminIds.has(m.userId),
+        tenantRoles: [] as { tenantId: string; tenantName: string; role: string }[],
+      };
+      const tenant = tenantById.get(m.tenantId);
+      if (tenant) entry.tenantRoles.push({ tenantId: tenant.id, tenantName: tenant.name, role: m.role });
+      byUser.set(m.userId, entry);
+    }
 
-  return NextResponse.json({
-    organization,
-    tenants,
-    members: Array.from(byUser.values()).sort((a, b) => a.email.localeCompare(b.email)),
+    return NextResponse.json({
+      organization,
+      tenants,
+      members: Array.from(byUser.values()).sort((a, b) => a.email.localeCompare(b.email)),
+    });
   });
 }
 
@@ -91,60 +97,65 @@ export async function PATCH(req: NextRequest) {
   const gate = await requireOrgPlatformAdmin(user);
   if (gate instanceof NextResponse) return gate;
 
-  const parsed = ActionSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });
-  const { organizationId } = gate;
+  // Past the gate this reads and writes across every workspace in the
+  // organization by design, so it runs outside the caller's row-level
+  // security filter (BE-TEN-03); requireOrgPlatformAdmin is the check.
+  return withSystemDbContext(async () => {
+    const parsed = ActionSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });
+    const { organizationId } = gate;
 
-  if (parsed.data.action === "grant_platform_admin" || parsed.data.action === "revoke_platform_admin") {
-    const { userId } = parsed.data;
-    const isOrgMember = await prisma.membership.findFirst({
-      where: { userId, tenant: { organizationId } },
-      select: { id: true },
-    });
-    if (!isOrgMember) {
-      return NextResponse.json(
-        { error: "That account isn't a member of any workspace in this organization yet — invite them into a workspace first." },
-        { status: 404 },
-      );
-    }
-
-    if (parsed.data.action === "grant_platform_admin") {
-      await prisma.orgMembership.upsert({
-        where: { userId_organizationId: { userId, organizationId } },
-        update: { role: "platform_admin" },
-        create: { userId, organizationId, role: "platform_admin" },
+    if (parsed.data.action === "grant_platform_admin" || parsed.data.action === "revoke_platform_admin") {
+      const { userId } = parsed.data;
+      const isOrgMember = await prisma.membership.findFirst({
+        where: { userId, tenant: { organizationId } },
+        select: { id: true },
       });
-      recordAudit({ user, kind: "org.platform_admin.grant", target: userId, req, organizationId });
-    } else {
-      // Never let the last Platform Admin revoke themselves (or the only
-      // other one) out of managing the org at all.
-      const remaining = await prisma.orgMembership.count({
-        where: { organizationId, role: "platform_admin", userId: { not: userId } },
-      });
-      if (remaining === 0) {
-        return NextResponse.json({ error: "Can't revoke the last Platform Admin of this organization." }, { status: 400 });
+      if (!isOrgMember) {
+        return NextResponse.json(
+          { error: "That account isn't a member of any workspace in this organization yet — invite them into a workspace first." },
+          { status: 404 },
+        );
       }
-      await prisma.orgMembership.deleteMany({ where: { userId, organizationId } });
-      recordAudit({ user, kind: "org.platform_admin.revoke", target: userId, req, organizationId });
+
+      if (parsed.data.action === "grant_platform_admin") {
+        await prisma.orgMembership.upsert({
+          where: { userId_organizationId: { userId, organizationId } },
+          update: { role: "platform_admin" },
+          create: { userId, organizationId, role: "platform_admin" },
+        });
+        recordAudit({ user, kind: "org.platform_admin.grant", target: userId, req, organizationId });
+      } else {
+        // Never let the last Platform Admin revoke themselves (or the only
+        // other one) out of managing the org at all.
+        const remaining = await prisma.orgMembership.count({
+          where: { organizationId, role: "platform_admin", userId: { not: userId } },
+        });
+        if (remaining === 0) {
+          return NextResponse.json({ error: "Can't revoke the last Platform Admin of this organization." }, { status: 400 });
+        }
+        await prisma.orgMembership.deleteMany({ where: { userId, organizationId } });
+        recordAudit({ user, kind: "org.platform_admin.revoke", target: userId, req, organizationId });
+      }
+      return NextResponse.json({ ok: true });
     }
+
+    // set_role — change a member's role in ANY tenant within this org.
+    const { userId, tenantId, role } = parsed.data;
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { organizationId: true, name: true } });
+    if (!tenant || tenant.organizationId !== organizationId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const membership = await prisma.membership.findUnique({ where: { userId_tenantId: { userId, tenantId } } });
+    if (!membership) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    await prisma.membership.update({ where: { userId_tenantId: { userId, tenantId } }, data: { role } });
+    recordAudit({
+      user, kind: "role.assign", target: userId, req,
+      tenantId, // attribute to the tenant whose Membership actually changed
+      organizationId,
+      meta: { previousRole: membership.role, newRole: role, viaOrganizationTab: true },
+    });
     return NextResponse.json({ ok: true });
-  }
-
-  // set_role — change a member's role in ANY tenant within this org.
-  const { userId, tenantId, role } = parsed.data;
-  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { organizationId: true, name: true } });
-  if (!tenant || tenant.organizationId !== organizationId) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  const membership = await prisma.membership.findUnique({ where: { userId_tenantId: { userId, tenantId } } });
-  if (!membership) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  await prisma.membership.update({ where: { userId_tenantId: { userId, tenantId } }, data: { role } });
-  recordAudit({
-    user, kind: "role.assign", target: userId, req,
-    tenantId, // attribute to the tenant whose Membership actually changed
-    organizationId,
-    meta: { previousRole: membership.role, newRole: role, viaOrganizationTab: true },
   });
-  return NextResponse.json({ ok: true });
 }

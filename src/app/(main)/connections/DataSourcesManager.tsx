@@ -7,7 +7,7 @@ import { useT } from "@/lib/i18n/LocaleContext";
  * Non-admin users see the list but not the mutation buttons.
  */
 import { useEffect, useRef, useState } from "react";
-import { Trash2, Database, Globe, RefreshCw, Pencil, X as CloseIcon, FileSpreadsheet, Lock, Users as UsersIcon, User as UserIcon } from "lucide-react";
+import { Trash2, Database, Layers, Globe, RefreshCw, Pencil, X as CloseIcon, FileSpreadsheet, Lock, Users as UsersIcon, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/lib/toast";
 import { ConnectionForm } from "@/components/connections/ConnectionForm";
@@ -147,12 +147,13 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
                         : it.kind === "mysql" ? <Database className="h-3.5 w-3.5 text-warning" />
                         : it.kind === "snowflake" ? <Database className="h-3.5 w-3.5 text-primary" />
                         : it.kind === "bigquery" ? <Database className="h-3.5 w-3.5 text-success" />
+                        : it.kind === "engine" ? <Layers className="h-3.5 w-3.5 text-primary" />
                         : <Database className="h-3.5 w-3.5" />}
                       {it.presetKind === "hubspot" ? "HubSpot CRM" : it.presetKind === "zendesk" ? "Zendesk" : it.kind}
                     </span>
                   </td>
                   <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {it.kind === "rest" || it.kind === "postgres" || it.kind === "mysql" || it.kind === "snowflake" || it.kind === "bigquery"
+                    {it.kind === "rest" || it.kind === "postgres" || it.kind === "mysql" || it.kind === "snowflake" || it.kind === "bigquery" || it.kind === "engine"
                       ? (it.baseUrl ?? "—")
                       : it.kind === "excel"
                         ? (it.originalFilename

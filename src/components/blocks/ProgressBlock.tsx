@@ -1,5 +1,7 @@
+"use client";
 import type { BlockRenderContext } from "./types";
 import { BlockEmptyState } from "./BlockEmptyState";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 const COLORS: Record<string, { bar: string; track: string; text: string }> = {
   primary: { bar: "bg-gradient-to-r from-[hsl(var(--primary))] to-[hsl(var(--primary))]/70", track: "bg-primary/10",    text: "text-primary"    },
@@ -44,12 +46,13 @@ function Bar({ pct, c }: { pct: number; c: (typeof COLORS)[string] }) {
 }
 
 export function ProgressBlock({ block, dataset, bare }: BlockRenderContext) {
+  const { t } = useT();
   if (block.type !== "progress") return null;
   const { label, queryId, valueField, labelField, descriptionField, maxRows, value, showPercent, color } =
     block.config;
 
   if (queryId && (!dataset[queryId] || dataset[queryId].length === 0)) {
-    return <BlockEmptyState type="progress" blockId={block.id} title={label} />;
+    return <BlockEmptyState type="progress" blockId={block.id} title={label} typeLabel={t("blockType.progress")} description={t("blockEmpty.noData")} />;
   }
   const c = COLORS[color] ?? COLORS.primary;
 

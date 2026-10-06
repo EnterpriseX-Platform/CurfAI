@@ -16,8 +16,10 @@
 import { prisma } from "@/lib/db";
 import { bustForDataSource } from "@/lib/reporting/queryCache";
 import { broadcastToTenant } from "@/lib/realtime/bus";
+import { forgetLakeCatalog } from "./dateColumnNames";
 
 export async function bustLakeCacheForTenant(tenantId: string, tableName?: string): Promise<void> {
+  forgetLakeCatalog(tenantId);
   try {
     const sources = await prisma.dataSource.findMany({
       where: { tenantId, kind: "lake" },

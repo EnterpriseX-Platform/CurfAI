@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, tenantWhere, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { canBuild } from "@/lib/roles";
 
 const CreateSchema = z.object({
   reportId: z.string().min(1),
@@ -25,6 +26,9 @@ export async function GET(req: NextRequest) {
   }
   const items = await prisma.schedule.findMany({
     where: {
+      // Watchers, digests and briefs are Schedule rows too, each with its
+      // own route and rules; this surface is report delivery only.
+      kind: "delivery",
       ...tenantWhere(user),
       ...(reportId ? { reportId } : (user.scopedReportIds ? { reportId: { in: user.scopedReportIds } } : {})),
     },
@@ -51,6 +55,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // A schedule is a standing job that emails a report to whoever it lists;
+  // viewer and executive sessions and keys are read-only.
+  if (!canBuild(user.role)) return NextResponse.json({ error: "Viewer role is read-only" }, { status: 403 });
   // Scheduled delivery is Community (2026-09-13 decision) — no tier gate.
   // Chat channels stay paid via intelligence.brief_delivery in the dispatcher.
   const body = await req.json().catch(() => null);

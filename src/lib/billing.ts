@@ -4,44 +4,18 @@ import { prisma } from "@/lib/db";
 import type { CurfSessionUser } from "@/lib/auth";
 import type { Tx } from "@/lib/rls";
 import { EDITION } from "@/lib/ee/edition";
-
-/** Either the singleton client or the `tx` withTenantContext() hands its callback. */
-type Db = PrismaClient | Tx;
-
-/** Where a 402 sends the user: in-app billing on Cloud, the pricing page for Community. */
-export const UPGRADE_URL = EDITION === "community" ? "https://curf.ai/pricing/" : "/admin/billing";
+import {
+  UPGRADE_URL, EDITOR_ROLES, PLANS, TIER_LEVEL, planForTier, tierAtLeast, aiCreditsPerMonth,
+  type Tier, type SeatCounts,
+} from "@/lib/plans";
 
 /**
- * Self-serve paid plans start with a free trial of this many days. It is
- * granted once per workspace — at checkout, only when the tenant has never
- * held a Stripe subscription — so cancelling and re-subscribing does not
- * restart the clock. Stripe reports the subscription as `trialing` until
- * the trial ends, and tierFromSubscription() treats that like `active`.
- * curf.ai's pricing page and Terms §3 quote this number; keep them in step.
- */
-export const TRIAL_DAYS = 14;
-
-/** Whether a workspace still qualifies for the free trial at checkout. */
-export function trialEligible(tenant: { stripeSubscriptionId: string | null; stripeStatus: string | null }): boolean {
-  return !tenant.stripeSubscriptionId && !tenant.stripeStatus;
-}
-/** Count-based quotas are Cloud's free-tier ceilings; self-hosted Community has none. */
-const COUNT_QUOTAS_APPLY = EDITION !== "community";
-
-/**
- * Subscription tiers, feature gates, and the Stripe price catalog.
- *
- * Four plans (marketing-aligned slugs), priced per seat with two seat
- * kinds — editors (admin, developer) build; viewers (executive, viewer)
- * read — plus a pooled monthly AI-credit allowance (1 credit = 1 cent of
- * model cost at list price, metered in lib/llm/index.ts):
- *   community  - free. 5 reports, 1 dashboard, 100 AI credits.
- *   growth     - $49 / editor, $9 / viewer (first 10 free). 500 credits per
- *                editor + 50 per viewer, pooled.
- *   business   - $99 / editor (minimum 5), $15 / viewer. 2,000 credits per
- *                editor + 100 per viewer; unmetered with the workspace's
- *                own key (gov.tenant_anthropic_key).
- *   enterprise - dedicated single-tenant infra + custom retention/SLA.
+ * Billing on the server: Stripe price ids, tier reads from the database,
+ * count quotas and AI-credit metering. The tiers, the plan catalog and the
+ * price math live in lib/plans.ts, which has no server imports so client
+ * components can use it; they are re-exported here so server code keeps a
+ * single import. Client code must import lib/plans.ts, never this module —
+ * this one pulls in lib/db and the Prisma client (db.clientBundle.test.ts).
  *
  * The `tier` lives on Tenant.tier (string) and is updated by the Stripe
  * webhook on subscription lifecycle events. The price id mapping lives in
@@ -49,188 +23,26 @@ const COUNT_QUOTAS_APPLY = EDITION !== "community";
  *
  * Feature checks happen via `requireTier(user, "growth")` in API routes -
  * returns null when the user passes, or a 402 NextResponse to short-circuit
- * the handler. UI surfaces use `tierAtLeast(user, "growth")` directly.
- *
- * Adding a new tier or feature flag is a 4-step change:
- *   1. Add the slug to Tier below.
- *   2. Add a TIER_LEVEL entry.
- *   3. Add a row to PLANS with seats, credits + features.
- *   4. Add the two price ids to env (STRIPE_PRICE_<TIER>_EDITOR / _VIEWER).
+ * the handler. UI surfaces use `tierAtLeast(user, "growth")` from
+ * lib/plans.ts directly.
  */
+export {
+  UPGRADE_URL, TRIAL_DAYS, trialEligible, EDITOR_ROLES, PLANS, planForTier, tierAtLeast,
+  billableSeats, monthlyPriceUsd, aiCreditsPerMonth,
+} from "@/lib/plans";
+export type { Tier, PlanFeatures, Plan, SeatCounts } from "@/lib/plans";
 
-export type Tier = "community" | "growth" | "business" | "enterprise";
+/** Either the singleton client or the `tx` withTenantContext() hands its callback. */
+type Db = PrismaClient | Tx;
 
-const TIER_LEVEL: Record<Tier, number> = { community: 0, growth: 1, business: 2, enterprise: 3 };
-
-export type PlanFeatures = {
-  /** Hard cap on reports per tenant. Infinity = unlimited. */
-  reports: number;
-  /** Hard cap on dashboards per tenant. Infinity = unlimited. */
-  dashboards: number;
-  /** Hard cap on published Analytic Apps per tenant. Infinity = unlimited.
-   *  Community is 0 because apps.publish already starts at Growth — the
-   *  number keeps the two consistent rather than relying on the flag alone. */
-  apps: number;
-  /** Hard cap on watcher schedules per tenant. 0 = watchers disabled. */
-  watchersMax: number;
-  /** Monthly AI allowance on Curf's own key, in credits (1 credit = 1 cent
-   *  of model cost at list price), pooled per workspace: base + per seat.
-   *  Enforced in lib/llm/index.ts against LlmTokenUsage; a workspace on
-   *  its own key is not metered. Infinity = unmetered. */
-  aiCredits: { base: number; perEditor: number; perViewer: number };
-  /** Hard cap on active (non-revoked, non-expired) public share tokens.
-   *  Community is small to discourage redistribution; Growth and Business are open. */
-  shareLinksMax: number;
-  /** Days of audit log retention exposed to the admin UI. The DB keeps
-   *  rows beyond this — operational policy decides whether to prune. */
-  auditLogRetentionDays: number;
-  // ---- Boolean feature toggles (legacy column — keep until callers move
-  // to lib/featureGate.ts which is the new single source of truth). ----
-  schedules: number;
-  watchers: boolean;
-  apiKeys: boolean;
-  sso: boolean;
-  auditLog: boolean;
-  shareLinks: boolean;
-  embed: boolean;
-  comments: boolean;
-};
-
-export type Plan = {
-  tier: Tier;
-  name: string;
-  tagline: string;
-  /** Seat pricing. Null for plans that aren't sold per seat (community, enterprise). */
-  seats: {
-    editorUsd: number;
-    viewerUsd: number;
-    /** Viewers included before the per-viewer price applies. */
-    freeViewers: number;
-    /** Billed editor seats never drop below this — the plan's floor. */
-    minEditors: number;
-  } | null;
-  /** Env var names holding the Stripe price ids for each seat kind. */
-  priceEnvVars: { editor: string; viewer: string } | null;
-  features: PlanFeatures;
-};
-
-/** Which membership roles are billed as editors; every other role is a viewer. */
-export const EDITOR_ROLES: readonly string[] = ["admin", "developer"];
-
-export const PLANS: Plan[] = [
-  {
-    tier: "community",
-    name: "Community",
-    tagline: "Try the designer, ship 5 reports, schedule them by email.",
-    seats: null,
-    priceEnvVars: null,
-    features: {
-      reports: 5,
-      dashboards: 1,
-      apps: 0,
-      watchersMax: 0,
-      aiCredits: { base: 100, perEditor: 0, perViewer: 0 },
-      shareLinksMax: 3,
-      auditLogRetentionDays: 7,
-      schedules: Infinity,
-      watchers: false,
-      apiKeys: false,
-      sso: false,
-      auditLog: false,
-      shareLinks: true,
-      embed: false,
-      comments: true,
-    },
-  },
-  {
-    tier: "growth",
-    name: "Growth",
-    tagline: "Unlimited reports, the trust layer, Analytic Apps.",
-    seats: { editorUsd: 49, viewerUsd: 9, freeViewers: 10, minEditors: 1 },
-    priceEnvVars: { editor: "STRIPE_PRICE_GROWTH_EDITOR", viewer: "STRIPE_PRICE_GROWTH_VIEWER" },
-    features: {
-      reports: 50,
-      dashboards: 10,
-      apps: 3,
-      watchersMax: 10,
-      aiCredits: { base: 0, perEditor: 500, perViewer: 50 },
-      shareLinksMax: 50,
-      auditLogRetentionDays: 30,
-      schedules: Infinity,
-      watchers: true,
-      apiKeys: true,
-      sso: true,
-      auditLog: false,
-      shareLinks: true,
-      embed: true,
-      comments: true,
-    },
-  },
-  {
-    tier: "business",
-    name: "Business",
-    tagline: "Everything in Growth + AI captions, watchers, audit log, custom OIDC.",
-    seats: { editorUsd: 99, viewerUsd: 15, freeViewers: 0, minEditors: 5 },
-    priceEnvVars: { editor: "STRIPE_PRICE_BUSINESS_EDITOR", viewer: "STRIPE_PRICE_BUSINESS_VIEWER" },
-    features: {
-      reports: Infinity,
-      dashboards: Infinity,
-      apps: Infinity,
-      watchersMax: Infinity,
-      aiCredits: { base: 0, perEditor: 2000, perViewer: 100 },
-      shareLinksMax: Infinity,
-      auditLogRetentionDays: 365,
-      schedules: Infinity,
-      watchers: true,
-      apiKeys: true,
-      sso: true,
-      auditLog: true,
-      shareLinks: true,
-      embed: true,
-      comments: true,
-    },
-  },
-  {
-    tier: "enterprise",
-    name: "Enterprise",
-    tagline: "Everything in Business + dedicated single-tenant infra, custom retention/SLA.",
-    // No self-serve Stripe price — enterprise is sold + provisioned manually.
-    seats: null,
-    priceEnvVars: null,
-    features: {
-      reports: Infinity,
-      dashboards: Infinity,
-      apps: Infinity,
-      watchersMax: Infinity,
-      aiCredits: { base: Infinity, perEditor: 0, perViewer: 0 },
-      shareLinksMax: Infinity,
-      auditLogRetentionDays: Infinity,
-      schedules: Infinity,
-      watchers: true,
-      apiKeys: true,
-      sso: true,
-      auditLog: true,
-      shareLinks: true,
-      embed: true,
-      comments: true,
-    },
-  },
-];
-
-const PLAN_BY_TIER: Record<Tier, Plan> = Object.fromEntries(
-  PLANS.map((p) => [p.tier, p]),
-) as Record<Tier, Plan>;
-
-/** Look up a plan by tier slug. Falls back to "community" if unknown. */
-export function planForTier(tier: string | null | undefined): Plan {
-  return PLAN_BY_TIER[(tier as Tier) ?? "community"] ?? PLAN_BY_TIER.community;
-}
+/** Count-based quotas are Cloud's free-tier ceilings; self-hosted Community has none. */
+const COUNT_QUOTAS_APPLY = EDITION !== "community";
 
 /** Stripe price ids for a tier's two seat kinds, read from env at request
  *  time. Null when the plan isn't sold per seat or either id is unset. */
 export function priceIdsForTier(tier: Tier): { editor: string; viewer: string } | null {
-  const plan = PLAN_BY_TIER[tier];
-  if (!plan?.priceEnvVars) return null;
+  const plan = planForTier(tier);
+  if (!plan.priceEnvVars) return null;
   const editor = process.env[plan.priceEnvVars.editor];
   const viewer = process.env[plan.priceEnvVars.viewer];
   return editor && viewer ? { editor, viewer } : null;
@@ -245,8 +57,6 @@ export function tierForPriceId(priceId: string): Tier | null {
   return null;
 }
 
-export type SeatCounts = { editors: number; viewers: number };
-
 /** Editors and viewers in a workspace, by membership role. */
 export async function countSeats(tenantId: string, db: Db = prisma): Promise<SeatCounts> {
   const rows = await db.membership.groupBy({ by: ["role"], where: { tenantId }, _count: { _all: true } });
@@ -258,44 +68,9 @@ export async function countSeats(tenantId: string, db: Db = prisma): Promise<Sea
   return { editors, viewers };
 }
 
-/** What Stripe bills for these seats on this plan: the editor floor
- *  applies, and the plan's free viewers come off the viewer count. */
-export function billableSeats(plan: Plan, seats: SeatCounts): SeatCounts {
-  if (!plan.seats) return { editors: 0, viewers: 0 };
-  return {
-    editors: Math.max(seats.editors, plan.seats.minEditors),
-    viewers: Math.max(0, seats.viewers - plan.seats.freeViewers),
-  };
-}
-
-/** Monthly list price for these seats on this plan, in USD. */
-export function monthlyPriceUsd(plan: Plan, seats: SeatCounts): number {
-  if (!plan.seats) return 0;
-  const b = billableSeats(plan, seats);
-  return b.editors * plan.seats.editorUsd + b.viewers * plan.seats.viewerUsd;
-}
-
-/** The workspace's pooled monthly AI-credit allowance on this plan. */
-export function aiCreditsPerMonth(plan: Plan, seats: SeatCounts): number {
-  const c = plan.features.aiCredits;
-  return c.base + c.perEditor * seats.editors + c.perViewer * seats.viewers;
-}
-
 // ---------------------------------------------------------------------------
 // Tier checks
 // ---------------------------------------------------------------------------
-
-/**
- * Cheap synchronous check against the tier baked into the session. The
- * session reflects the tenant.tier as of last login - good enough for UI
- * gating and most API checks. Use `loadTenantTier` if you need a fresh
- * read from the DB (e.g. inside a webhook handler).
- */
-export function tierAtLeast(currentTier: string | null | undefined, minTier: Tier): boolean {
-  const current = TIER_LEVEL[(currentTier as Tier) ?? "community"] ?? 0;
-  const min = TIER_LEVEL[minTier] ?? 0;
-  return current >= min;
-}
 
 /**
  * Read the current tenant tier from the database. Use this in webhooks and
@@ -386,6 +161,32 @@ export async function requireDashboardQuota(user: CurfSessionUser, db: Db = pris
   return NextResponse.json(
     {
       error: "Dashboard quota reached for the " + plan.name + " plan (" + plan.features.dashboards + " max).",
+      currentTier: tier,
+      requiredTier: tier === "community" ? "growth" : "business",
+      upgradeUrl: UPGRADE_URL,
+    },
+    { status: 402 },
+  );
+}
+
+/**
+ * Block minting another public share link when the workspace has its plan's
+ * number of live (unexpired) links: Community 3, Growth 50, Business and up
+ * unlimited (plans.ts shareLinksMax). The limit was declared and shown on
+ * the billing page, but nothing counted.
+ */
+export async function requireShareLinkQuota(user: CurfSessionUser, db: Db = prisma): Promise<NextResponse | null> {
+  if (!COUNT_QUOTAS_APPLY) return null;
+  const tier = await loadTenantTier(user.tenantId, db);
+  const plan = planForTier(tier);
+  if (!Number.isFinite(plan.features.shareLinksMax)) return null;
+  const live = await db.publicShareToken.count({
+    where: { tenantId: user.tenantId, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+  });
+  if (live < plan.features.shareLinksMax) return null;
+  return NextResponse.json(
+    {
+      error: "Share link limit reached for the " + plan.name + " plan (" + plan.features.shareLinksMax + " live links). Revoke one, or upgrade.",
       currentTier: tier,
       requiredTier: tier === "community" ? "growth" : "business",
       upgradeUrl: UPGRADE_URL,

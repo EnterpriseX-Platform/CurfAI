@@ -8,6 +8,7 @@ import {
   DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { SavedViewsPicker } from "./SavedViewsPicker";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * Dashboard-style shared filter bar shown on the viewer above the report content.
@@ -43,6 +44,7 @@ export function FilterBar({
   // additions. So we render the bar whenever the picker is wired even if
   // the parameter list is empty.
   const hasViewsPicker = !!(reportId && onSelectView);
+  const { t } = useT();
 
   const [, startTransition] = useTransition();
 
@@ -97,9 +99,9 @@ export function FilterBar({
           onClick={reset}
           disabled={loading}
           className="ml-auto h-7 text-xs"
-          title="Reset to defaults"
+          title={t("filterBar.resetTitle")}
         >
-          <RotateCcw className="mr-1 h-3 w-3" /> Reset
+          <RotateCcw className="mr-1 h-3 w-3" /> {t("filterBar.reset")}
         </Button>
       )}
     </div>
@@ -118,6 +120,7 @@ function FilterControl({
   isDefault: boolean;
   onChange: (v: unknown) => void;
 }) {
+  const { t } = useT();
   // Pill: "Label  Value ▾" — label in the muted ink, value in the full ink;
   // a non-default value tints the pill with the accent's soft tone.
   const baseChip =
@@ -142,7 +145,7 @@ function FilterControl({
           title={param.label}
         >
           <span className="text-muted-foreground">{param.label}:</span>
-          <span>{value === true || value === "true" ? "on" : "off"}</span>
+          <span>{t(value === true || value === "true" ? "filterBar.on" : "filterBar.off")}</span>
         </button>
       );
 
@@ -194,14 +197,7 @@ function FilterControl({
 // Date-range with preset chips
 // ---------------------------------------------------------------------------
 
-const DATE_PRESETS = [
-  { value: "7d",   label: "Last 7 days" },
-  { value: "30d",  label: "Last 30 days" },
-  { value: "90d",  label: "Last 90 days" },
-  { value: "qtd",  label: "Quarter to date" },
-  { value: "ytd",  label: "Year to date" },
-  { value: "all",  label: "All time" },
-];
+const DATE_PRESETS = ["7d", "30d", "90d", "qtd", "ytd", "all"] as const;
 
 function DateRangeChip({
   param, value, chipClass, onChange,
@@ -211,10 +207,11 @@ function DateRangeChip({
   chipClass: string;
   onChange: (v: unknown) => void;
 }) {
+  const { t } = useT();
   const current = String(value ?? "");
-  const matched = DATE_PRESETS.find((p) => p.value === current);
-  const display = matched?.label
-    ?? (current.includes("..") ? "Custom range" : current || "—");
+  const matched = DATE_PRESETS.find((p) => p === current);
+  const display = matched ? t(`filterBar.preset.${matched}`)
+    : current.includes("..") ? t("filterBar.customRange") : current || "—";
 
   return (
     <DropdownMenu>
@@ -228,21 +225,21 @@ function DateRangeChip({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
         <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Presets
+          {t("filterBar.presets")}
         </DropdownMenuLabel>
         {DATE_PRESETS.map((p) => (
           <DropdownMenuItem
-            key={p.value}
-            onSelect={() => onChange(p.value)}
+            key={p}
+            onSelect={() => onChange(p)}
             className="flex items-center justify-between"
           >
-            <span>{p.label}</span>
-            {current === p.value && <Check className="ml-2 h-3.5 w-3.5 text-primary" />}
+            <span>{t(`filterBar.preset.${p}`)}</span>
+            {current === p && <Check className="ml-2 h-3.5 w-3.5 text-primary" />}
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Custom range
+          {t("filterBar.customRange")}
         </DropdownMenuLabel>
         <CustomRangePicker value={current} onChange={onChange} />
       </DropdownMenuContent>
@@ -255,32 +252,33 @@ function CustomRangePicker({ value, onChange }: { value: string; onChange: (v: s
   // string carries both ends. Queries can split on ".." or use it via a
   // DATE() check depending on the source.
   const [from, to] = value.includes("..") ? value.split("..") : ["", ""];
+  const { t } = useT();
   const [f, setF] = useState(from);
-  const [t, setT] = useState(to);
+  const [until, setUntil] = useState(to);
 
   return (
     <div className="grid gap-1.5 px-2 py-1.5">
       <label className="grid gap-0.5 text-[11px] text-muted-foreground">
-        From
+        {t("filterBar.from")}
         <input
           type="date" value={f} onChange={(e) => setF(e.target.value)}
           className="h-7 rounded border border-border bg-background px-2 text-xs"
         />
       </label>
       <label className="grid gap-0.5 text-[11px] text-muted-foreground">
-        To
+        {t("filterBar.to")}
         <input
-          type="date" value={t} onChange={(e) => setT(e.target.value)}
+          type="date" value={until} onChange={(e) => setUntil(e.target.value)}
           className="h-7 rounded border border-border bg-background px-2 text-xs"
         />
       </label>
       <Button
         size="sm" variant="default"
-        disabled={!f || !t}
-        onClick={() => onChange(f + ".." + t)}
+        disabled={!f || !until}
+        onClick={() => onChange(f + ".." + until)}
         className="mt-1 h-7 text-xs"
       >
-        Apply custom range
+        {t("filterBar.applyRange")}
       </Button>
     </div>
   );
@@ -298,6 +296,7 @@ function SelectChip({
   chipClass: string;
   onChange: (v: unknown) => void;
 }) {
+  const { t } = useT();
   const opts = param.options ?? [];
   const current = String(value ?? "");
   const matched = opts.find((o) => o.value === current);
@@ -314,7 +313,7 @@ function SelectChip({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-48">
         {opts.length === 0 && (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No options.</div>
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">{t("filterBar.noOptions")}</div>
         )}
         {opts.map((o) => (
           <DropdownMenuItem

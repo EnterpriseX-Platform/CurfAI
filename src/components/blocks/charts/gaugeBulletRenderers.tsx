@@ -18,6 +18,8 @@ const FALLBACK_SEMANTIC: Record<string, string> = {
 
 export function renderGaugeChart(ctx: ChartRenderCtx): ReactElement {
   const { data, yFields, cfg, palette, fmt, currency, semantic = FALLBACK_SEMANTIC } = ctx;
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
   // Gauge — pure SVG, value comes from the first row's first yField.
   const v = Number((data[0] as any)?.[yFields[0]]);
   const inferred = computeGaugeBounds(data, yFields[0], cfg);
@@ -29,7 +31,7 @@ export function renderGaugeChart(ctx: ChartRenderCtx): ReactElement {
       target={cfg.gaugeTarget}
       zones={cfg.gaugeZones}
       palette={palette}
-      format={(n: number) => formatValue(n, fmt, currency)}
+      format={(n: number) => formatValue(n, fmt, currency, numOpts)}
       semantic={semantic}
     />
   );
@@ -37,6 +39,8 @@ export function renderGaugeChart(ctx: ChartRenderCtx): ReactElement {
 
 export function renderBulletChart(ctx: ChartRenderCtx): ReactElement {
   const { data, yFields, cfg, palette, fmt, currency, semantic = FALLBACK_SEMANTIC } = ctx;
+
+  const numOpts = { locale: ctx.dateStyle?.locale };
   const v = Number((data[0] as any)?.[yFields[0]]);
   const inferred = computeGaugeBounds(data, yFields[0], cfg);
   return (
@@ -47,7 +51,7 @@ export function renderBulletChart(ctx: ChartRenderCtx): ReactElement {
       target={cfg.gaugeTarget}
       zones={cfg.gaugeZones}
       palette={palette}
-      format={(n: number) => formatValue(n, fmt, currency)}
+      format={(n: number) => formatValue(n, fmt, currency, numOpts)}
       label={cfg.subtitle}
       semantic={semantic}
     />

@@ -70,6 +70,20 @@ export type ImportResult =
   | { ok: false; error: string };
 
 /** Public entrypoint. Buffer in, SQLite file out, schema metadata returned. */
+/**
+ * Where an Excel upload's SQLite copy lives for one tenant. Upload, refresh
+ * and delete all check paths against this same root. With CURF_LAKE_DIR
+ * set (every deployment) it is on that volume; the app's own directory is
+ * read-only there, so uploads to process.cwd()/var/tenants failed with
+ * EACCES on prod. Local dev keeps its old var/tenants location.
+ */
+export function tenantUploadRoot(tenantId: string): string {
+  const base = process.env.CURF_LAKE_DIR
+    ? path.join(process.env.CURF_LAKE_DIR, "tenant-files")
+    : path.join(process.cwd(), "var", "tenants");
+  return path.join(base, tenantId);
+}
+
 export async function parseExcelToSqlite(
   buf: Buffer,
   dbPath: string,

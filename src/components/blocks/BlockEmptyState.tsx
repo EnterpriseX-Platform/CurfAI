@@ -22,26 +22,38 @@
 import { BLOCK_META as BlockRegistry } from "./registryMeta";
 import { BlockType } from "@/lib/reporting/schema";
 import { EmptyState } from "@/components/common/EmptyState";
-import { DICT } from "@/lib/i18n/dict";
+import type { QueryNotRun } from "@/lib/reporting/queryRunState";
+import { AlertTriangle } from "lucide-react";
 
 export function BlockEmptyState({
-  type, blockId, title, description,
+  type, blockId, title, typeLabel, description, notRun,
 }: {
   type: BlockType;
   blockId: string;
   title?: string;
   /**
-   * Pre-translated override — most callers are Client Components with
-   * `useT()` already in scope (KpiBlock, ChartBlock, TableBlock,
-   * HeatmapBlock all pass `t("blockEmpty.noData")` here). Callers that
-   * can't resolve a locale (this component is deliberately hook-free — see
-   * below) fall back to the dict's English string, which is still a single
-   * source of truth rather than a second hardcoded copy of the same text.
+   * The block type's name in the reader's language (`t("blockType.<type>")`),
+   * shown when the block has no title of its own.
    */
-  description?: string;
+  typeLabel: string;
+  /**
+   * What to say, in the reader's language: every caller is a client block
+   * with `useT()` in scope (`t("blockEmpty.noData")`, or the failed /
+   * restricted text when `notRun` is set). This component stays hook-free
+   * (see below), and it has no dictionary of its own: that would ship every
+   * language to the browser.
+   */
+  description: string;
+  /**
+   * Set when the block is empty because its query did NOT run (it failed, or
+   * the viewer can't see its source) rather than because it returned nothing.
+   * "No data to show yet" is a lie in that case: it reads as "come back later"
+   * where the truth is "this is broken". The caller passes the matching
+   * translated `description`; the reason itself is shown verbatim.
+   */
+  notRun?: QueryNotRun;
 }) {
-  const meta = BlockRegistry[type];
-  const Icon = meta.icon;
+  const Icon = BlockRegistry[type].icon;
 
   return (
     <div data-block-empty={blockId} className="h-full w-full">
@@ -54,9 +66,23 @@ export function BlockEmptyState({
        * this composition preserves that guarantee.
        */}
       <EmptyState
-        icon={<Icon className="h-5 w-5" />}
-        title={title ? title : meta.label}
-        description={description ?? DICT.en["blockEmpty.noData"]}
+        compact={!!notRun}
+        icon={notRun ? <AlertTriangle className="h-4 w-4" /> : <Icon className="h-5 w-5" />}
+        title={title ? title : typeLabel}
+        description={description}
+        preview={notRun ? (
+          <div
+            role="alert"
+            data-block-not-run={notRun.kind}
+            // The block may be a short fixed-height slot: clamp to two lines, full text on hover.
+            title={notRun.reason}
+            className={`mx-auto line-clamp-2 max-w-sm break-words rounded-md border px-2 py-1 font-mono text-[11px] leading-snug ${
+              notRun.kind === "failed" ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-warning/30 bg-warning/5 text-warning"
+            }`}
+          >
+            {notRun.reason}
+          </div>
+        ) : undefined}
         className="h-full"
       />
     </div>

@@ -14,11 +14,11 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/lib/toast";
-import { CURRENCY_OPTIONS } from "@/lib/reporting/currency";
+import { CURRENCY_OPTIONS, DEFAULT_CURRENCY } from "@/lib/reporting/currency";
 
 export function CurrencyPanel({ initial }: { initial: string | null }) {
   const { push } = useToast();
-  const [currency, setCurrency] = useState(initial ?? "USD");
+  const [currency, setCurrency] = useState(initial ?? DEFAULT_CURRENCY);
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -34,7 +34,15 @@ export function CurrencyPanel({ initial }: { initial: string | null }) {
         push({ variant: "destructive", title: "Save failed", description: msg });
         return;
       }
-      push({ variant: "success", title: "Currency saved", description: "New reports and dashboards will show this currency by default." });
+      // resolveCurrency() reads Tenant.currency live on every render (report
+      // override > tenant default > DEFAULT_CURRENCY) — it's never baked into a report
+      // at creation time, so this genuinely applies to every existing
+      // report/dashboard/AI answer that has no currency of its own, not
+      // just ones created from now on. The description line below already
+      // said that; this toast used to say the opposite ("New reports and
+      // dashboards will show this currency by default"), which was simply
+      // wrong about what the save actually does.
+      push({ variant: "success", title: "Currency saved", description: "Applies immediately to every report, dashboard, and AI answer that doesn't set its own currency." });
     } finally {
       setSaving(false);
     }
@@ -59,7 +67,7 @@ export function CurrencyPanel({ initial }: { initial: string | null }) {
             </SelectContent>
           </Select>
         </div>
-        <Button size="sm" onClick={save} disabled={saving || currency === (initial ?? "USD")}>
+        <Button size="sm" onClick={save} disabled={saving || currency === (initial ?? DEFAULT_CURRENCY)}>
           {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
           Save
         </Button>

@@ -21,31 +21,44 @@ type Prefs = {
   density?: "comfortable" | "compact";
   fontScale?: number;
   reducedMotion?: boolean;
+  era?: "be" | "ce";
 };
 
 export function AccountForm({ initial }: { initial: Prefs }) {
-  const { t } = useT();
+  const { t, setEra } = useT();
   const [prefs, setPrefs] = useState<Prefs>(initial);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  // Only what the user changed since the last save. Opening the page saves
+  // nothing — resending every preference would audit each visit and write
+  // stale values over ones changed elsewhere (another tab, a LINE card).
+  const pendingRef = useRef<Partial<Prefs>>({});
 
   useEffect(() => {
+    if (Object.keys(pendingRef.current).length === 0) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
+      const changes = pendingRef.current;
+      pendingRef.current = {};
       try {
         const res = await fetch("/api/user/preferences", {
           method: "PUT",
           headers: { "content-type": "application/json" },
           credentials: "include",
-          body: JSON.stringify(prefs),
+          body: JSON.stringify(changes),
         });
         if (res.ok) setSavedAt(Date.now());
-      } catch { /* swallow — the user can re-edit and try again */ }
+        else pendingRef.current = { ...changes, ...pendingRef.current };
+      } catch {
+        // Keep them for the next edit to retry.
+        pendingRef.current = { ...changes, ...pendingRef.current };
+      }
     }, 400);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [prefs]);
 
   function patch(p: Partial<Prefs>) {
+    pendingRef.current = { ...pendingRef.current, ...p };
     setPrefs((cur) => ({ ...cur, ...p }));
   }
 
@@ -70,8 +83,8 @@ export function AccountForm({ initial }: { initial: Prefs }) {
               active={prefs.themeOverride === preset.slug}
               onClick={() => patch({ themeOverride: preset.slug })}
               swatch={preset.swatch}
-              label={preset.label}
-              description={preset.description}
+              label={t(`themePreset.${preset.slug}`)}
+              description={t(`themePreset.${preset.slug}.desc`)}
               palette={preset.palette.slice(0, 5)}
             />
           ))}
@@ -106,6 +119,17 @@ export function AccountForm({ initial }: { initial: Prefs }) {
           ]}
           value={prefs.density ?? "comfortable"}
           onChange={(v) => patch({ density: v as Prefs["density"] })}
+        />
+      </Section>
+
+      <Section title={t("account.eraHeading")} hint={t("account.eraHint")}>
+        <ChipRow
+          options={[
+            { slug: "be", label: t("account.eraBuddhist") },
+            { slug: "ce", label: t("account.eraGregorian") },
+          ]}
+          value={prefs.era ?? "be"}
+          onChange={(v) => { patch({ era: v as Prefs["era"] }); setEra(v as "be" | "ce"); }}
         />
       </Section>
 

@@ -10,11 +10,14 @@ import { renderCsv } from "@/lib/reporting/renderers/csv";
 import { ensureLimit } from "@/lib/rateLimit";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReport } from "@/lib/reporting/runner";
+import { deliveryViewer } from "@/lib/reporting/exportCaller";
+import { visibleReport } from "@/lib/reporting/visibleReport";
 import { safeParseJson } from "@/lib/cron/types";
 import type { FiredItem } from "@/lib/cron/types";
-import { tickLakePulls, tickMaterializedViews, tickLakeBackups, tickHourlySnapshots } from "@/lib/cron/lakeTicks";
+import { tickLakePulls, tickMaterializedViews, tickLakeBackups, tickBackupSnapshots } from "@/lib/cron/lakeTicks";
 import { tickAuditRetention, tickAiUsageThreshold, tickSecurityAlerts } from "@/lib/cron/opsTicks";
 import { ee } from "@/ee";
+import { appBase } from "@/lib/http/appBase";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,7 +83,7 @@ async function handle(req: NextRequest) {
   await tickLakePulls(fired, now, force);
   await tickMaterializedViews(fired, now, force);
   await tickLakeBackups(fired, now, force);
-  await tickHourlySnapshots(fired, now, force);
+  await tickBackupSnapshots(fired, now, force);
   await tickAuditRetention(fired, now, force);
   await tickAiUsageThreshold(fired, now, force);
   await tickSecurityAlerts(fired, now, force);
@@ -95,25 +98,35 @@ async function handle(req: NextRequest) {
 async function fireDelivery(sched: any, req: NextRequest) {
   const reportRow = await prisma.report.findUnique({ where: { id: sched.reportId } });
   if (!reportRow) throw new Error("Report missing");
-  const report = ReportSchema.parse(JSON.parse(reportRow.definition));
+  // Blocks a report author gated by role stay out of a delivery whoever
+  // created it, as they always have: the scheduled PDF's page filters them
+  // as nobody (renderPdf below isn't passed blocksAsViewer), so every other
+  // format does too. The creator (below) decides only which data the
+  // remaining blocks carry.
+  const report = visibleReport(ReportSchema.parse(JSON.parse(reportRow.definition)), undefined);
   const runParams: Record<string, unknown> = safeParseJson<Record<string, unknown>>(sched.params) ?? {};
+  // No one is asking for this file, and it goes to whoever is on the
+  // recipient list, so it renders as the schedule's creator. It used to
+  // render as the system, and a developer could have emailed out data from
+  // sources their own role can't see.
+  const viewer = await deliveryViewer(sched);
 
   let body: Buffer;
   let contentType: string;
   let ext: string;
   switch (sched.format) {
     case "xlsx":
-      body = await renderXlsx(report, runParams, { reportId: sched.reportId });
+      body = await renderXlsx(report, runParams, { reportId: sched.reportId, tenantId: sched.tenantId, viewer });
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
       ext = "xlsx";
       break;
     case "docx":
-      body = await renderDocx(report, runParams);
+      body = await renderDocx(report, runParams, { tenantId: sched.tenantId, viewer });
       contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
       ext = "docx";
       break;
     case "csv": {
-      const csv = await renderCsv(report, runParams);
+      const csv = await renderCsv(report, runParams, { tenantId: sched.tenantId, viewer });
       body = Buffer.from(csv);
       contentType = "text/csv; charset=utf-8";
       ext = "csv";
@@ -121,9 +134,11 @@ async function fireDelivery(sched: any, req: NextRequest) {
     }
     case "pdf":
     default:
-      await runReport({ report, params: runParams });
+      await runReport({ report, params: runParams, tenantId: sched.tenantId, viewer });
       body = await renderPdf({
         reportId: sched.reportId,
+        tenantId: sched.tenantId,
+        viewer,
         params: runParams,
         pageSize: report.pages[0]?.size,
         landscape: report.pages[0]?.orientation === "landscape",
@@ -140,7 +155,7 @@ async function fireDelivery(sched: any, req: NextRequest) {
     contentType,
     reportName: reportRow.name,
     reportId: reportRow.id,
-    origin: new URL(req.url).origin,
+    origin: appBase(req),
     tenantId: sched.tenantId,
   };
 

@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 import { Keyboard, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * Designer keyboard-shortcut cheatsheet. Mounted by DesignerShell, opened by
@@ -9,41 +10,43 @@ import { Button } from "@/components/ui/button";
  * the actual key handlers — those live in DesignerShell — it just lists them.
  *
  * Update this list whenever a new shortcut is added in DesignerShell so the
- * cheatsheet doesn't drift.
+ * cheatsheet doesn't drift. Labels, descriptions and pointer gestures are
+ * lib/i18n/dict.ts keys; `keys` are literal key caps.
  */
 
-type Shortcut = { keys: string[]; label: string; description: string };
+type Shortcut = { keys?: string[]; gestureKey?: string; labelKey: string; descKey: string };
 
-const SECTIONS: { title: string; items: Shortcut[] }[] = [
+const SECTIONS: { titleKey: string; items: Shortcut[] }[] = [
   {
-    title: "Editing",
+    titleKey: "shortcuts.section.editing",
     items: [
-      { keys: ["⌘", "Z"], label: "Undo", description: "Step back through the canvas history" },
-      { keys: ["⌘", "⇧", "Z"], label: "Redo", description: "Re-apply an undone change" },
-      { keys: ["⌘", "Y"], label: "Redo (alt)", description: "Same as ⌘⇧Z" },
-      { keys: ["⌘", "D"], label: "Duplicate block", description: "Copy the selected block below itself" },
-      { keys: ["Del"], label: "Delete block", description: "Remove the selected block (also Backspace)" },
-      { keys: ["Esc"], label: "Deselect", description: "Clear the current selection" },
+      { keys: ["⌘", "Z"], labelKey: "designerToolbar.undo", descKey: "shortcuts.undoDesc" },
+      { keys: ["⌘", "⇧", "Z"], labelKey: "designerToolbar.redo", descKey: "shortcuts.redoDesc" },
+      { keys: ["⌘", "Y"], labelKey: "shortcuts.redoAlt", descKey: "shortcuts.redoAltDesc" },
+      { keys: ["⌘", "D"], labelKey: "shortcuts.duplicate", descKey: "shortcuts.duplicateDesc" },
+      { keys: ["Del"], labelKey: "shortcuts.delete", descKey: "shortcuts.deleteDesc" },
+      { keys: ["Esc"], labelKey: "shortcuts.deselect", descKey: "shortcuts.deselectDesc" },
     ],
   },
   {
-    title: "Run & view",
+    titleKey: "shortcuts.section.run",
     items: [
-      { keys: ["⌘", "R"], label: "Refresh dataset", description: "Re-run the report's queries against the live DB" },
-      { keys: ["?"], label: "Show shortcuts", description: "Open this overlay" },
+      { keys: ["⌘", "R"], labelKey: "shortcuts.refresh", descKey: "shortcuts.refreshDesc" },
+      { keys: ["?"], labelKey: "shortcuts.show", descKey: "shortcuts.showDesc" },
     ],
   },
   {
-    title: "Pointer",
+    titleKey: "shortcuts.section.pointer",
     items: [
-      { keys: ["Drag handle"], label: "Move block", description: "Grab the top-left chip to drag — clicking the body just selects" },
-      { keys: ["Click body"], label: "Select block", description: "Selection drives the property panel + ruler highlight" },
-      { keys: ["Drag corner"], label: "Resize", description: "Snaps to the 12-column grid; mm readout appears on the rulers" },
+      { gestureKey: "shortcuts.gesture.dragHandle", labelKey: "shortcuts.move", descKey: "shortcuts.moveDesc" },
+      { gestureKey: "shortcuts.gesture.clickBody", labelKey: "shortcuts.select", descKey: "shortcuts.selectDesc" },
+      { gestureKey: "shortcuts.gesture.dragCorner", labelKey: "shortcuts.resize", descKey: "shortcuts.resizeDesc" },
     ],
   },
 ];
 
 export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t } = useT();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -52,6 +55,9 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
   }, [open, onClose]);
 
   if (!open) return null;
+  const [closePre, closePost] = t("shortcuts.pressToClose").split("{key}");
+  const [notePre, noteRest] = t("shortcuts.windowsNote").split("{cmd}");
+  const [noteMid, notePost] = noteRest.split("{ctrl}");
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
@@ -64,29 +70,29 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <div className="flex items-center gap-2">
             <Keyboard className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
-            <span className="text-[11px] text-muted-foreground">— press <Kbd>Esc</Kbd> to close</span>
+            <h2 className="text-sm font-semibold">{t("shortcuts.title")}</h2>
+            <span className="text-[11px] text-muted-foreground">{closePre}<Kbd>Esc</Kbd>{closePost}</span>
           </div>
-          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} aria-label="Close">
+          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} aria-label={t("action.close")}>
             <X className="h-4 w-4" />
           </Button>
         </div>
         <div className="grid max-h-[70vh] gap-5 overflow-y-auto p-5">
           {SECTIONS.map((section) => (
-            <section key={section.title}>
+            <section key={section.titleKey}>
               <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {section.title}
+                {t(section.titleKey)}
               </h3>
               <div className="overflow-hidden rounded-md border border-border/60 bg-muted/30">
                 {section.items.map((s, i) => (
                   <div
-                    key={s.label}
+                    key={s.labelKey}
                     className={`grid grid-cols-[150px_1fr] items-center gap-3 px-3 py-2 ${
                       i > 0 ? "border-t border-border/60" : ""
                     }`}
                   >
                     <div className="flex flex-wrap items-center gap-1">
-                      {s.keys.map((k, idx) => (
+                      {(s.keys ?? [t(s.gestureKey!)]).map((k, idx) => (
                         <span key={idx} className="contents">
                           {idx > 0 && <span className="text-[10px] text-muted-foreground">+</span>}
                           <Kbd>{k}</Kbd>
@@ -94,8 +100,8 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
                       ))}
                     </div>
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-foreground">{s.label}</div>
-                      <div className="text-[11px] text-muted-foreground">{s.description}</div>
+                      <div className="text-xs font-medium text-foreground">{t(s.labelKey)}</div>
+                      <div className="text-[11px] text-muted-foreground">{t(s.descKey)}</div>
                     </div>
                   </div>
                 ))}
@@ -103,7 +109,7 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
             </section>
           ))}
           <p className="px-1 text-[11px] text-muted-foreground">
-            On Windows / Linux, <Kbd>⌘</Kbd> means <Kbd>Ctrl</Kbd>.
+            {notePre}<Kbd>⌘</Kbd>{noteMid}<Kbd>Ctrl</Kbd>{notePost}
           </p>
         </div>
       </div>

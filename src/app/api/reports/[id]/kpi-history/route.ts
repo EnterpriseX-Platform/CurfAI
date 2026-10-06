@@ -12,13 +12,20 @@
  * Returns { blockId, days, points: [{ runId, at, value, compare, dataHash,
  * queryHash, rowCount, runAt }] } oldest → newest. Internal, read-only; not
  * part of /api/v1.
+ *
+ * The runs are anyone's who opened the report, so the block is looked up in
+ * the caller's view of it (visibleReport) and each run is read as the caller
+ * (lib/reporting/snapshotAccess.ts): no point comes from a source they can't
+ * see, and a block hidden from them is as missing as one that isn't there.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser, requireReportInScope, reportWhere } from "@/lib/auth";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { computeKpiValue, pickKpiCompare } from "@/lib/reporting/kpi";
-import type { ProvenanceMap } from "@/lib/reporting/provenance";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { visibleReport } from "@/lib/reporting/visibleReport";
+import { savedRunReader, parseSavedRun } from "@/lib/reporting/snapshotAccess";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,7 +56,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   } catch (e: any) {
     return NextResponse.json({ error: "Invalid report definition", detail: e?.message }, { status: 422 });
   }
-  const block = report.pages.flatMap((p) => p.blocks).find((b) => b.id === blockId);
+  const viewer = await exportViewer(user);
+  const view = visibleReport(report, viewer);
+  const block = view.pages.flatMap((p) => p.blocks).find((b) => b.id === blockId);
   if (!block || block.type !== "kpi") return NextResponse.json({ error: "KPI block not found" }, { status: 404 });
   const cfg = block.config;
 
@@ -80,15 +89,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   // Only now load the (up to 2 MB each) snapshots, for the handful of runs kept.
   const full = await prisma.reportRun.findMany({
     where: { id: { in: chosenIds }, tenantId: user.tenantId, reportId: row.id },
-    select: { id: true, createdAt: true, dataset: true, provenance: true },
+    select: { id: true, createdAt: true, dataset: true, provenance: true, params: true },
     orderBy: { createdAt: "asc" },
   });
 
-  const points = full.flatMap((run) => {
-    let dataset: Record<string, Array<Record<string, unknown>>> = {};
-    let provenance: ProvenanceMap = {};
-    try { dataset = JSON.parse(run.dataset ?? "{}"); } catch { return []; }
-    try { provenance = JSON.parse(run.provenance ?? "{}"); } catch { provenance = {}; }
+  const read = savedRunReader(row.tenantId, view, viewer);
+  const saved = await Promise.all(full.map(async (run) => ({ run, ...(await read(parseSavedRun(run))) })));
+  const points = saved.flatMap(({ run, dataset, provenance }) => {
     const rows = Array.isArray(dataset[cfg.queryId]) ? dataset[cfg.queryId] : [];
     const value = computeKpiValue(cfg, rows);
     if (!Number.isFinite(value)) return [];

@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, Database, Globe, RefreshCw, Play, Pencil, X as CloseIcon, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/lib/toast";
+import { useT } from "@/lib/i18n/LocaleContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -30,26 +31,25 @@ import { ConnectionForm } from "@/components/connections/ConnectionForm";
 import type { DataSourceListItem, EditingConnection } from "@/components/connections/types";
 
 export function DataDrawer() {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size="sm" variant="outline">
-          <Database className="mr-1.5 h-4 w-4" /> Data
+          <Database className="mr-1.5 h-4 w-4" /> {t("dataDrawer.button")}
         </Button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0">
-          <DialogTitle>Data Sources</DialogTitle>
-          <DialogDescription>
-            Manage connections (shared) and queries (specific to this report).
-          </DialogDescription>
+          <DialogTitle>{t("dataDrawer.title")}</DialogTitle>
+          <DialogDescription>{t("dataDrawer.description")}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <Tabs defaultValue="queries" className="flex min-h-0 flex-col">
             <TabsList className="mb-3 self-start">
-              <TabsTrigger value="queries">Queries</TabsTrigger>
-              <TabsTrigger value="connections">Connections</TabsTrigger>
+              <TabsTrigger value="queries">{t("dataDrawer.queries")}</TabsTrigger>
+              <TabsTrigger value="connections">{t("nav.connections")}</TabsTrigger>
             </TabsList>
             <TabsContent value="queries"><QueriesTab /></TabsContent>
             <TabsContent value="connections"><ConnectionsTab /></TabsContent>
@@ -65,6 +65,7 @@ export function DataDrawer() {
 // ==============================================================
 
 function QueriesTab() {
+  const { t } = useT();
   const report = useDesignerStore((s) => s.report);
   const setReport = useDesignerStore((s) => s.setReport);
   const [connections, setConnections] = useState<DataSourceListItem[]>([]);
@@ -84,7 +85,7 @@ function QueriesTab() {
     const id = "ds_" + Math.random().toString(36).slice(2, 8);
     const q: DataSourceDef = {
       id,
-      name: "New query",
+      name: t("dataDrawer.newQueryName"),
       dataSourceId: connections[0]?.id ?? "",
       sql: "SELECT 1",
     };
@@ -107,13 +108,13 @@ function QueriesTab() {
     <div className="grid grid-cols-[240px_1fr] gap-4 min-h-[420px]">
       <aside className="flex flex-col gap-1 overflow-auto rounded-md border p-2">
         <div className="flex items-center justify-between px-1 pb-1">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Queries</span>
-          <Button size="icon" variant="ghost" onClick={addQuery} title="Add query">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("dataDrawer.queries")}</span>
+          <Button size="icon" variant="ghost" onClick={addQuery} title={t("dataDrawer.addQuery")}>
             <Plus className="h-4 w-4" />
           </Button>
         </div>
         {report.dataSources.length === 0 && (
-          <p className="p-2 text-xs text-muted-foreground">No queries yet. Click + to add one.</p>
+          <p className="p-2 text-xs text-muted-foreground">{t("dataDrawer.noQueries")}</p>
         )}
         {report.dataSources.map((q) => (
           <button
@@ -134,18 +135,18 @@ function QueriesTab() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">{activeQuery.name}</h3>
             <Button size="sm" variant="ghost" onClick={() => removeQuery(activeQuery.id)}>
-              <Trash2 className="mr-1.5 h-4 w-4" /> Remove
+              <Trash2 className="mr-1.5 h-4 w-4" /> {t("action.remove")}
             </Button>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Name">
+            <Field label={t("common.name")}>
               <Input
                 value={activeQuery.name}
                 onChange={(e) => patchQuery(activeQuery.id, { name: e.target.value })}
               />
             </Field>
-            <Field label="ID (stable key; used in block config)">
+            <Field label={t("dataDrawer.idLabel")}>
               <Input
                 value={activeQuery.id}
                 onChange={(e) => patchQuery(activeQuery.id, { id: e.target.value })}
@@ -153,12 +154,12 @@ function QueriesTab() {
             </Field>
           </div>
 
-          <Field label="Connection">
+          <Field label={t("dataDrawer.connection")}>
             <Select
               value={activeQuery.dataSourceId}
               onValueChange={(v) => patchQuery(activeQuery.id, { dataSourceId: v })}
             >
-              <SelectTrigger><SelectValue placeholder="Pick a connection" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("dataDrawer.pickConnection")} /></SelectTrigger>
               <SelectContent>
                 {connections.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
@@ -199,7 +200,7 @@ function QueriesTab() {
         </div>
       ) : (
         <div className="flex items-center justify-center rounded-md border border-dashed p-12 text-sm text-muted-foreground">
-          Select or add a query on the left.
+          {t("dataDrawer.selectQueryHint")}
         </div>
       )}
     </div>
@@ -209,10 +210,11 @@ function QueriesTab() {
 function SqlQueryEditor({
   q, onChange,
 }: { q: DataSourceDef; onChange: (patch: Partial<DataSourceDef>) => void }) {
+  const { t } = useT();
   return (
     <div className="grid gap-1">
       <div className="flex items-center justify-between">
-        <Label>SQL (use :name for parameters)</Label>
+        <Label>{t("dataDrawer.sqlLabel")}</Label>
         <InsertSnippetButton
           kind="sql"
           // Replace when the field is empty, append on a new line otherwise.
@@ -237,10 +239,11 @@ function SqlQueryEditor({
 function RestQueryEditor({
   q, onChange,
 }: { q: DataSourceDef; onChange: (patch: Partial<DataSourceDef>) => void }) {
+  const { t } = useT();
   return (
     <div className="grid gap-3">
       <div className="grid grid-cols-[120px_1fr] gap-3">
-        <Field label="Method">
+        <Field label={t("dataDrawer.method")}>
           <Select
             value={q.method ?? "GET"}
             onValueChange={(v) => onChange({ method: v as any })}
@@ -253,7 +256,7 @@ function RestQueryEditor({
             </SelectContent>
           </Select>
         </Field>
-        <Field label="Path (use :name for path params; other params become querystring on GET)">
+        <Field label={t("dataDrawer.pathLabel")}>
           <Input
             value={q.path ?? ""}
             onChange={(e) => onChange({ path: e.target.value })}
@@ -261,7 +264,7 @@ function RestQueryEditor({
           />
         </Field>
       </div>
-      <Field label="JSON path (dotted path to the rows array; blank = root)">
+      <Field label={t("dataDrawer.jsonPathLabel")}>
         <Input
           value={q.jsonPath ?? ""}
           onChange={(e) => onChange({ jsonPath: e.target.value })}
@@ -269,7 +272,7 @@ function RestQueryEditor({
         />
       </Field>
       {["POST", "PUT", "PATCH"].includes(q.method ?? "GET") && (
-        <Field label="Body (JSON; {{param.x}} tokens are substituted)">
+        <Field label={t("dataDrawer.bodyLabel")}>
           <textarea
             className="min-h-[120px] rounded-md border border-input bg-background p-2 font-mono text-xs"
             value={q.body ?? ""}
@@ -288,6 +291,7 @@ function RestQueryEditor({
 
 function ConnectionsTab() {
   const { push } = useToast();
+  const { t } = useT();
   const [items, setItems] = useState<DataSourceListItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<EditingConnection | null>(null);
@@ -297,9 +301,10 @@ function ConnectionsTab() {
 
   function handleSaveAsQuery(spec: { connectionId: string; method: string; path: string; body: string }) {
     const id = "ds_" + Math.random().toString(36).slice(2, 8);
+    const connName = items.find((c) => c.id === spec.connectionId)?.name;
     const q: DataSourceDef = {
       id,
-      name: `Query from ${items.find((c) => c.id === spec.connectionId)?.name ?? "connection"}`,
+      name: connName ? t("dataDrawer.queryFrom").replace("{name}", connName) : t("dataDrawer.queryFromUnknown"),
       dataSourceId: spec.connectionId,
       method: spec.method as any,
       path: spec.path,
@@ -308,8 +313,8 @@ function ConnectionsTab() {
     setReport({ ...report, dataSources: [...report.dataSources, q] });
     push({
       variant: "success",
-      title: "Query saved",
-      description: "Switch to the Queries tab to tweak it and bind blocks.",
+      title: t("dataDrawer.querySaved"),
+      description: t("dataDrawer.querySavedDesc"),
     });
   }
 
@@ -324,7 +329,7 @@ function ConnectionsTab() {
   async function startEdit(id: string) {
     const r = await fetch(`/api/data-sources/${id}`);
     if (!r.ok) {
-      push({ variant: "destructive", title: "Could not load connection", description: await r.text() });
+      push({ variant: "destructive", title: t("connections.loadFailedTitle"), description: await r.text() });
       return;
     }
     const data = await r.json();
@@ -333,9 +338,9 @@ function ConnectionsTab() {
   }
 
   async function removeConnection(id: string) {
-    if (!confirm("Delete this connection? Reports that reference it will break.")) return;
+    if (!confirm(t("dataDrawer.deleteConnectionConfirm"))) return;
     const r = await fetch(`/api/data-sources/${id}`, { method: "DELETE" });
-    if (!r.ok) push({ variant: "destructive", title: "Delete failed", description: await r.text() });
+    if (!r.ok) push({ variant: "destructive", title: t("connections.deleteFailedTitle"), description: await r.text() });
     if (editing?.id === id) setEditing(null);
     refresh();
   }
@@ -344,18 +349,18 @@ function ConnectionsTab() {
     <div className="grid gap-4">
       <section>
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-medium">Existing connections</h3>
+          <h3 className="text-sm font-medium">{t("connections.existingHeading")}</h3>
           <Button size="sm" variant="ghost" onClick={refresh} disabled={busy}>
-            <RefreshCw className={`mr-1.5 h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Refresh
+            <RefreshCw className={`mr-1.5 h-4 w-4 ${busy ? "animate-spin" : ""}`} /> {t("action.refresh")}
           </Button>
         </div>
         <div className="overflow-hidden rounded-md border">
           <table className="w-full text-sm">
             <thead className="bg-muted text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 text-left">Name</th>
-                <th className="px-3 py-2 text-left">Kind</th>
-                <th className="px-3 py-2 text-left">Endpoint</th>
+                <th className="px-3 py-2 text-left">{t("common.name")}</th>
+                <th className="px-3 py-2 text-left">{t("connections.kindHeader")}</th>
+                <th className="px-3 py-2 text-left">{t("connections.endpointHeader")}</th>
                 <th className="w-24" />
               </tr>
             </thead>
@@ -370,14 +375,14 @@ function ConnectionsTab() {
                     </span>
                   </td>
                   <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                    {it.kind === "rest" ? (it.baseUrl ?? "—") : "(local file)"}
+                    {it.kind === "rest" ? (it.baseUrl ?? "—") : t("connections.localFilePlaceholder")}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-end gap-0.5">
-                      <Button size="icon" variant="ghost" onClick={() => startEdit(it.id)} title="Edit">
+                      <Button size="icon" variant="ghost" onClick={() => startEdit(it.id)} title={t("action.edit")}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button size="icon" variant="ghost" onClick={() => removeConnection(it.id)} title="Delete">
+                      <Button size="icon" variant="ghost" onClick={() => removeConnection(it.id)} title={t("action.delete")}>
                         <Trash2 className="h-4 w-4 text-destructive/80" />
                       </Button>
                     </div>
@@ -385,7 +390,7 @@ function ConnectionsTab() {
                 </tr>
               ))}
               {items.length === 0 && (
-                <tr><td colSpan={4} className="p-8 text-center text-muted-foreground">No connections yet.</td></tr>
+                <tr><td colSpan={4} className="p-8 text-center text-muted-foreground">{t("connections.empty")}</td></tr>
               )}
             </tbody>
           </table>
@@ -394,10 +399,10 @@ function ConnectionsTab() {
 
       <section ref={formRef}>
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-medium">{editing ? `Edit "${editing.name}"` : "Add connection"}</h3>
+          <h3 className="text-sm font-medium">{editing ? t("connections.editHeading").replace("{name}", editing.name) : t("connections.addHeading")}</h3>
           {editing && (
             <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
-              <CloseIcon className="mr-1.5 h-4 w-4" /> Cancel
+              <CloseIcon className="mr-1.5 h-4 w-4" /> {t("action.cancel")}
             </Button>
           )}
         </div>
@@ -432,6 +437,7 @@ function AttachesEditor({
   connections: DataSourceListItem[];
   onChange: (patch: Partial<DataSourceDef>) => void;
 }) {
+  const { t } = useT();
   const attaches = q.attaches ?? [];
   const usedAliases = new Set(attaches.map((a) => a.alias.toLowerCase()));
 
@@ -466,14 +472,16 @@ function AttachesEditor({
     return connections.find((c) => c.id === id)?.name ?? id;
   }
 
+  const [refPre, refPost] = t("dataDrawer.attach.hint").split("{ref}");
+
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
       <div className="flex items-baseline justify-between">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Attach foreign sources
+          {t("dataDrawer.attach.title")}
         </p>
         <p className="text-[11px] text-muted-foreground">
-          Cross-source JOIN. SQL references <span className="font-mono">{`<alias>.<table>`}</span>.
+          {refPre}<span className="font-mono">{`<alias>.<table>`}</span>{refPost}
         </p>
       </div>
 
@@ -488,7 +496,7 @@ function AttachesEditor({
                 <span className="text-muted-foreground">→</span>
                 <span className="font-medium">{nameFor(a.dataSourceId)}</span>
               </div>
-              <Button size="icon" variant="ghost" onClick={() => remove(idx)} title="Remove attach">
+              <Button size="icon" variant="ghost" onClick={() => remove(idx)} title={t("dataDrawer.attach.remove")}>
                 <CloseIcon className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -498,12 +506,12 @@ function AttachesEditor({
 
       {candidates.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No other sqlite/excel connections to attach. (REST connections can't be ATTACHed.)
+          {t("dataDrawer.attach.none")}
         </p>
       ) : (
         <div className="grid grid-cols-[1fr_140px_auto] gap-2 text-xs">
           <Select value={draftDsId} onValueChange={setDraftDsId}>
-            <SelectTrigger><SelectValue placeholder="Pick a source…" /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder={t("dataDrawer.attach.pickSource")} /></SelectTrigger>
             <SelectContent>
               {candidates.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
@@ -516,21 +524,21 @@ function AttachesEditor({
           <Input
             value={draftAlias}
             onChange={(e) => setDraftAlias(e.target.value)}
-            placeholder="alias e.g. m"
+            placeholder={t("dataDrawer.aliasPlaceholder").replace("{example}", "m")}
             className="font-mono text-xs"
           />
           <Button size="sm" onClick={add} disabled={!canAdd}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> Add
+            <Plus className="mr-1 h-3.5 w-3.5" /> {t("action.add")}
           </Button>
         </div>
       )}
       {draftAlias && !aliasOk && (
         <p className="text-[11px] text-destructive">
-          Alias must be a SQL identifier (letters/digits/underscore, can't start with a digit, can't be "main" or "temp").
+          {t("dataDrawer.aliasInvalid")}
         </p>
       )}
       {draftAlias && aliasOk && !aliasFree && (
-        <p className="text-[11px] text-destructive">Alias already used for another attach on this query.</p>
+        <p className="text-[11px] text-destructive">{t("dataDrawer.attach.aliasTaken")}</p>
       )}
     </div>
   );
@@ -557,6 +565,7 @@ function JoinsEditor({
   siblings: DataSourceDef[];
   onChange: (patch: Partial<DataSourceDef>) => void;
 }) {
+  const { t } = useT();
   const joins = q.joins ?? [];
   const usedAliases = new Set([
     ...joins.map((j) => j.alias.toLowerCase()),
@@ -605,10 +614,10 @@ function JoinsEditor({
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
       <div className="flex items-baseline justify-between">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Cross-source joins
+          {t("dataDrawer.joins.title")}
         </p>
         <p className="text-[11px] text-muted-foreground">
-          Hash join over another query's rows. Works across any source kinds.
+          {t("dataDrawer.joins.hint")}
         </p>
       </div>
 
@@ -630,7 +639,7 @@ function JoinsEditor({
                   {j.alias}.{j.on.right}
                 </span>
               </div>
-              <Button size="icon" variant="ghost" onClick={() => remove(idx)} title="Remove join">
+              <Button size="icon" variant="ghost" onClick={() => remove(idx)} title={t("dataDrawer.joins.remove")}>
                 <CloseIcon className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -640,7 +649,7 @@ function JoinsEditor({
 
       {siblings.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No other queries in this report yet. Add a second query first, then come back here to join them.
+          {t("dataDrawer.joins.none")}
         </p>
       ) : (
         <div className="grid gap-2">
@@ -648,12 +657,12 @@ function JoinsEditor({
             <Select value={draftType} onValueChange={(v) => setDraftType(v as "left" | "inner")}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="left">Left join</SelectItem>
-                <SelectItem value="inner">Inner join</SelectItem>
+                <SelectItem value="left">{t("dataDrawer.joins.left")}</SelectItem>
+                <SelectItem value="inner">{t("dataDrawer.joins.inner")}</SelectItem>
               </SelectContent>
             </Select>
             <Select value={draftQueryId} onValueChange={setDraftQueryId}>
-              <SelectTrigger><SelectValue placeholder="Pick a sibling query…" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("dataDrawer.joins.pickQuery")} /></SelectTrigger>
               <SelectContent>
                 {siblings.map((s) => (
                   <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
@@ -663,41 +672,41 @@ function JoinsEditor({
             <Input
               value={draftAlias}
               onChange={(e) => setDraftAlias(e.target.value)}
-              placeholder="alias e.g. c"
+              placeholder={t("dataDrawer.aliasPlaceholder").replace("{example}", "c")}
               className="font-mono text-xs"
             />
           </div>
           <div className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2 text-xs">
             <div className="grid gap-1">
-              <span className="text-[10px] uppercase text-muted-foreground">primary column</span>
+              <span className="text-[10px] uppercase text-muted-foreground">{t("dataDrawer.joins.primaryColumn")}</span>
               <Input
                 value={draftLeftKey}
                 onChange={(e) => setDraftLeftKey(e.target.value)}
-                placeholder="e.g. customer_id"
+                placeholder={t("common.eg").replace("{example}", "customer_id")}
                 className="font-mono text-xs"
               />
             </div>
             <span className="pt-4 text-muted-foreground">=</span>
             <div className="grid gap-1">
-              <span className="text-[10px] uppercase text-muted-foreground">joined column</span>
+              <span className="text-[10px] uppercase text-muted-foreground">{t("dataDrawer.joins.joinedColumn")}</span>
               <Input
                 value={draftRightKey}
                 onChange={(e) => setDraftRightKey(e.target.value)}
-                placeholder="e.g. id"
+                placeholder={t("common.eg").replace("{example}", "id")}
                 className="font-mono text-xs"
               />
             </div>
             <Button size="sm" onClick={add} disabled={!canAdd} className="self-end">
-              <Plus className="mr-1 h-3.5 w-3.5" /> Add
+              <Plus className="mr-1 h-3.5 w-3.5" /> {t("action.add")}
             </Button>
           </div>
           {draftAlias && !aliasOk && (
             <p className="text-[11px] text-destructive">
-              Alias must be a SQL identifier (letters/digits/underscore, can't start with a digit, can't be "main" or "temp").
+              {t("dataDrawer.aliasInvalid")}
             </p>
           )}
           {draftAlias && aliasOk && !aliasFree && (
-            <p className="text-[11px] text-destructive">Alias collides with another join or attach on this query.</p>
+            <p className="text-[11px] text-destructive">{t("dataDrawer.joins.aliasTaken")}</p>
           )}
         </div>
       )}
@@ -720,6 +729,7 @@ function Field({ label, children }: { label: string; children: import("react").R
 
 
 function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportParams: Record<string, unknown> }) {
+  const { t } = useT();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<null | {
     rows?: any[];
@@ -740,7 +750,7 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
       });
       setResult(await r.json());
     } catch (e: any) {
-      setResult({ error: e?.message ?? "Request failed" });
+      setResult({ error: e?.message ?? t("common.requestFailed") });
     } finally {
       setBusy(false);
     }
@@ -753,7 +763,7 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
       <div className="flex items-center justify-between">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Run query
+          {t("dataDrawer.runQuery")}
         </p>
         <Button
           size="sm"
@@ -761,29 +771,29 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
           onClick={run}
           disabled={busy || missingBinding}
           type="button"
-          title={missingBinding ? "Pick a connection and define the query first" : undefined}
+          title={missingBinding ? t("dataDrawer.runDisabledHint") : undefined}
         >
           {busy
-            ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Running…</>
-            : <><Play className="mr-1.5 h-4 w-4" /> Run with current params</>}
+            ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("designerShell.running")}</>
+            : <><Play className="mr-1.5 h-4 w-4" /> {t("dataDrawer.runWithParams")}</>}
         </Button>
       </div>
 
       {result && (
         result.error ? (
           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
-            <div className="mb-1 font-medium">Query failed</div>
+            <div className="mb-1 font-medium">{t("metrics.queryFailed")}</div>
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{result.error}</pre>
           </div>
         ) : (
           <div className="rounded-md border border-success/40 bg-success/5 p-2 text-xs">
             <div className="mb-2 flex items-center justify-between">
               <span className="font-medium">
-                {result.totalRows ?? 0} row{(result.totalRows ?? 0) === 1 ? "" : "s"}
-                {result.truncated ? ` (showing ${result.rows?.length ?? 0})` : ""}
+                {(result.totalRows ?? 0) === 1 ? t("dataDrawer.rowOne") : t("dataDrawer.rowMany").replace("{n}", String(result.totalRows ?? 0))}
+                {result.truncated ? " " + t("dataDrawer.showing").replace("{n}", String(result.rows?.length ?? 0)) : ""}
                 {" · "}{result.durationMs ?? 0}ms
               </span>
-              <span className="text-[10px] text-muted-foreground">{(result.columns ?? []).length} columns</span>
+              <span className="text-[10px] text-muted-foreground">{t("dataDrawer.columnCount").replace("{n}", String((result.columns ?? []).length))}</span>
             </div>
             {result.rows && result.rows.length > 0 ? (
               <div className="max-h-64 overflow-auto rounded border border-border bg-background">
@@ -811,7 +821,7 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
                 </table>
               </div>
             ) : (
-              <div className="py-4 text-center text-xs text-muted-foreground">Query returned 0 rows.</div>
+              <div className="py-4 text-center text-xs text-muted-foreground">{t("dataDrawer.zeroRows")}</div>
             )}
           </div>
         )

@@ -1,0 +1,46 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-engine-audit-event
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_audit_event
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: occurred_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: actor, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: action, type: varchar(100), constraints: { nullable: false } }
+              - column: { name: entity_type, type: varchar(100) }
+              - column: { name: entity_id, type: varchar(100) }
+              - column: { name: details, type: jsonb }
+        - createIndex:
+            tableName: engine_audit_event
+            indexName: ix_engine_audit_event_tenant_time
+            columns:
+              - column: { name: tenant_id }
+              - column: { name: occurred_at, descending: true }
+      rollback:
+        - dropTable:
+            tableName: engine_audit_event
+
+  - changeSet:
+      id: 002-engine-audit-event-append-only
+      author: curf-engine
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              create function engine_audit_event_immutable() returns trigger as $$
+              begin
+                raise exception 'engine_audit_event is append-only';
+              end;
+              $$ language plpgsql;
+              create trigger engine_audit_event_no_change
+                before update or delete on engine_audit_event
+                for each row execute function engine_audit_event_immutable();
+      rollback:
+        - sql:
+            sql: |
+              drop trigger engine_audit_event_no_change on engine_audit_event;
+              drop function engine_audit_event_immutable();

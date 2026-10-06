@@ -2,13 +2,31 @@ import { describe, it, expect } from "vitest";
 import { humanizeLlmError } from "./humanizeError";
 
 describe("humanizeLlmError — never leaks raw provider payloads", () => {
-  it("maps a raw Kimi/OpenAI-compatible 429 blob to a friendly rate-limit message", () => {
+  it("says the provider account is out of credit — not a rate limit — for Kimi's 429 'insufficient balance'", () => {
+    // What prod logged on 2026-09-30, account ids shortened.
     const raw =
-      'HTTP 429: {"error":{"message":"Your account org-7e131fc8... is suspended due to insufficient balance, please recharge.","type":"insufficient_balance"}}';
-    const { message } = humanizeLlmError(raw);
+      'HTTP 429: {"error":{"message":"Your account org-7e131fc8... <ak-fam5...> is suspended due to insufficient balance, please recharge your account or check your plan and billing details","type":"exceeded_current_quota_error"}}';
+    const { message, canSwitchModel } = humanizeLlmError(raw);
     expect(message).not.toContain("org-7e131fc8");
-    expect(message).not.toContain("insufficient_balance");
+    expect(message).not.toContain("ak-fam5");
+    expect(message).not.toContain("exceeded_current_quota_error");
+    expect(message).toContain("run out of credit");
+    expect(message).toContain("ไม่มียอดเงินคงเหลือ");
+    // Waiting is the wrong advice, and so is another model on the same account.
+    expect(message.toLowerCase()).not.toContain("rate limit");
+    expect(message).not.toContain("wait a moment");
+    expect(canSwitchModel).toBe(false);
+    // The same from OpenAI and Anthropic.
+    expect(humanizeLlmError('HTTP 429: {"error":{"code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}').message)
+      .toContain("run out of credit");
+    expect(humanizeLlmError("400 Your credit balance is too low to access the Anthropic API.").message).toContain("run out of credit");
+  });
+
+  it("still reads a real 429 as a rate limit to wait out", () => {
+    const { message } = humanizeLlmError('HTTP 429: {"error":{"message":"Rate limit reached for requests, please try again in 20s","type":"rate_limit_reached_error"}}');
     expect(message.toLowerCase()).toContain("rate limit");
+    expect(message).toContain("wait a moment");
+    expect(message).not.toContain("rate_limit_reached_error");
   });
 
   it("flags not-configured providers distinctly", () => {

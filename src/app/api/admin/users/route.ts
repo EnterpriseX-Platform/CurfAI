@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireAdmin, MEMBERSHIP_ROLES } from "@/lib/auth";
+import { withSystemDbContext } from "@/lib/dbContext";
 import { recordAudit } from "@/lib/audit";
 import { mintAndSendInvite } from "@/lib/invites";
 import { ee } from "@/ee";
+import { appBase } from "@/lib/http/appBase";
 
 /**
  * Admin user list + invite endpoint.
@@ -57,9 +59,12 @@ export async function POST(req: NextRequest) {
     where: { id: u.tenantId },
     select: { name: true, slug: true },
   });
-  const origin = new URL(req.url).origin;
+  const origin = appBase(req);
 
-  const existingUser = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+  // An account is one global row per email, shared by every workspace it
+  // belongs to — so finding it (and creating it, below) is outside this
+  // workspace's row-level security filter by design (BE-TEN-03).
+  const existingUser = await withSystemDbContext(() => prisma.user.findUnique({ where: { email: parsed.data.email } }));
 
   if (existingUser) {
     const already = await prisma.membership.findUnique({
@@ -119,13 +124,13 @@ export async function POST(req: NextRequest) {
 
   let user: any;
   try {
-    user = await prisma.user.create({
+    user = await withSystemDbContext(() => prisma.user.create({
       data: {
         email: parsed.data.email,
         name: parsed.data.name ?? null,
         // Deliberately no passwordHash - invitee sets it via /reset/[token].
       },
-    });
+    }));
   } catch (e: any) {
     if (e?.code === "P2002") {
       return NextResponse.json(

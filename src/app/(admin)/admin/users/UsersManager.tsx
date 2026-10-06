@@ -2,7 +2,7 @@
 import { useT } from "@/lib/i18n/LocaleContext";
 
 import { useState } from "react";
-import { Check, Loader2, UserPlus, Copy, Mail, MailX, Hourglass, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Loader2, UserPlus, Copy, Mail, MailX, Hourglass, RefreshCw, Trash2, UserMinus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,7 +28,7 @@ type LastInvite = {
   expiresAt: string;
 };
 
-export function UsersManager({ initialUsers, allRoles }: { initialUsers: User[]; allRoles: Role[] }) {
+export function UsersManager({ initialUsers, allRoles, currentUserId }: { initialUsers: User[]; allRoles: Role[]; currentUserId: string }) {
   const { t } = useT();
   const { push } = useToast();
   const [users, setUsers] = useState(initialUsers);
@@ -46,6 +46,7 @@ export function UsersManager({ initialUsers, allRoles }: { initialUsers: User[];
   // Per-row pending-invite action state.
   const [resending, setResending] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
 
   function toggle(userId: string, slug: string) {
     setUsers((xs) => xs.map((u) => {
@@ -183,6 +184,34 @@ export function UsersManager({ initialUsers, allRoles }: { initialUsers: User[];
       push({ variant: "success", title: t("admin.usersManager.inviteRevoked"), description: t("admin.usersManager.removedFromWorkspace").replace("{email}", email) });
     } finally {
       setRevoking(null);
+    }
+  }
+
+  // Offboarding a member who has accepted — a separate endpoint from
+  // revokeInvite, so that button can never remove an active member.
+  async function removeMember(userId: string, email: string) {
+    if (!window.confirm(t("admin.usersManager.confirmRemoveMember").replace("{email}", email))) {
+      return;
+    }
+    setRemoving(userId);
+    try {
+      const res = await fetch("/api/admin/users/" + userId + "/membership", { method: "DELETE" });
+      if (!res.ok) {
+        let msg = await res.text();
+        try { msg = JSON.parse(msg).error ?? msg; } catch { /* keep text */ }
+        push({ variant: "destructive", title: t("admin.usersManager.removeFailed"), description: msg });
+        return;
+      }
+      setUsers((xs) => xs.filter((u) => u.id !== userId));
+      // Their private items moved to this admin and their API keys were
+      // revoked in the same step — say so, with the counts.
+      const body = await res.json().catch(() => ({})) as { movedItems?: number; revokedKeys?: number };
+      const handover = (body.movedItems || body.revokedKeys)
+        ? " " + t("admin.usersManager.removedHandover").replace("{items}", String(body.movedItems ?? 0)).replace("{keys}", String(body.revokedKeys ?? 0))
+        : "";
+      push({ variant: "success", title: t("admin.usersManager.memberRemoved"), description: t("admin.usersManager.removedFromWorkspace").replace("{email}", email) + handover });
+    } finally {
+      setRemoving(null);
     }
   }
 
@@ -344,6 +373,20 @@ export function UsersManager({ initialUsers, allRoles }: { initialUsers: User[];
                             : <Trash2 className="h-3.5 w-3.5" />}
                         </Button>
                       </>
+                    )}
+                    {!u.pendingInvite && u.id !== currentUserId && (
+                      <Button
+                        size="sm" variant="outline"
+                        title={t("admin.usersManager.removeMemberTitle")}
+                        aria-label={t("admin.usersManager.removeMemberTitle")}
+                        className="text-destructive hover:bg-destructive/10"
+                        onClick={() => removeMember(u.id, u.email)}
+                        disabled={removing === u.id}
+                      >
+                        {removing === u.id
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <UserMinus className="h-3.5 w-3.5" />}
+                      </Button>
                     )}
                   </div>
                 </td>

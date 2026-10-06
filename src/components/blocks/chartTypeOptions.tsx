@@ -11,7 +11,7 @@
 import {
   BarChart3, LineChart, AreaChart, PieChart, ChartNoAxesCombined,
   Boxes, Filter, BarChart4, ScatterChart, Radar, Gauge, Target,
-  Sun, Workflow, Waves, type LucideIcon,
+  Sun, Workflow, Waves, BoxSelect, Network, CircleDot, Spline, Clock, Box, type LucideIcon,
 } from "lucide-react";
 import {
   CHART_TYPE_META, rankChartTypes, type ChartFieldConfig, type ChartPurpose,
@@ -35,9 +35,16 @@ export const CHART_TYPE_ICON: Record<ChartTypeValue, LucideIcon> = {
   sunburst: Sun,
   sankey: Workflow,
   streamgraph: Waves,
+  boxplot: BoxSelect,
+  network: Network,
+  chord: CircleDot,
+  parallel: Spline,
+  radial: Clock,
+  scatter3d: Box,
 };
 
-export type ChartTypeGroup = { purpose: ChartPurpose; label: string; items: RankedChartType[] };
+/** Render the heading as t(`chartPurpose.${purpose}`) and each item as t(`chartType.${value}`). */
+export type ChartTypeGroup = { purpose: ChartPurpose; items: RankedChartType[] };
 
 /** Rank, then bucket by purpose in first-seen order (matches CHART_TYPE_META's own order). */
 export function groupChartTypes(
@@ -50,8 +57,5 @@ export function groupChartTypes(
   for (const m of CHART_TYPE_META) {
     if (!seen.has(m.purpose)) { seen.add(m.purpose); order.push(m.purpose); }
   }
-  return order.map((purpose) => {
-    const items = ranked.filter((r) => r.purpose === purpose);
-    return { purpose, label: items[0]?.purposeLabelEn ?? purpose, items };
-  });
+  return order.map((purpose) => ({ purpose, items: ranked.filter((r) => r.purpose === purpose) }));
 }

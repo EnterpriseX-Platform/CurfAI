@@ -15,7 +15,9 @@
  */
 import { prisma } from "@/lib/db";
 import { createOrReplaceTable } from "@/lib/lake/tables";
+import { tenantLakeEngine } from "@/lib/lake/tenantEngine";
 import { lakeFileSize } from "@/lib/lake/storage";
+import { ensureLakeDataSource } from "@/lib/lake/lakeDataSource";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { requireReportQuota, requireWatcherQuota } from "@/lib/billing";
 import type { CurfSessionUser } from "@/lib/auth";
@@ -52,22 +54,10 @@ export async function applyWorkspaceTemplate(
   };
 
   // Resolve the lake DataSource id once — every report's queries
-  // reference it. Provision one if missing (mirrors the lake API's
-  // upsert behaviour).
+  // reference it. Found by kind, provisioned if missing (lakeDataSource.ts).
   let lakeDataSourceId: string;
   try {
-    const ds = await prisma.dataSource.upsert({
-      where: { tenantId_name: { tenantId, name: "Curf Tables" } },
-      update: {},
-      create: {
-        tenantId,
-        name: "Curf Tables",
-        kind: "lake",
-        connection: "lake://" + tenantId,
-      },
-      select: { id: true },
-    });
-    lakeDataSourceId = ds.id;
+    lakeDataSourceId = (await ensureLakeDataSource(tenantId)).id;
   } catch (e: any) {
     summary.errors.push(`Failed to ensure lake DataSource: ${e?.message ?? String(e)}`);
     return summary;
@@ -85,7 +75,7 @@ export async function applyWorkspaceTemplate(
         summary.tablesSkipped += 1;
         continue;
       }
-      const result = createOrReplaceTable({
+      const result = await createOrReplaceTable({
         tenantId,
         tableName: t.name,
         rows: t.rows,
@@ -199,6 +189,9 @@ export async function applyWorkspaceTemplate(
   }
 
   // 4. Materialized views. Same shape as the MV admin page creates.
+  // The tenant's lake engine picks the spelling of any query that can't be
+  // written once for both (a template's view is persisted and re-run on its cron).
+  const lakeEngine = await tenantLakeEngine(tenantId);
   for (const m of template.materializedViews) {
     try {
       const existing = await prisma.materializedView.findFirst({
@@ -213,7 +206,7 @@ export async function applyWorkspaceTemplate(
         data: {
           tenantId,
           name: m.name,
-          sql: m.sql,
+          sql: typeof m.sql === "function" ? m.sql(lakeEngine) : m.sql,
           dataSourceId: lakeDataSourceId,
           cron: m.cron,
           enabled: true,

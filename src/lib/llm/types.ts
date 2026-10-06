@@ -76,6 +76,20 @@ export type LlmRequest = {
   reasoning?: "off" | "default";
 
   /**
+   * Opt-in, streaming HTTP drivers only: give up on a model that has thought
+   * for more than this fraction of maxTokens without writing a word of its
+   * answer, and let callLLM go straight to the no-thinking retry. Measured on
+   * kimi-k3 (2026-10-04): a view-design prompt that exhausted its whole 9000
+   * tokens on thinking (240s) then answered in 42s once thinking was off —
+   * the budget was spent before anyone knew it would be. 0.5 is the usual
+   * value; unset = never cut thinking short.
+   */
+  thinkingCap?: number;
+
+  /** Default true. False = a request that times out is not sent again (a call whose caller has a smarter fallback than waiting twice). */
+  retryTimeouts?: boolean;
+
+  /**
    * Caller-side abort — a streaming route whose client disconnected, a
    * user who pressed Cancel. Drivers that fetch honour it alongside their
    * own timeout; an aborted call comes back status "failed" like any
@@ -109,6 +123,27 @@ export type LlmResponse = {
   durationMs: number;
   /** Echo of the request id we minted (logged in the LlmTokenUsage row). */
   usageRowId?: string;
+  /**
+   * Set by an HTTP driver on a failure that is the provider's or the
+   * network's rather than the prompt's (429, 5xx, a dropped connection, a
+   * stalled stream) — callLLM retries those with backoff. A driver that
+   * sets nothing is never retried (Anthropic and Gemini: unchanged).
+   */
+  retryable?: boolean;
+  /** The reasoning cap (LlmRequest.thinkingCap) stopped it; callLLM retries without thinking. */
+  thinkingCapped?: boolean;
+  /** The request hit its own wait ceiling (timeoutMs, or no data for idleTimeoutMs while streaming). */
+  timedOut?: boolean;
+  /** The provider's Retry-After, when it sent one. */
+  retryAfterMs?: number;
+  /** HTTP status of a failed response, when there was one. */
+  httpStatus?: number;
+  /** callLLM only: driver calls made for this response (1 = no retry). */
+  attempts?: number;
+  /** callLLM only: ms spent waiting for a free slot on the provider (CURF_LLM_CONCURRENCY). */
+  queuedMs?: number;
+  /** Streaming drivers: ms until the first token (reasoning or answer) arrived. */
+  firstTokenMs?: number;
 };
 
 /** Per-provider driver interface. */

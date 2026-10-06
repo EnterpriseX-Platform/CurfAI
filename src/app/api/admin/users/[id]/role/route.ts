@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { withSystemDbContext } from "@/lib/dbContext";
+import { belongsToOtherWorkspaces } from "@/lib/workspaceDirectory";
 import { requireAdmin, MEMBERSHIP_ROLES } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
@@ -42,6 +44,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     include: { user: { select: { email: true } } },
   });
   if (!target) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (parsed.data.resetPassword && await belongsToOtherWorkspaces(params.id, user.tenantId)) {
+    return NextResponse.json({ error: "This account also belongs to other workspaces, so only its owner can change it — they can reset their password from the sign-in page." }, { status: 403 });
+  }
 
   await prisma.membership.update({
     where: { userId_tenantId: { userId: params.id, tenantId: user.tenantId } },
@@ -51,10 +56,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // the hourly reconcile in the paid cron covers a missed call.
   void ee.billing?.syncSeats(user.tenantId).catch(() => null);
   if (parsed.data.resetPassword) {
-    await prisma.user.update({
-      where: { id: params.id },
-      data: { passwordHash: await bcrypt.hash(parsed.data.resetPassword, 10) },
-    });
+    // The account row is global (one per email), not this workspace's, so
+    // row-level security only lets its owner write it. The membership check
+    // above is what authorises an admin here.
+    const passwordHash = await bcrypt.hash(parsed.data.resetPassword, 10);
+    await withSystemDbContext(() => prisma.user.update({ where: { id: params.id }, data: { passwordHash, passwordChangedAt: new Date() } }));
   }
 
   recordAudit({

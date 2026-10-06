@@ -3,18 +3,22 @@
  *
  * Body: { column: "email", sensitivity: "pii" | null, unredactedForRoles?: ["analyst"] }
  *
- * Owner / admin only (same gate as visibility + schema). Sensitivity is
+ * Builders who can read the table (lib/lake/tableAccess.ts). Sensitivity is
  * persisted on the LakeTable row's schemaJson alongside the rest of the
  * column metadata — keeps the source of truth in one place.
  *
  * Setting sensitivity to null clears the tag (column treated as ordinary).
+ * A formula column can't be tagged: it carries the tags of the columns it's
+ * worked out from (withFormulaGovernance), re-derived on every save here.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
-import { canBuild } from "@/lib/roles";
+import { withFormulaGovernance } from "@/lib/lake/schemaGovernance";
+import { lakeTableFor } from "@/lib/lake/tableAccess";
+import { redactSamples } from "@/lib/lake/redaction";
 
 export const dynamic = "force-dynamic";
 
@@ -28,19 +32,10 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const row = await prisma.lakeTable.findFirst({
-    where: { tenantId: user.tenantId, name: decodeURIComponent(params.name) },
-  });
-  if (!row) return NextResponse.json({ error: "Table not found" }, { status: 404 });
-
-  const isOwner = row.ownerUserId === user.id;
-  const isAdmin = user.role === "admin";
-  if (!isOwner && !isAdmin && row.ownerUserId) {
-    return NextResponse.json({ error: "Only the owner or an admin can change sensitivity tags." }, { status: 403 });
-  }
-  if (!canBuild(user.role)) {
-    return NextResponse.json({ error: "Editors only" }, { status: 403 });
-  }
+  // A builder who can read the table; one they can't read is not found.
+  const access = await lakeTableFor(user, decodeURIComponent(params.name), "build");
+  if (access instanceof NextResponse) return access;
+  const { row, viewer } = access;
 
   const body = await req.json().catch(() => ({}));
   const parsed = BodySchema.safeParse(body);
@@ -53,6 +48,11 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
   catch { schema = []; }
   const idx = schema.findIndex((c) => c.name === parsed.data.column);
   if (idx === -1) return NextResponse.json({ error: `Column "${parsed.data.column}" not in schema` }, { status: 404 });
+  if (schema[idx].formula) {
+    return NextResponse.json({
+      error: `${parsed.data.column} is a formula column — it's masked wherever the columns it's worked out from are. Tag those instead.`,
+    }, { status: 400 });
+  }
 
   if (parsed.data.sensitivity == null) {
     delete schema[idx].sensitivity;
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
 
   await prisma.lakeTable.update({
     where: { id: row.id },
-    data: { schemaJson: JSON.stringify(schema), updatedAt: new Date() },
+    data: { schemaJson: JSON.stringify(withFormulaGovernance(schema)), updatedAt: new Date() },
   });
 
   recordAudit({
@@ -79,5 +79,6 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
     },
   });
 
-  return NextResponse.json({ ok: true, column: schema[idx] });
+  // Its sample is a value from the table: masked as the viewer's rows would be.
+  return NextResponse.json({ ok: true, column: redactSamples([schema[idx]], viewer)[0] });
 }

@@ -51,7 +51,7 @@ describe("featureAvailable", () => {
 });
 
 describe("humanizeFeatureKey", () => {
-  it("strips the connector prefix and appends 'connector'", () => {
+  it("names the connector", () => {
     expect(humanizeFeatureKey("connector.snowflake")).toBe("Snowflake connector");
   });
 
@@ -59,15 +59,44 @@ describe("humanizeFeatureKey", () => {
     expect(humanizeFeatureKey("viz.chart.sankey")).toBe("Sankey chart");
   });
 
-  it("capitalizes AI context", () => {
-    expect(humanizeFeatureKey("ai.story_mode")).toBe("AI story mode");
+  it("keeps acronyms and product names cased correctly", () => {
+    // These five all came out mangled when the label was derived from the
+    // key ("Scim", "Bigquery connector", "Sso oidc builtin", "Dashboard kpi
+    // ticker", "Rbac") — customers read this string in the 402 body.
+    expect(humanizeFeatureKey("gov.scim")).toBe("SCIM directory sync");
+    expect(humanizeFeatureKey("connector.bigquery")).toBe("BigQuery connector");
+    expect(humanizeFeatureKey("gov.sso_oidc_builtin")).toBe("Google and GitHub sign-in");
+    expect(humanizeFeatureKey("dashboard.kpi_ticker")).toBe("Dashboard KPI ticker");
+    expect(humanizeFeatureKey("gov.rbac")).toBe("Custom roles");
   });
 
-  it("capitalizes the gov context", () => {
-    expect(humanizeFeatureKey("gov.scim" as FeatureKey)).toBe("Scim");
+  it("reads as a sentence in the 402 body", () => {
+    // The live template is `${label} requires the ${plan} plan.`
+    expect(`${humanizeFeatureKey("gov.rbac")} requires the Growth plan.`).toBe(
+      "Custom roles requires the Growth plan.",
+    );
   });
 
-  it("underscores become spaces in the feature name", () => {
-    expect(humanizeFeatureKey("dashboard.kpi_ticker")).toBe("Dashboard kpi ticker");
+  it("gives every feature key a label", () => {
+    // The `satisfies Record<FeatureKey, string>` on FEATURE_LABELS makes this
+    // a compile-time guarantee too; asserting it here means a key smuggled in
+    // past the type (a cast, a ts-expect-error) still gets caught.
+    const missing = (Object.keys(FEATURE_TIERS) as FeatureKey[]).filter(
+      (k) => !humanizeFeatureKey(k) || humanizeFeatureKey(k) === k,
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("never gives two keys the same label", () => {
+    // apps.publish and activation.publish both used to render as "Publish",
+    // and apps.unlimited / activation.unlimited both as "Unlimited" — two
+    // different upsells behind one indistinguishable string.
+    const byLabel = new Map<string, FeatureKey[]>();
+    for (const key of Object.keys(FEATURE_TIERS) as FeatureKey[]) {
+      const label = humanizeFeatureKey(key);
+      byLabel.set(label, [...(byLabel.get(label) ?? []), key]);
+    }
+    const collisions = [...byLabel.entries()].filter(([, keys]) => keys.length > 1);
+    expect(collisions).toEqual([]);
   });
 });

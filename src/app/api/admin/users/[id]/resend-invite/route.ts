@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { mintAndSendInvite } from "@/lib/invites";
+import { appBase } from "@/lib/http/appBase";
 
 /**
  * POST /api/admin/users/[id]/resend-invite
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     select: { name: true },
   });
 
-  const origin = new URL(req.url).origin;
+  const origin = appBase(req);
   const minted = await mintAndSendInvite({
     tenantId: u.tenantId,
     tenantName: tenant?.name ?? "Curf",

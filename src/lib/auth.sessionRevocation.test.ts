@@ -64,6 +64,11 @@ beforeEach(() => {
   tenantFindUniqueMock.mockResolvedValue({ organizationId: null });
   orgMembershipFindUniqueMock.mockResolvedValue(null);
   orgMembershipFindManyMock.mockResolvedValue([]);
+  // session() now resolves memberships fresh via loadMembershipsForUserId()
+  // on every call (no longer cached on the token — see auth.ts), so any
+  // test exercising session() needs this mocked even when it isn't the
+  // thing under test.
+  membershipFindManyMock.mockResolvedValue([]);
 });
 
 describe("jwt() periodic re-check", () => {
@@ -138,6 +143,68 @@ describe("jwt() periodic re-check", () => {
     const token: any = { id: "u1", email: "u1@test.com", tenantId: "t1", role: "admin", roleCheckedAt: Date.now() };
     await jwtCallback({ token } as any);
     expect(membershipFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("jwt() periodic re-check — a failed lookup is not an answer", () => {
+  // Each lookup used to .catch(() => null), so a transient DB error read
+  // as "no row": the user was silently moved into another workspace, or —
+  // if the account check failed too — signed out. Neither should happen.
+  const fresh = () => ({ id: "u1", email: "u1@test.com", tenantId: "t1", activeTenantId: "t1", role: "admin", roleCheckedAt: STALE });
+
+  it("keeps the workspace when the membership lookup itself fails", async () => {
+    membershipFindUniqueMock.mockRejectedValueOnce(new Error("connection reset"));
+    const result: any = await jwtCallback({ token: fresh() } as any);
+    expect(result.tenantId).toBe("t1");
+    expect(result.activeTenantId).toBe("t1");
+    expect(result.deleted).toBeUndefined();
+    expect(membershipFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("doesn't sign the user out when the account lookup fails", async () => {
+    membershipFindUniqueMock.mockResolvedValueOnce(null);
+    userFindUniqueMock.mockRejectedValueOnce(new Error("timeout"));
+    const result: any = await jwtCallback({ token: fresh() } as any);
+    expect(result.deleted).toBeUndefined();
+    expect(result.tenantId).toBe("t1");
+  });
+
+  it("doesn't fall back when the org-oversight lookup fails", async () => {
+    membershipFindUniqueMock.mockResolvedValueOnce(null);
+    userFindUniqueMock.mockResolvedValueOnce({ id: "u1" });
+    tenantFindUniqueMock.mockRejectedValueOnce(new Error("timeout"));
+    const result: any = await jwtCallback({ token: fresh() } as any);
+    expect(result.tenantId).toBe("t1");
+    expect(membershipFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("retries on the next request instead of waiting out the interval", async () => {
+    membershipFindUniqueMock.mockRejectedValueOnce(new Error("connection reset"));
+    const result: any = await jwtCallback({ token: fresh() } as any);
+    expect(result.roleCheckedAt).toBe(STALE);
+  });
+});
+
+describe("jwt() — a password reset signs out older sessions (audit 2026-09-27, SEC-13)", () => {
+  const token = (authAt: number) => ({ id: "u1", tenantId: "t1", role: "admin", roleCheckedAt: STALE, authAt });
+
+  it("marks a session authenticated before the last password change as deleted", async () => {
+    membershipFindUniqueMock.mockResolvedValue({ role: "admin" });
+    userFindUniqueMock.mockResolvedValue({ passwordChangedAt: new Date(Date.now() - 60_000) });
+    const result: any = await jwtCallback({ token: token(Date.now() - 3_600_000) } as any);
+    expect(result.deleted).toBe(true);
+  });
+
+  it("keeps a session that authenticated after the change", async () => {
+    membershipFindUniqueMock.mockResolvedValue({ role: "admin" });
+    userFindUniqueMock.mockResolvedValue({ passwordChangedAt: new Date(Date.now() - 3_600_000) });
+    const result: any = await jwtCallback({ token: token(Date.now() - 60_000) } as any);
+    expect(result.deleted).toBeUndefined();
+  });
+
+  it("stamps authAt when the session is first issued", async () => {
+    const result: any = await jwtCallback({ token: {}, user: { id: "u1", role: "admin", tenantId: "t1" } } as any);
+    expect(typeof result.authAt).toBe("number");
   });
 });
 

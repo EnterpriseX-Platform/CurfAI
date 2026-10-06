@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { blockScopedApiKey, requireUser } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +27,10 @@ const BodySchema = z.discriminatedUnion("mode", [
 export async function POST(req: NextRequest, { params }: { params: { name: string } }) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Deliberately not lakeTableFor(): an admin may open up a table they can't
+  // read — the way back from an owner-only table whose owner has left.
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
 
   const row = await prisma.lakeTable.findFirst({
     where: { tenantId: user.tenantId, name: decodeURIComponent(params.name) },

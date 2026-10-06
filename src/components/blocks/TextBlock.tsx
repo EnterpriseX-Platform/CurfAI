@@ -1,11 +1,10 @@
-import { interpolate } from "@/lib/reporting/interpolate";
+import { InterpolatedText } from "./InterpolatedText";
 import type { BlockRenderContext } from "./types";
 import { cn } from "@/lib/utils";
 
 export function TextBlock({ block, params }: BlockRenderContext) {
   if (block.type !== "text") return null;
   const { text, align, size } = block.config;
-  const content = interpolate(text, { params });
   return (
     <p
       className={cn(
@@ -17,7 +16,7 @@ export function TextBlock({ block, params }: BlockRenderContext) {
         align === "right" && "text-right"
       )}
     >
-      {content}
+      <InterpolatedText template={text} params={params} />
     </p>
   );
 }

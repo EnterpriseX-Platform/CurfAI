@@ -9,14 +9,14 @@ import {
   Bar, BarChart, Cell, CartesianGrid, Customized, Tooltip, XAxis, YAxis, LabelList, Treemap,
 } from "recharts";
 import { buildWaterfall } from "./Gauge";
-import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, LABEL_FILL, DEFAULT_PALETTE, formatValue, styleOf, gridPropsFor, type ChartRenderCtx } from "./shared";
+import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, LABEL_FILL, DEFAULT_PALETTE, formatValue, seriesName, styleOf, gridPropsFor, type ChartRenderCtx, dateTick, dateLabel, seriesTooltip } from "./shared";
 import { SeriesGradients, seriesFill } from "./gradients";
 import { CHART_STYLE_PRESETS } from "@/lib/reporting/chartStyles";
 import { accentInk } from "@/lib/reporting/accent";
 
 /** Custom Treemap cell — draws the rect + a name/value label pair when the rect is big enough. */
 function TreemapCell(props: any) {
-  const { x, y, width, height, index, payload, xField, valueField, fmt, currency, palette = DEFAULT_PALETTE, style = CHART_STYLE_PRESETS.classic } = props;
+  const { x, y, width, height, index, payload, xField, valueField, fmt, currency, numOpts, palette = DEFAULT_PALETTE, style = CHART_STYLE_PRESETS.classic } = props;
   const fill = payload?.__fill ?? palette[(index ?? 0) % palette.length];
   const name = payload?.[xField] ?? "";
   const rawValue = payload?.[valueField];
@@ -38,7 +38,7 @@ function TreemapCell(props: any) {
       )}
       {showValue && rawValue != null && (
         <text x={x + 8} y={y + 36} fill={ink.soft} fontSize={11}>
-          {formatValue(Number(rawValue), fmt, currency)}
+          {formatValue(Number(rawValue), fmt, currency, numOpts)}
         </text>
       )}
     </g>
@@ -47,8 +47,9 @@ function TreemapCell(props: any) {
 
 export function renderTreemapChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, palette, fmt, currency, print, gid } = ctx;
+  const numOpts = { locale: ctx.dateStyle?.locale };
   const style = styleOf(ctx);
-  const tooltipFormatter = (v: any) => [formatValue(Number(v), fmt, currency), ""];
+  const tooltipFormatter = seriesTooltip(ctx, true);
   // Treemap. yFields[0] = size, optional cfg.colorField = color basis.
   // We pre-bake fills onto the data so each cell can use the palette
   // (Recharts' built-in coloring is uninteresting and uniform). The size
@@ -74,7 +75,7 @@ export function renderTreemapChart(ctx: ChartRenderCtx): ReactElement {
       stroke="hsl(var(--card))"
       isAnimationActive={!print}
       animationDuration={700}
-      content={<TreemapCell xField={xField} valueField={yFields[0]} fmt={fmt} currency={currency} palette={palette} style={style} />}
+      content={<TreemapCell xField={xField} valueField={yFields[0]} fmt={fmt} currency={currency} numOpts={numOpts} palette={palette} style={style} />}
     >
       {SeriesGradients({ prefix: "tree", gid, colors: palette, style })}
       <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} />
@@ -131,17 +132,26 @@ function waterfallConnectors(wf: any[], xField: string, barWidth: number) {
 
 export function renderWaterfallChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, palette, fmt, currency, print, showDataLabels, renderReferenceLines, renderAnnotations, renderForecastDecor } = ctx;
+  const numOpts = { locale: ctx.dateStyle?.locale };
   const style = styleOf(ctx);
-  const yTickFormatter = (v: number) => formatValue(v, fmt, currency);
+  const yTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
   // Waterfall — uses BarChart with two stacked bars per row:
   // a hidden "base" spacer + a visible "delta" bar. Total rows
   // (xField === "Total" or last row treated as total) draw from
   // zero in a distinct accent color.
-  const wf = buildWaterfall(data as any[], xField, yFields[0]);
+  // Each row carries its own label: a step is a movement, signed; a total is
+  // a level, unsigned (an opening "+20.4B" read as a gain).
+  const wf = buildWaterfall(data as any[], xField, yFields[0]).map((row) => {
+    const n = Number(row.__delta);
+    const text = formatValue(Math.abs(n), fmt, currency, numOpts);
+    return { ...row, __label: row.__kind === "total" || n === 0 ? text : (n > 0 ? "+" : "−") + text };
+  });
   const barSize = style.bar.maxBarSize.vertical;
-  // Every step carries its own number under a labelling style, so the value
-  // axis becomes redundant — but only once the labels are actually on.
-  const labels = showDataLabels ?? style.forceDataLabels;
+  // A bridge reads by its steps: each carries its own number unless the
+  // author turned labels off (every style, not only the labelling ones — the
+  // budget bureau's bridge read as unlabelled blocks under the default).
+  // The value axis goes only where the style already drops it.
+  const labels = showDataLabels ?? true;
   const hideValueAxis = !style.valueAxis && labels;
   // No axis to read against means the grid has nothing left to do (same
   // reasoning as barRenderer).
@@ -150,17 +160,19 @@ export function renderWaterfallChart(ctx: ChartRenderCtx): ReactElement {
   return (
     <BarChart data={wf} margin={{ top: labels ? 26 : 16, right: 24, left: 0, bottom: 0 }}>
       {gridProps && <CartesianGrid {...gridProps} />}
-      <XAxis dataKey={xField} {...AXIS_PROPS} />
+      <XAxis dataKey={xField} {...AXIS_PROPS} tickFormatter={dateTick(ctx)} />
       <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} hide={hideValueAxis} />
-      {style.waterfall.connectors && (
+      {(style.waterfall.connectors || labels) && (
         <Customized component={waterfallConnectors(wf, xField, barSize)} />
       )}
       <Tooltip
         contentStyle={TOOLTIP_STYLE}
+        labelFormatter={dateLabel(ctx)}
         formatter={(v: any, name: string, p: any) => {
           if (name === "__base") return [null, null] as any;
           const raw = p?.payload?.__delta;
-          return [formatValue(Number(raw), fmt, currency), p?.payload?.__kind ?? ""];
+          // Named for the measure — the row kind ("delta", "total") is internal.
+          return [formatValue(Number(raw), fmt, currency, numOpts), seriesName(yFields[0]!, ctx.cfg)];
         }}
       />
       {renderReferenceLines()}
@@ -177,21 +189,24 @@ export function renderWaterfallChart(ctx: ChartRenderCtx): ReactElement {
         ))}
         {labels && (
           <LabelList
-            dataKey="__delta" position="top"
+            dataKey="__label"
             // Matched to barRenderer's own labels rather than kept at its old
             // 10px muted setting — a waterfall sits beside bar charts on the
             // same page, and its step values carry the scale once the axis is
             // gone, exactly as they do there.
-            fontSize={11} fontWeight={500} className="font-mono"
-            fill={hideValueAxis ? "hsl(var(--foreground))" : LABEL_FILL}
-            formatter={(v: any) => {
-              const n = Number(v);
-              const text = formatValue(Math.abs(n), fmt, currency);
-              // A bridge chart reads as movements, not levels: signing each
-              // step says which way it went without needing the axis. Totals
-              // are levels, so they stay unsigned.
-              if (!style.waterfall.signedLabels || n === 0) return text;
-              return (n > 0 ? "+" : "−") + text;
+            // A fall is labelled under its bar, where it ends: on top, its
+            // label sat level with the bar before it ("20.4 พันล." and
+            // "−2.5 พันล." ran into each other on the budget bureau's bridge).
+            content={(p: any) => {
+              const row = wf[p.index as number];
+              const down = row && row.__kind !== "total" && Number(row.__delta) < 0;
+              return (
+                <text x={Number(p.x) + Number(p.width) / 2} y={down ? Number(p.y) + Number(p.height) + 12 : Number(p.y) - 6}
+                  textAnchor="middle" fontSize={11} fontWeight={500} className="font-mono"
+                  fill={hideValueAxis ? "hsl(var(--foreground))" : LABEL_FILL}>
+                  {p.value}
+                </text>
+              );
             }}
           />
         )}

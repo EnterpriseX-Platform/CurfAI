@@ -13,8 +13,22 @@ describe("assertPublicHttpUrl — blocks private/reserved/metadata addresses", (
     "http://[fe80::1]/",
     "http://[fc00::1]/",
     "http://[::ffff:169.254.169.254]/",
+    // IPv6 forms that carry a private IPv4 inside (audit 2026-09-27, SEC-15)
+    "http://[64:ff9b::7f00:1]/",      // NAT64 → 127.0.0.1
+    "http://[64:ff9b::a9fe:a9fe]/",   // NAT64 → 169.254.169.254
+    "http://[2002:7f00:1::]/",        // 6to4 → 127.0.0.1
+    "http://[::127.0.0.1]/",          // IPv4-compatible → 127.0.0.1
+    "http://[fec0::1]/",              // site-local
   ])("rejects %s", async (url) => {
     await expect(assertPublicHttpUrl(url)).rejects.toThrow();
+  });
+
+  it("still accepts an IPv6 form that carries a public IPv4 (6to4 of 8.8.8.8)", async () => {
+    await expect(assertPublicHttpUrl("http://[2002:808:808::]/")).resolves.toBeUndefined();
+  });
+
+  it("fails closed when the host can't be resolved", async () => {
+    await expect(assertPublicHttpUrl("https://curf-ssrf-check.invalid/")).rejects.toThrow(/could not be resolved/);
   });
 
   it.each([

@@ -25,9 +25,13 @@ describe("lake file addressing", () => {
   });
 
   it("both lake branches resolve the path from dsRow.tenantId", () => {
-    const matches = runnerSrc.match(/tenantLakePath\(dsRow\.tenantId\)/g) ?? [];
-    // One in runReportWithProof's dispatch, one in the single-query path.
-    expect(matches.length).toBe(2);
+    // Both "lake" switch branches call a shared runOnLake() helper (see its
+    // doc comment) rather than each inlining its own tenantLakePath() call —
+    // consolidated so there's exactly one place that could get the
+    // addressing wrong, not two independent copies that could drift apart.
+    const callSites = runnerSrc.match(/runOnLake\(ds, dsRow,/g) ?? [];
+    expect(callSites.length).toBe(2); // runReportWithProof's dispatch + the single-query path
+    expect(runnerSrc).toMatch(/tenantLakePath\(dsRow\.tenantId\)/);
   });
 
   it("cloning a workspace re-addresses the lake connection to the new tenant", () => {

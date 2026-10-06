@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser, requireReportInScope } from "@/lib/auth";
+import { readableDefinition } from "@/lib/reporting/visibleReport";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,7 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   let def: any = null;
-  try { def = JSON.parse(row.definition); } catch { /* fall through */ }
+  try { def = await readableDefinition(user, JSON.parse(row.definition)); } catch { /* fall through */ }
   if (!def?.dataSources || !Array.isArray(def.dataSources)) {
     return NextResponse.json({ error: "Report has no data sources." }, { status: 422 });
   }

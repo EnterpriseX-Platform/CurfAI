@@ -3,7 +3,12 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReportWithProof } from "@/lib/reporting/runner";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { visibleReport } from "@/lib/reporting/visibleReport";
 import { requireUser, requireReportInScope } from "@/lib/auth";
+import { blockDrill } from "@/lib/reporting/drill";
+import { localizeBlock } from "@/lib/reporting/localize";
+import { LOCALES, type Locale } from "@/lib/i18n/dict";
 import { ensureLimit } from "@/lib/rateLimit";
 
 /**
@@ -12,9 +17,11 @@ import { ensureLimit } from "@/lib/rateLimit";
  * Body: { blockId, value, params }
  *
  * Looks up the named block on the report, reads its `config.drilldown`
- * config (currently only ChartBlock supports it), and runs the drilldown
- * target query with `drilldown.filterParam` bound to `value`. Returns
- * rows + columns so the viewer can render them in a slide-out panel.
+ * (any drillable block — lib/reporting/drill.ts), and runs the drilldown
+ * target query with `drilldown.filterParam` bound to `value` (a KPI's
+ * drill has none: the rows behind the whole number). Returns rows +
+ * columns so the viewer can render them in a slide-out panel. The target
+ * query doesn't run when the report loads — only here.
  *
  * Existing filter-bar params from the URL ride along, so a user clicking
  * "Email" on a chart that's already filtered to "Last 30 days" gets the
@@ -47,39 +54,30 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   });
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const report = ReportSchema.parse(JSON.parse(row.definition));
+  // The caller's view: a block hidden from their roles is as missing as one
+  // that doesn't exist, and the queries only hidden blocks read don't run.
+  const viewer = await exportViewer(user);
+  const report = visibleReport(ReportSchema.parse(JSON.parse(row.definition)), viewer);
 
   // Locate the block + its drilldown config.
-  type DrillCfg = { queryId: string; filterParam: string; title?: string };
-  let drilldown: DrillCfg | null = null;
-  let blockTitle: string | null = null;
-  outer: for (const page of report.pages) {
-    for (const block of page.blocks) {
-      if (block.id !== parsed.data.blockId) continue;
-      // Drill-through is supported on any block type whose config carries a
-      // `drilldown` clause — currently chart and map. The check used to be
-      // hardcoded to "chart" only, which broke the map's click-to-drill flow.
-      if (block.type !== "chart" && block.type !== "map") {
-        return NextResponse.json({ error: `Drill-through is not supported on ${block.type} blocks` }, { status: 400 });
-      }
-      const cfg = (block as any).config as { title?: string; drilldown?: DrillCfg };
-      if (!cfg.drilldown) {
-        return NextResponse.json({ error: "Block has no drilldown configured" }, { status: 400 });
-      }
-      drilldown = cfg.drilldown;
-      blockTitle = cfg.title ?? null;
-      break outer;
-    }
+  type DrillCfg = { queryId: string; filterParam?: string; title?: string; columns?: Array<{ key: string; label: string; type: string; format?: string }> };
+  const found = report.pages.flatMap((p) => p.blocks).find((b) => b.id === parsed.data.blockId);
+  if (!found) return NextResponse.json({ error: "Block not found" }, { status: 404 });
+  // The panel's title in the reader's language (the block's i18n, e.g. "drilldown.title").
+  const cookieLocale = req.cookies.get("rd_locale")?.value ?? "";
+  const block = (LOCALES as readonly string[]).includes(cookieLocale) ? localizeBlock(found, cookieLocale as Locale) : found;
+  const drill = blockDrill(report, { type: block.type, config: { drilldown: (block.config as { drilldown?: DrillCfg }).drilldown } });
+  if (drill?.kind !== "rows") {
+    return NextResponse.json({ error: "Block has no drilldown configured" }, { status: 400 });
   }
-  if (!drilldown) return NextResponse.json({ error: "Block not found" }, { status: 404 });
+  const drilldown: DrillCfg = drill.drilldown;
+  const blockTitle = (block.config as { title?: string; label?: string }).title ?? (block.config as { label?: string }).label ?? null;
 
-  // Find the target dataSource on the report. (Local copy keeps TS happy
-  // through the closure — `drilldown` itself is narrowed to non-null above.)
-  const dl: DrillCfg = drilldown;
-  const target = report.dataSources.find((d) => d.id === dl.queryId);
+  // Find the target dataSource on the report.
+  const target = report.dataSources.find((d) => d.id === drilldown.queryId);
   if (!target) {
     return NextResponse.json(
-      { error: `Drilldown target query "${dl.queryId}" not found on this report` },
+      { error: `Drilldown target query "${drilldown.queryId}" not found on this report` },
       { status: 400 },
     );
   }
@@ -95,22 +93,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       merged[p.name] = p.default ?? "";
     }
   }
-  merged[drilldown.filterParam] = parsed.data.value ?? "";
+  if (drilldown.filterParam) merged[drilldown.filterParam] = parsed.data.value ?? "";
 
   // Run a *narrowed* version of the report containing just the target query,
-  // so we don't waste cycles on every other block's data source.
-  const narrow = { ...report, dataSources: [target] };
+  // so we don't waste cycles on every other block's data source — and with
+  // no blocks, so the runner doesn't take it for drill-only and skip it.
+  const narrow = { ...report, pages: [], dataSources: [target] };
 
   try {
-    const { dataset } = await runReportWithProof({ report: narrow, params: merged });
+    // The rows go straight back to the caller, so they run as the caller:
+    // a source their role can't see returns nothing, and sensitive lake
+    // columns come back redacted, the same as on the chart they clicked.
+    const { dataset } = await runReportWithProof({ report: narrow, params: merged, tenantId: row.tenantId, viewer });
     const rows = dataset[target.id] ?? [];
     const columns = rows.length > 0 ? Object.keys(rows[0] as object) : [];
     return NextResponse.json({
-      title: blockTitle ?? drilldown.title ?? target.name,
-      filterParam: drilldown.filterParam,
-      filterValue: parsed.data.value,
+      title: drilldown.title || blockTitle || target.name,
+      filterParam: drilldown.filterParam ?? null,
+      filterValue: drilldown.filterParam ? parsed.data.value : null,
       rowCount: rows.length,
       columns,
+      // The panel's own columns (headings in the reader's language, a type to format by), when the drill names them.
+      columnDefs: drilldown.columns?.length ? drilldown.columns.map(({ key, label, type, format }) => ({ key, label, type, format })) : null,
       rows: rows.slice(0, 200), // cap so we don't ship a huge payload
       truncated: rows.length > 200,
     });

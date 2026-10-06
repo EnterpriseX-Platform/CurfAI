@@ -2,10 +2,16 @@
  * NextAuth config. Memberships model: one global `User` row per email
  * (id + passwordHash + preferences are shared across every workspace), and
  * a `Membership` row per workspace that email belongs to (role lives here,
- * per-tenant). The JWT carries the full membership list as `memberships`,
- * plus an `activeTenantId` that identifies which one the current request
- * runs against. `token.id` is the same value for every membership — it
- * never changes when switching workspaces, only `activeTenantId`/`role` do.
+ * per-tenant). The JWT itself only carries small scalars (id, tenantId,
+ * activeTenantId, role, email, isPlatformAdmin) — `session.user.memberships`
+ * is resolved fresh from the DB inside the session() callback on every
+ * request instead, so the encrypted cookie doesn't grow with how many
+ * workspaces a user belongs to. (It used to be baked into the token; for a
+ * user with enough real Memberships that pushed the Set-Cookie header past
+ * nginx's proxy_buffer_size, causing intermittent 502s on
+ * /api/auth/session in production — see the jwt() callback below.)
+ * `token.id` is the same value for every membership — it never changes when
+ * switching workspaces, only `activeTenantId`/`role` do.
  *
  * Switching workspaces = call `useSession().update({ activeTenantId })` and
  * the jwt() callback re-resolves which Membership to expose. No re-login.
@@ -23,6 +29,7 @@ import GoogleProvider from "next-auth/providers/google";
 import GitHubProvider from "next-auth/providers/github";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
+import { bindRequestDbContext, withSystemDbContext } from "@/lib/dbContext";
 import { rateLimit } from "@/lib/rateLimit";
 
 export type CurfMembership = {
@@ -32,9 +39,8 @@ export type CurfMembership = {
   role: string;
   /**
    * Billing tier of the workspace, shown under its name in the nav rail.
-   * Optional because tokens issued before the field existed don't carry it
-   * until the next `refreshMemberships` update (the switcher fires one every
-   * time it opens), and the UI falls back to the slug meanwhile.
+   * Optional because a membership row can predate the field; the UI falls
+   * back to the slug when it's absent.
    */
   tenantTier?: string;
   /**
@@ -99,47 +105,55 @@ export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number];
  * Exported so /api/memberships can share this instead of re-deriving it.
  */
 async function loadMembershipsForUserId(userId: string): Promise<CurfMembership[]> {
-  const rows = await prisma.membership.findMany({
-    where: { userId },
-    include: { tenant: { select: { id: true, slug: true, name: true, tier: true } } },
-    orderBy: { createdAt: "asc" },
-  });
-  const real = rows.map((m: any) => ({
-    tenantId: m.tenantId,
-    tenantSlug: m.tenant.slug,
-    tenantName: m.tenant.name,
-    role: m.role,
-    tenantTier: m.tenant.tier ?? undefined,
-  }));
-
-  // Platform Admin oversight (Growth+, gated by featureGate("org.platform_admin")
-  // at the point of USE — this list itself is harmless to compute broadly):
-  // every tenant under an Organization this user holds "platform_admin"
-  // OrgMembership for, synthesized as a virtual admin entry, minus any
-  // tenant they already have a real Membership for above.
-  const orgGrants = await prisma.orgMembership.findMany({
-    where: { userId, role: "platform_admin" },
-    select: { organizationId: true },
-  });
-  let virtual: CurfMembership[] = [];
-  if (orgGrants.length > 0) {
-    const realTenantIds = new Set(real.map((m) => m.tenantId));
-    const orgTenants = await prisma.tenant.findMany({
-      where: { organizationId: { in: orgGrants.map((g) => g.organizationId) } },
-      select: { id: true, slug: true, name: true, tier: true },
+  // Every workspace this person belongs to — cross-workspace by definition,
+  // so never filtered to whichever one the request is bound to (BE-TEN-03);
+  // under that filter the other workspaces vanished or came back "virtual".
+  return withSystemDbContext(async () => {
+    const rows = await prisma.membership.findMany({
+      where: { userId },
+      include: { tenant: { select: { id: true, slug: true, name: true, tier: true } } },
+      orderBy: { createdAt: "asc" },
     });
-    virtual = orgTenants
-      .filter((t) => !realTenantIds.has(t.id))
-      .map((t) => ({ tenantId: t.id, tenantSlug: t.slug, tenantName: t.name, role: "admin", tenantTier: t.tier ?? undefined, isVirtual: true }));
-  }
+    const real = rows.map((m: any) => ({
+      tenantId: m.tenantId,
+      tenantSlug: m.tenant.slug,
+      tenantName: m.tenant.name,
+      role: m.role,
+      tenantTier: m.tenant.tier ?? undefined,
+    }));
 
-  return [...real, ...virtual];
+    // Platform Admin oversight (Growth+, gated by featureGate("org.platform_admin")
+    // at the point of USE — this list itself is harmless to compute broadly):
+    // every tenant under an Organization this user holds "platform_admin"
+    // OrgMembership for, synthesized as a virtual admin entry, minus any
+    // tenant they already have a real Membership for above.
+    const orgGrants = await prisma.orgMembership.findMany({
+      where: { userId, role: "platform_admin" },
+      select: { organizationId: true },
+    });
+    let virtual: CurfMembership[] = [];
+    if (orgGrants.length > 0) {
+      const realTenantIds = new Set(real.map((m) => m.tenantId));
+      const orgTenants = await prisma.tenant.findMany({
+        where: { organizationId: { in: orgGrants.map((g) => g.organizationId) } },
+        select: { id: true, slug: true, name: true, tier: true },
+      });
+      virtual = orgTenants
+        .filter((t) => !realTenantIds.has(t.id))
+        .map((t) => ({ tenantId: t.id, tenantSlug: t.slug, tenantName: t.name, role: "admin", tenantTier: t.tier ?? undefined, isVirtual: true }));
+    }
+
+    return [...real, ...virtual];
+  });
 }
 
 export async function loadMembershipsForEmail(email: string): Promise<CurfMembership[]> {
-  const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-  if (!user) return [];
-  return loadMembershipsForUserId(user.id);
+  // The account row is global, one per email — see loadMembershipsForUserId.
+  return withSystemDbContext(async () => {
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (!user) return [];
+    return loadMembershipsForUserId(user.id);
+  });
 }
 
 // How often the jwt() callback re-fetches role/tenant from the DB for an
@@ -207,25 +221,41 @@ export const authOptions: NextAuthOptions = {
       return true;
     },
     async jwt({ token, user, trigger, session }) {
-      // First sign-in: stash the user's home-tenant identity AND the full
-      // membership list so the switcher is populated immediately.
+      // First sign-in: stash the user's home-tenant identity. The full
+      // membership list is deliberately NOT stored here — see session()
+      // below, which resolves it fresh from the DB on every request instead
+      // of baking it into the encrypted cookie. A user with enough
+      // workspaces (real Memberships, or Platform Admin oversight of many
+      // Organizations' tenants) pushed the JWT's Set-Cookie header past
+      // nginx's proxy_buffer_size, causing intermittent 502 "upstream sent
+      // too big header" failures on /api/auth/session in production
+      // (2026-09-17) — the cookie must stay small regardless of how many
+      // workspaces any one user ends up with.
       if (user) {
         (token as any).id = (user as any).id;
+        // When this session authenticated — kept across token refreshes
+        // (NextAuth re-issues iat), compared with the account's
+        // passwordChangedAt on the periodic re-check below.
+        (token as any).authAt = Date.now();
         (token as any).role = (user as any).role;
         (token as any).tenantId = (user as any).tenantId;
         (token as any).activeTenantId = (user as any).tenantId;
         (token as any).roleCheckedAt = Date.now();
         if ((user as any).email) {
-          (token as any).memberships = await loadMembershipsForEmail((user as any).email);
+          (token as any).email = (user as any).email;
           const { isPlatformAdmin } = await import("@/lib/platformAdmin");
           (token as any).isPlatformAdmin = isPlatformAdmin((user as any).email);
         }
       }
-      // Client-driven updates from `useSession().update(...)`.
+      // Client-driven updates from `useSession().update(...)`. Membership
+      // list itself is no longer cached on the token, so a switch just
+      // needs to confirm the target tenant is one of this user's current
+      // memberships before adopting it.
       if (trigger === "update" && session) {
         const next = session as any;
-        if (next.activeTenantId && Array.isArray((token as any).memberships)) {
-          const m = (token as any).memberships.find((m: CurfMembership) => m.tenantId === next.activeTenantId);
+        if (next.activeTenantId && (token as any).id) {
+          const current = await loadMembershipsForUserId((token as any).id);
+          const m = current.find((m) => m.tenantId === next.activeTenantId);
           if (m) {
             // token.id is unchanged — one identity, every workspace.
             (token as any).activeTenantId = m.tenantId;
@@ -233,11 +263,10 @@ export const authOptions: NextAuthOptions = {
             (token as any).tenantId = m.tenantId;
           }
         }
-        if (next.refreshMemberships && (token as any).email) {
-          (token as any).memberships = await loadMembershipsForEmail((token as any).email);
-        }
       }
-      // Cache email on the token so refreshMemberships works without DB lookup.
+      // Backfill email/isPlatformAdmin for tokens issued before those fields
+      // existed on the token (or before this fix, when email was only set
+      // conditionally on `user.email`).
       if (!(token as any).email && (token as any).id) {
         const u = await prisma.user.findUnique({
           where: { id: (token as any).id },
@@ -260,60 +289,80 @@ export const authOptions: NextAuthOptions = {
       //     another membership the user still has, or sign out if none left
       const lastChecked = (token as any).roleCheckedAt ?? 0;
       if ((token as any).id && Date.now() - lastChecked > ROLE_CHECK_INTERVAL_MS) {
-        const membership = await prisma.membership.findUnique({
-          where: { userId_tenantId: { userId: (token as any).id, tenantId: (token as any).tenantId } },
-          select: { role: true },
-        }).catch(() => null);
-        if (membership) {
-          (token as any).role = membership.role;
-        } else {
-          const stillExists = await prisma.user.findUnique({
-            where: { id: (token as any).id },
-            select: { id: true },
-          }).catch(() => null);
-          if (!stillExists) {
-            // jwt() itself has no supported way to force sign-out — but
-            // tenantWhere()/requireUser() do NOT independently re-check
-            // that the row still exists (they trust the token's own
-            // id/tenantId), so leaving those fields alone here would let a
-            // deleted user's stolen cookie keep working for the rest of
-            // the JWT's lifetime. Mark it instead; session() below turns
-            // that into an unauthenticated session.
-            (token as any).deleted = true;
+        // Every lookup below answers "is there a row?" — so a lookup that
+        // FAILED must not be read as "no". Each one used to .catch(() =>
+        // null), which turned a transient DB error into "this membership
+        // was removed" (silently moving the user into another workspace,
+        // where their next action lands on the wrong tenant's data) or,
+        // on a second failed query, "this account was deleted" (signing
+        // them out). A failed check now changes nothing and doesn't
+        // advance roleCheckedAt, so the next request simply retries it.
+        try {
+          const membership = await prisma.membership.findUnique({
+            where: { userId_tenantId: { userId: (token as any).id, tenantId: (token as any).tenantId } },
+            select: { role: true },
+          });
+          if (membership) {
+            (token as any).role = membership.role;
           } else {
-            // No real Membership for this tenant doesn't automatically mean
-            // "revoked" — it might be virtual (Platform Admin oversight of
-            // a tenant they never joined, see loadMembershipsForUserId()).
-            // Check that BEFORE falling back, or every Platform Admin
-            // viewing an org-derived tenant gets silently bounced back to
-            // fresh[0] on this exact 5-minute tick.
-            const currentTenant = await prisma.tenant.findUnique({
-              where: { id: (token as any).tenantId },
-              select: { organizationId: true },
-            }).catch(() => null);
-            const orgGrant = currentTenant?.organizationId
-              ? await prisma.orgMembership.findUnique({
-                  where: { userId_organizationId: { userId: (token as any).id, organizationId: currentTenant.organizationId } },
-                }).catch(() => null)
-              : null;
-            if (orgGrant?.role === "platform_admin") {
-              // Virtual access still holds — stay on this tenant, just
-              // refresh the role (always "admin" while switched into it).
-              (token as any).role = "admin";
+            const stillExists = await prisma.user.findUnique({
+              where: { id: (token as any).id },
+              select: { id: true },
+            });
+            if (!stillExists) {
+              // jwt() itself has no supported way to force sign-out — but
+              // tenantWhere()/requireUser() do NOT independently re-check
+              // that the row still exists (they trust the token's own
+              // id/tenantId), so leaving those fields alone here would let a
+              // deleted user's stolen cookie keep working for the rest of
+              // the JWT's lifetime. Mark it instead; session() below turns
+              // that into an unauthenticated session.
+              (token as any).deleted = true;
             } else {
-              const fresh = await loadMembershipsForUserId((token as any).id);
-              (token as any).memberships = fresh;
-              if (fresh.length > 0) {
-                (token as any).activeTenantId = fresh[0].tenantId;
-                (token as any).tenantId = fresh[0].tenantId;
-                (token as any).role = fresh[0].role;
+              // No real Membership for this tenant doesn't automatically mean
+              // "revoked" — it might be virtual (Platform Admin oversight of
+              // a tenant they never joined, see loadMembershipsForUserId()).
+              // Check that BEFORE falling back, or every Platform Admin
+              // viewing an org-derived tenant gets silently bounced back to
+              // fresh[0] on this exact 5-minute tick.
+              const currentTenant = await prisma.tenant.findUnique({
+                where: { id: (token as any).tenantId },
+                select: { organizationId: true },
+              });
+              const orgGrant = currentTenant?.organizationId
+                ? await prisma.orgMembership.findUnique({
+                    where: { userId_organizationId: { userId: (token as any).id, organizationId: currentTenant.organizationId } },
+                  })
+                : null;
+              if (orgGrant?.role === "platform_admin") {
+                // Virtual access still holds — stay on this tenant, just
+                // refresh the role (always "admin" while switched into it).
+                (token as any).role = "admin";
               } else {
-                (token as any).deleted = true;
+                const fresh = await loadMembershipsForUserId((token as any).id);
+                if (fresh.length > 0) {
+                  (token as any).activeTenantId = fresh[0].tenantId;
+                  (token as any).tenantId = fresh[0].tenantId;
+                  (token as any).role = fresh[0].role;
+                } else {
+                  (token as any).deleted = true;
+                }
               }
             }
           }
+          // A password reset signs out every session authenticated before it
+          // — the point of resetting a password someone else may know.
+          const account = await prisma.user.findUnique({
+            where: { id: (token as any).id },
+            select: { passwordChangedAt: true },
+          });
+          if (account?.passwordChangedAt && account.passwordChangedAt.getTime() > ((token as any).authAt ?? 0)) {
+            (token as any).deleted = true;
+          }
+          (token as any).roleCheckedAt = Date.now();
+        } catch (e: any) {
+          console.warn("[auth] periodic membership re-check failed; keeping the session as-is and retrying next request:", e?.message ?? e);
         }
-        (token as any).roleCheckedAt = Date.now();
       }
 
       return token;
@@ -329,7 +378,12 @@ export const authOptions: NextAuthOptions = {
       (session.user as any).id = (token as any).id;
       (session.user as any).role = (token as any).role;
       (session.user as any).tenantId = (token as any).tenantId;
-      (session.user as any).memberships = (token as any).memberships ?? [];
+      // Resolved fresh from the DB every request rather than cached on the
+      // token — see the top-of-file comment for why it can't live in the
+      // cookie.
+      (session.user as any).memberships = (token as any).id
+        ? await loadMembershipsForUserId((token as any).id)
+        : [];
       (session.user as any).activeTenantId = (token as any).activeTenantId ?? (token as any).tenantId;
       (session.user as any).isPlatformAdmin = !!(token as any).isPlatformAdmin;
       return session;
@@ -363,8 +417,29 @@ export const authOptions: NextAuthOptions = {
   },
 };
 
+/**
+ * The session, for DISPLAY only — the root layout's SessionProvider, a
+ * "signed in?" check on a public page. Unlike getSession() it does not tie
+ * the request to the user's workspace, so a public page rendering another
+ * workspace's data (a share link, a public app) isn't filtered to the
+ * visitor's own. Anything acting on the user's behalf uses getSession() or
+ * requireUser().
+ */
+export async function readSession() {
+  // Resolving a session reads the user's memberships in EVERY workspace
+  // (the switcher, the periodic role re-check) — cross-workspace by design,
+  // so it runs with no workspace filter even when this request is already
+  // bound to one.
+  return withSystemDbContext(() => getServerSession(authOptions));
+}
+
+/** The signed-in session, with the rest of this request's database work
+ *  bound to the user's workspace (row-level security, BE-TEN-03). */
 export async function getSession() {
-  return getServerSession(authOptions);
+  const session = await readSession();
+  const u = session?.user as any;
+  if (u?.tenantId) bindRequestDbContext({ tenantId: u.tenantId, userId: u.id, role: u.role });
+  return session;
 }
 
 /**
@@ -417,6 +492,7 @@ export async function requireUser(req?: NextRequest): Promise<CurfSessionUser | 
       data: { lastUsedAt: new Date(), requestCount: { increment: 1 } },
     }).catch(() => null);
     const scopedReportIds = parseScopedReportIds(row.scopedReportIds);
+    bindRequestDbContext({ tenantId: row.tenantId, userId: "apikey:" + row.id, role: row.role });
     return {
       id: "apikey:" + row.id,
       email: "apikey+" + row.prefix + "@curf.local",
@@ -515,6 +591,10 @@ export async function requireAdmin(req?: NextRequest): Promise<CurfSessionUser |
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (user.role !== "admin") return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  // A report-scoped key is limited to its allowlisted reports; admin routes
+  // (minting keys, managing members, connections) are outside that mandate.
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   return user;
 }
 
@@ -525,6 +605,8 @@ export async function requireAdminOrEditor(req?: NextRequest): Promise<CurfSessi
   if (user.role !== "admin" && user.role !== "developer") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   return user;
 }
 
@@ -624,9 +706,17 @@ export async function getUserRoles(): Promise<string[]> {
     where: { userId_tenantId: { userId: user.id, tenantId: user.tenantId } },
     select: { rolesJson: true },
   });
+  return memberRoleSlugs(user.role, row?.rolesJson);
+}
+
+/** The custom role slugs a member holds in one workspace: their Membership's
+ *  rolesJson, plus "executive" for an executive. Pure, so a caller with no
+ *  session (a scheduled delivery rendering as its creator) resolves roles
+ *  the same way getUserRoles() does. */
+export function memberRoleSlugs(role: string, rolesJson: string | null | undefined): string[] {
   const merged: string[] = [];
   try {
-    const parsed = row ? JSON.parse(row.rolesJson ?? "[]") : [];
+    const parsed = JSON.parse(rolesJson ?? "[]");
     if (Array.isArray(parsed)) merged.push(...parsed);
   } catch { /* ignore */ }
   // "executive" is deliberately the ONLY auth-tier role folded into the
@@ -638,7 +728,7 @@ export async function getUserRoles(): Promise<string[]> {
   // a real, not hypothetical, content-visibility regression. "executive"
   // is the one deliberate merge (see prisma/schema.prisma's Membership
   // comment + the 2026-08 role restructure).
-  if (user.role === "executive" && !merged.includes("executive")) merged.push("executive");
+  if (role === "executive" && !merged.includes("executive")) merged.push("executive");
   return merged;
 }
 

@@ -28,10 +28,14 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n/LocaleContext";
-import { InlineTagManager } from "@/components/common/InlineTagManager";
+import { TypedConversionSection } from "./TypedConversionSection";
+import { VisibilitySection } from "@/components/common/VisibilitySection";
+import { ColumnEditor } from "./ColumnEditor";
+import { NEW_COLUMN_NAME_PATTERN } from "@/lib/lake/columnName";
+import { canEditLakeColumns, canEditLakeVisibility } from "@/lib/roles";
 import {
   Settings, Loader2, Plus, Pencil, Trash2, Check, X, AlertTriangle,
-  Lock, Users, Globe2, ShieldAlert, RefreshCw,
+  ShieldAlert, RefreshCw, SquareFunction,
 } from "lucide-react";
 
 type Sensitivity = "pii" | "financial" | "health" | "secret";
@@ -41,6 +45,8 @@ type Schema = Array<{
   sample?: any;
   sensitivity?: Sensitivity;
   unredactedForRoles?: string[];
+  /** Set on a formula column: its type and tags come from its formula, so they aren't edited here. */
+  formula?: string | null;
 }>;
 
 const SENSITIVITY_LABEL_KEYS: Record<Sensitivity, string> = {
@@ -64,6 +70,7 @@ export function TableManagePanel({
   callerUserId,
   callerRole,
   availableRoles,
+  typedConversionEnabled,
 }: {
   tableName: string;
   initialSchema: Schema;
@@ -72,6 +79,9 @@ export function TableManagePanel({
   callerUserId: string;
   callerRole: string;
   availableRoles: { slug: string; label: string }[];
+  /** Deployment has CURF_LAKE_TYPED_COLUMNS on. Computed by the server page —
+   *  the client can't (and shouldn't full-scan a table to find out). */
+  typedConversionEnabled: boolean;
 }) {
   const { t } = useT();
   const router = useRouter();
@@ -88,12 +98,11 @@ export function TableManagePanel({
   const [ownerUserId, setOwnerUserId] = useState(initialOwnerUserId);
   const [visibleToRoles, setVisibleToRoles] = useState<string[]>(initialVisibleToRoles);
 
-  const isOwner = ownerUserId === callerUserId;
-  const isAdmin = callerRole === "admin";
-  const canEditVisibility = isOwner || isAdmin || (!ownerUserId && callerRole === "developer");
-  const canEditSchema = !ownerUserId
-    ? (callerRole === "admin" || callerRole === "developer")
-    : (isOwner || isAdmin);
+  // The routes' own rules (lib/roles.ts): a developer was offered visibility
+  // on a shared table the route refuses, and an owner without a builder role
+  // was offered schema changes it refuses too.
+  const canEditVisibility = canEditLakeVisibility(callerRole, ownerUserId, callerUserId);
+  const canEditSchema = canEditLakeColumns(callerRole);
 
   const visibilityMode: "tenant" | "roles" | "owner_only" =
     ownerUserId ? "owner_only" : visibleToRoles.length > 0 ? "roles" : "tenant";
@@ -200,6 +209,12 @@ export function TableManagePanel({
         onChange={setVisibility}
       />
 
+      {typedConversionEnabled && callerRole === "admin" && (
+        <div className="mt-3">
+          <TypedConversionSection tableName={tableName} onConverted={setSchema} />
+        </div>
+      )}
+
       <SchemaSection
         tableName={tableName}
         schema={schema}
@@ -208,6 +223,12 @@ export function TableManagePanel({
         onAction={schemaAction}
         availableRoleSlugs={roleOptions.map((r) => r.slug)}
         onSchemaChange={setSchema}
+        onColumnsSaved={(next) => {
+          if (next) setSchema(next);
+          setError(null);
+          setSuccess(null);
+          router.refresh();
+        }}
       />
     </section>
   );
@@ -223,129 +244,11 @@ export function TableManagePanel({
 }
 
 // ---------------------------------------------------------------------------
-// Visibility
-// ---------------------------------------------------------------------------
-
-function VisibilitySection({
-  mode, roleOptions, onRoleOptionsChange, currentRoles, canEdit, busy, onChange,
-}: {
-  mode: "tenant" | "roles" | "owner_only";
-  roleOptions: { slug: string; label: string }[];
-  onRoleOptionsChange: (next: { slug: string; label: string }[]) => void;
-  currentRoles: string[];
-  canEdit: boolean;
-  busy: boolean;
-  onChange: (mode: "tenant" | "roles" | "owner_only", roles?: string[]) => void;
-}) {
-  const { t } = useT();
-  const [editingRoles, setEditingRoles] = useState(mode === "roles");
-  const [rolesDraft, setRolesDraft] = useState<string[]>(currentRoles);
-
-  const Icon = mode === "owner_only" ? Lock : mode === "roles" ? Users : Globe2;
-  const label = mode === "owner_only" ? t("tableManage.vis.justMe") : mode === "roles" ? t("tableManage.vis.specificRoles") : t("tableManage.vis.tenantWide");
-
-  function toggleRole(slug: string) {
-    setRolesDraft((xs) => xs.includes(slug) ? xs.filter((x) => x !== slug) : [...xs, slug]);
-  }
-
-  return (
-    <div className="rounded-md border border-border bg-background p-3">
-      <header className="flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 text-xs font-semibold">
-          <Icon className="h-3.5 w-3.5 text-muted-foreground" /> {t("tableManage.vis.heading")}
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">{label}</span>
-        </h3>
-        {!canEdit && (
-          <span className="text-[10px] italic text-muted-foreground">{t("tableManage.vis.readOnlyHint")}</span>
-        )}
-      </header>
-
-      {canEdit && (
-        <div className="mt-3 space-y-2">
-          <div className="flex flex-wrap gap-1.5">
-            <ModeChip
-              icon={<Globe2 className="h-3 w-3" />}
-              label={t("tableManage.vis.tenantWide")}
-              active={mode === "tenant"}
-              busy={busy && mode !== "tenant"}
-              onClick={() => { setEditingRoles(false); onChange("tenant"); }}
-            />
-            <ModeChip
-              icon={<Users className="h-3 w-3" />}
-              label={t("tableManage.vis.specificRoles")}
-              active={mode === "roles"}
-              busy={busy && mode !== "roles"}
-              onClick={() => setEditingRoles(true)}
-            />
-            <ModeChip
-              icon={<Lock className="h-3 w-3" />}
-              label={t("tableManage.vis.justMe")}
-              active={mode === "owner_only"}
-              busy={busy && mode !== "owner_only"}
-              onClick={() => { setEditingRoles(false); onChange("owner_only"); }}
-            />
-          </div>
-          {editingRoles && (
-            <div className="rounded-md border border-dashed border-border bg-muted/20 p-2.5">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("tableManage.vis.allowedRoles")}</p>
-              <div className="mt-1.5">
-                <InlineTagManager
-                  options={roleOptions}
-                  selected={rolesDraft}
-                  onToggle={toggleRole}
-                  onOptionsChange={onRoleOptionsChange}
-                />
-              </div>
-              <div className="mt-2 flex items-center justify-end gap-1">
-                <button
-                  type="button"
-                  onClick={() => { setEditingRoles(mode === "roles"); setRolesDraft(currentRoles); }}
-                  className="rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
-                >
-                  {t("action.cancel")}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || rolesDraft.length === 0}
-                  onClick={() => onChange("roles", rolesDraft)}
-                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                >
-                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                  {t("action.apply")}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ModeChip({ icon, label, active, busy, onClick }: { icon: React.ReactNode; label: string; active: boolean; busy: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      className={
-        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors " +
-        (active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-border bg-background text-muted-foreground hover:bg-muted")
-      }
-    >
-      {icon} {label}
-    </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
 
 function SchemaSection({
-  tableName, schema, canEdit, busy, onAction, availableRoleSlugs, onSchemaChange,
+  tableName, schema, canEdit, busy, onAction, availableRoleSlugs, onSchemaChange, onColumnsSaved,
 }: {
   tableName: string;
   schema: Schema;
@@ -354,11 +257,13 @@ function SchemaSection({
   onAction: (payload: any, busyKey: string, successMsg: string) => void;
   availableRoleSlugs: string[];
   onSchemaChange: (s: Schema) => void;
+  /** After ColumnEditor adds a column, changes a formula or removes a formula column. */
+  onColumnsSaved: (s: Schema | null) => void;
 }) {
   const { t } = useT();
-  const [adding, setAdding] = useState(false);
-  const [addName, setAddName] = useState("");
-  const [addDefault, setAddDefault] = useState("");
+  // Adding a column (blank or formula) and changing a formula happen in
+  // ColumnEditor — the same dialog as the table page's and the spreadsheet's.
+  const [editor, setEditor] = useState<{ open: boolean; editing: string | null }>({ open: false, editing: null });
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   // Which column has the sensitivity picker open. Lifted to the section
@@ -400,63 +305,16 @@ function SchemaSection({
     <div className="mt-4 rounded-md border border-border bg-background p-3">
       <header className="flex items-center justify-between">
         <h3 className="text-xs font-semibold">{t("tableDetail.schemaHeading")}</h3>
-        {canEdit && !adding && (
+        {canEdit && (
           <button
             type="button"
-            onClick={() => setAdding(true)}
+            onClick={() => setEditor({ open: true, editing: null })}
             className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] hover:bg-muted"
           >
             <Plus className="h-3 w-3" /> {t("tableManage.schema.addColumn")}
           </button>
         )}
       </header>
-
-      {adding && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onAction(
-              { action: "addColumn", name: addName.trim(), defaultValue: addDefault.trim() || undefined },
-              "addColumn",
-              t("tableManage.schema.addedColumnMsg").replace("{name}", addName.trim()),
-            );
-            setAdding(false); setAddName(""); setAddDefault("");
-          }}
-          className="mt-2 grid gap-2 rounded-md border border-dashed border-border bg-muted/20 p-2 md:grid-cols-3"
-        >
-          <input
-            value={addName}
-            onChange={(e) => setAddName(e.target.value)}
-            placeholder="column_name"
-            required
-            pattern="^[a-zA-Z_][a-zA-Z0-9_]*$"
-            className="h-8 rounded border border-border bg-background px-2 font-mono text-xs"
-          />
-          <input
-            value={addDefault}
-            onChange={(e) => setAddDefault(e.target.value)}
-            placeholder={t("tableManage.schema.defaultValuePlaceholder")}
-            className="h-8 rounded border border-border bg-background px-2 text-xs"
-          />
-          <div className="flex items-center gap-1">
-            <button
-              type="submit"
-              disabled={busy === "addColumn" || !addName.trim()}
-              className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {busy === "addColumn" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-              {t("action.add")}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setAdding(false); setAddName(""); setAddDefault(""); }}
-              className="h-8 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted"
-            >
-              {t("action.cancel")}
-            </button>
-          </div>
-        </form>
-      )}
 
       <ul className="mt-3 divide-y divide-border">
         {schema.map((c) => (
@@ -479,7 +337,7 @@ function SchemaSection({
                   autoFocus
                   value={renameDraft}
                   onChange={(e) => setRenameDraft(e.target.value)}
-                  pattern="^[a-zA-Z_][a-zA-Z0-9_]*$"
+                  pattern={NEW_COLUMN_NAME_PATTERN}
                   required
                   className="h-7 rounded border border-border bg-background px-2 font-mono text-xs"
                 />
@@ -503,7 +361,15 @@ function SchemaSection({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <code className="font-mono">{c.name}</code>
-                    {canEdit ? (
+                    {c.formula ? (
+                      <span
+                        title={`= ${c.formula}`}
+                        className="inline-flex max-w-[20rem] items-center gap-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary-ink"
+                      >
+                        <SquareFunction className="h-2.5 w-2.5 shrink-0" />
+                        <span className="truncate normal-case tracking-normal font-mono text-[10px]">= {c.formula}</span>
+                      </span>
+                    ) : canEdit ? (
                       <button
                         type="button"
                         onClick={() => { setRetyping(retyping === c.name ? null : c.name); setTagging(null); }}
@@ -524,7 +390,7 @@ function SchemaSection({
                           "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
                           SENSITIVITY_TONE[c.sensitivity]
                         }
-                        title={
+                        title={c.formula ? t("tableManage.schema.formulaInherits") :
                           (c.unredactedForRoles ?? []).length > 0
                             ? t("tableManage.schema.unredactedFor").replace("{roles}", (c.unredactedForRoles ?? []).join(", "))
                             : t("tableManage.schema.alwaysRedacted")
@@ -536,7 +402,18 @@ function SchemaSection({
                   </div>
                   {canEdit && (
                     <div className="flex shrink-0 items-center gap-0.5">
-                      <button
+                      {c.formula && (
+                        <button
+                          type="button"
+                          onClick={() => setEditor({ open: true, editing: c.name })}
+                          disabled={!!busy}
+                          className="rounded p-1 text-primary-ink hover:bg-primary-soft disabled:opacity-50"
+                          title={t("tableManage.schema.editFormula")}
+                        >
+                          <SquareFunction className="h-3 w-3" />
+                        </button>
+                      )}
+                      {!c.formula && <button
                         type="button"
                         onClick={() => { setTagging(tagging === c.name ? null : c.name); setRetyping(null); }}
                         disabled={!!busy || savingTag === c.name}
@@ -549,7 +426,7 @@ function SchemaSection({
                         title={t("tableManage.schema.sensitivityTitle")}
                       >
                         <ShieldAlert className="h-3 w-3" />
-                      </button>
+                      </button>}
                       <button
                         type="button"
                         onClick={() => { setRenaming(c.name); setRenameDraft(c.name); }}
@@ -609,6 +486,17 @@ function SchemaSection({
           </li>
         ))}
       </ul>
+
+      {canEdit && (
+        <ColumnEditor
+          tableName={tableName}
+          columns={schema.map((c) => ({ name: c.name, type: c.type, formula: c.formula ?? null }))}
+          editing={editor.editing}
+          open={editor.open}
+          onOpenChange={(open) => setEditor((e) => ({ ...e, open }))}
+          onSaved={(next) => onColumnsSaved(next as Schema | null)}
+        />
+      )}
     </div>
   );
 }

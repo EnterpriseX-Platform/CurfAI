@@ -10,6 +10,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/lib/toast";
+import { exportFailureToast, fetchExport } from "@/lib/reporting/exportDownload";
+import { saveBlob } from "@/components/reports/useReportExport";
 
 type ScheduleItem = {
   id: string;
@@ -24,7 +26,9 @@ type ScheduleItem = {
   lastStatus?: string | null;
 };
 
-export function SchedulesManager({ reports }: { reports: Array<{ id: string; name: string }> }) {
+/** `canManage` is false for viewer/executive roles: they can Run now (it
+ *  downloads as them) but not create, pause or delete, which the API 403s. */
+export function SchedulesManager({ reports, canManage }: { reports: Array<{ id: string; name: string }>; canManage: boolean }) {
   const { t } = useT();
   const { push } = useToast();
   const [items, setItems] = useState<ScheduleItem[]>([]);
@@ -67,21 +71,12 @@ export function SchedulesManager({ reports }: { reports: Array<{ id: string; nam
   async function runNow(id: string) {
     setRunningId(id);
     try {
-      const r = await fetch(`/api/schedules/${id}/run`, { method: "POST" });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: t("schedules.runFailed") }));
-        push({ variant: "destructive", title: t("schedules.runFailed"), description: err.error });
+      const res = await fetchExport(`/api/schedules/${id}/run`, "report", { method: "POST" });
+      if (!res.ok) {
+        push(exportFailureToast(res, t, t("schedules.runFailed")));
         return;
       }
-      // Trigger file download
-      const blob = await r.blob();
-      const cd = r.headers.get("content-disposition") ?? "";
-      const match = /filename="([^"]+)"/.exec(cd);
-      const fname = match?.[1] ?? "report";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = fname; a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(res.blob, res.filename);
       push({ variant: "success", title: t("schedules.ranAndDownloaded") });
       refresh();
     } finally { setRunningId(null); }
@@ -138,6 +133,7 @@ export function SchedulesManager({ reports }: { reports: Array<{ id: string; nam
                     <input
                       type="checkbox"
                       checked={sched.enabled}
+                      disabled={!canManage}
                       onChange={(e) => toggle(sched.id, e.target.checked)}
                       className="h-4 w-4 accent-[hsl(var(--primary))]"
                     />
@@ -155,9 +151,11 @@ export function SchedulesManager({ reports }: { reports: Array<{ id: string; nam
                           ? <Loader2 className="h-4 w-4 animate-spin" />
                           : <Play className="h-4 w-4" />}
                       </Button>
-                      <Button size="icon" variant="ghost" onClick={() => remove(sched.id)} title={t("action.delete")}>
-                        <Trash2 className="h-4 w-4 text-destructive/80" />
-                      </Button>
+                      {canManage && (
+                        <Button size="icon" variant="ghost" onClick={() => remove(sched.id)} title={t("action.delete")}>
+                          <Trash2 className="h-4 w-4 text-destructive/80" />
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -170,53 +168,55 @@ export function SchedulesManager({ reports }: { reports: Array<{ id: string; nam
         </div>
       </section>
 
-      <section>
-        <h2 className="mb-3 text-sm font-medium">{t("schedules.newHeading")}</h2>
-        <div className="grid gap-3 rounded-lg border bg-card p-5 shadow-xs">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1">
-              <Label>{t("common.name")}</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("schedules.namePlaceholder")} />
+      {canManage && (
+        <section>
+          <h2 className="mb-3 text-sm font-medium">{t("schedules.newHeading")}</h2>
+          <div className="grid gap-3 rounded-lg border bg-card p-5 shadow-xs">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1">
+                <Label>{t("common.name")}</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("schedules.namePlaceholder")} />
+              </div>
+              <div className="grid gap-1">
+                <Label>{t("watchers.reportLabel")}</Label>
+                <Select value={reportId} onValueChange={setReportId}>
+                  <SelectTrigger><SelectValue placeholder={t("schedules.reportPlaceholder")} /></SelectTrigger>
+                  <SelectContent>
+                    {reports.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-[1fr_140px] gap-3">
+              <div className="grid gap-1">
+                <Label>{t("schedules.cronExpressionLabel")} <span className="font-normal text-muted-foreground">{t("schedules.cronExpressionHint")}</span></Label>
+                <Input className="font-mono" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 7 * * 1" />
+              </div>
+              <div className="grid gap-1">
+                <Label>{t("metrics.col.format")}</Label>
+                <Select value={format} onValueChange={(v) => setFormat(v as any)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pdf">PDF</SelectItem>
+                    <SelectItem value="xlsx">Excel</SelectItem>
+                    <SelectItem value="docx">Word</SelectItem>
+                    <SelectItem value="csv">CSV</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="grid gap-1">
-              <Label>{t("watchers.reportLabel")}</Label>
-              <Select value={reportId} onValueChange={setReportId}>
-                <SelectTrigger><SelectValue placeholder={t("schedules.reportPlaceholder")} /></SelectTrigger>
-                <SelectContent>
-                  {reports.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Label>{t("schedules.recipientsLabel")} <span className="font-normal text-muted-foreground">{t("schedules.recipientsHint")}</span></Label>
+              <Input value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="a@acme.co, b@acme.co" />
+            </div>
+            <div>
+              <Button size="sm" onClick={create} disabled={creating || !reportId || !name || !cron}>
+                <Plus className="mr-1.5 h-4 w-4" /> {creating ? t("dashboardsMgr.saving") : t("schedules.createButton")}
+              </Button>
             </div>
           </div>
-          <div className="grid grid-cols-[1fr_140px] gap-3">
-            <div className="grid gap-1">
-              <Label>{t("schedules.cronExpressionLabel")} <span className="font-normal text-muted-foreground">{t("schedules.cronExpressionHint")}</span></Label>
-              <Input className="font-mono" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 7 * * 1" />
-            </div>
-            <div className="grid gap-1">
-              <Label>{t("metrics.col.format")}</Label>
-              <Select value={format} onValueChange={(v) => setFormat(v as any)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pdf">PDF</SelectItem>
-                  <SelectItem value="xlsx">Excel</SelectItem>
-                  <SelectItem value="docx">Word</SelectItem>
-                  <SelectItem value="csv">CSV</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid gap-1">
-            <Label>{t("schedules.recipientsLabel")} <span className="font-normal text-muted-foreground">{t("schedules.recipientsHint")}</span></Label>
-            <Input value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="a@acme.co, b@acme.co" />
-          </div>
-          <div>
-            <Button size="sm" onClick={create} disabled={creating || !reportId || !name || !cron}>
-              <Plus className="mr-1.5 h-4 w-4" /> {creating ? t("dashboardsMgr.saving") : t("schedules.createButton")}
-            </Button>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReport } from "@/lib/reporting/runner";
+import { exportViewer } from "@/lib/reporting/exportCaller";
 import { DesignerShell } from "./DesignerShell";
 import { canBuild } from "@/lib/roles";
 
@@ -34,12 +35,13 @@ export default async function EditorPage({ params }: { params: { id: string } })
   let tenantBrand: { defaultTheme?: string; defaultChartStyle?: string; customPalette?: string[] } = {};
   try { tenantBrand = JSON.parse((tenantRow as any)?.brandJson || "{}"); } catch {}
 
-  // Initial preview data: uses parameter defaults.
+  // Initial preview data: uses parameter defaults, run as the builder, the
+  // same as the designer's Run button (preview-dataset) and the viewer.
   const initialParams: Record<string, unknown> = {};
   for (const p of report.parameters) initialParams[p.name] = p.default ?? "";
   let initialDataset = {};
   try {
-    initialDataset = await runReport({ report, params: initialParams });
+    initialDataset = await runReport({ report, params: initialParams, tenantId: row.tenantId, viewer: await exportViewer(user) });
   } catch {
     // Designer still works even if initial query fails - user may be wiring things up.
   }

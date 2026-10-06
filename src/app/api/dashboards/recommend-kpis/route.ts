@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser, requireAdminOrEditor } from "@/lib/auth";
+import { requireAdminOrEditor, tenantWhere } from "@/lib/auth";
+import { canSeeDataSource } from "@/lib/datasourceAcl";
+import { exportViewer } from "@/lib/reporting/exportCaller";
 import { callLLM } from "@/lib/llm";
 import { introspectTables } from "@/app/api/reports/generate/route";
 import { TopKpiDefSchema } from "@/lib/reporting/schema";
+import { DUCKDB_LAKE_DIALECT_ONE_LINER } from "@/lib/reporting/duckdbDialect";
 
 export const dynamic = "force-dynamic";
 
@@ -23,13 +26,16 @@ export async function POST(req: NextRequest) {
   }
 
   const ds = await prisma.dataSource.findFirst({
-    where: { id: parsed.data.dataSourceId, tenantId: user.tenantId },
-    select: { id: true, name: true, kind: true, connection: true, discoveredSchemaJson: true },
+    where: { id: parsed.data.dataSourceId, ...tenantWhere(user) },
+    select: { id: true, name: true, kind: true, connection: true, discoveredSchemaJson: true, visibleToRolesJson: true, ownerUserId: true, tenantId: true },
   });
-  if (!ds) return NextResponse.json({ error: "Data source not found" }, { status: 404 });
+  // Its schema and sample rows go to the model: a source this builder can't
+  // see is as missing as one that isn't there.
+  const viewer = await exportViewer(user);
+  if (!ds || !canSeeDataSource(ds, viewer)) return NextResponse.json({ error: "Data source not found" }, { status: 404 });
 
   // 1. Fetch Schema
-  const intro = await introspectTables(ds);
+  const intro = await introspectTables(ds, viewer);
   const schemaBlock = intro.tables
     .map((t) => {
       const colList = t.columns.map((c) => `${c.name} ${c.type || "?"}`).join(", ");
@@ -51,7 +57,7 @@ Generate exactly 3 SQL queries that compute the most important metrics (e.g. Tot
 Each query MUST return exactly ONE column and ONE row containing a numeric value.
 IMPORTANT SQL RULES:
 1. You MUST enclose any column or table names that contain spaces or special characters in double quotes (e.g., SELECT SUM("Sales Amount (THB)")).
-2. Write valid standard SQL (SQLite / PostgreSQL compatible).
+2. ${intro.kind === "lake" && intro.engine === "duckdb" ? "Write SQL in the " + DUCKDB_LAKE_DIALECT_ONE_LINER + "." : "Write valid standard SQL (SQLite / PostgreSQL compatible)."}
 3. If format is "percent", the query MUST return a decimal fraction between 0 and 1 (e.g. 0.348 for 34.8%). Do NOT multiply by 100 in the query.
 
 Output a JSON array of objects with the following keys:

@@ -13,8 +13,10 @@
  */
 import { prisma } from "@/lib/db";
 import { ReportSchema } from "@/lib/reporting/schema";
-import { runReport } from "@/lib/reporting/runner";
+import { runQueryStrict } from "@/lib/reporting/runQueryStrict";
+import { SYSTEM_RUN } from "@/lib/reporting/runner";
 import { createOrReplaceTable } from "@/lib/lake/tables";
+import { governDerivedColumns, governDerivedTableAcl, loadDerivationSources } from "@/lib/lake/sourceGovernance";
 import { lakeFileSize, toSafeTableName } from "@/lib/lake/storage";
 import { emitWebhook } from "@/lib/webhooks";
 import { bustLakeCacheForTenant } from "@/lib/lake/bust";
@@ -43,26 +45,52 @@ export async function refreshMaterializedView(mvId: string): Promise<Materialize
   // Synthesise a single-query report shape so we can reuse the runner.
   // The runner expects a Report with parameters + dataSources + pages —
   // we pass an empty pages array and pull dataset[queryId] below.
+  //
+  // ReportSchema.parse() enforces the read-only-SELECT guard on `sql` (see
+  // schema.ts) — it can reject just as validly as a query or a write can
+  // fail, but .parse() throws synchronously instead of returning a result,
+  // and unlike the stages below this used to run outside any try/catch:
+  // an edited MV whose SQL picked up a second statement (a stray `;`, a
+  // pasted DDL/DML line) crashed the route with an uncaught ZodError and
+  // an empty 500 instead of a normal "this MV failed to refresh, here's
+  // why" result. Found live via an adversarial-SQL edge-case pass.
   const queryId = "mv_q_" + mv.id.slice(-8);
-  const synth = ReportSchema.parse({
-    version: 1,
-    name: mv.name,
-    parameters: [],
-    dataSources: [
-      {
-        id: queryId,
-        name: mv.name,
-        dataSourceId: mv.dataSourceId,
-        sql: mv.sql,
-      },
-    ],
-    pages: [{ id: "p1", size: "A4", orientation: "portrait", blocks: [] }],
-  });
+  let synth: ReturnType<typeof ReportSchema.parse>;
+  try {
+    synth = ReportSchema.parse({
+      version: 1,
+      name: mv.name,
+      parameters: [],
+      dataSources: [
+        {
+          id: queryId,
+          name: mv.name,
+          dataSourceId: mv.dataSourceId,
+          sql: mv.sql,
+        },
+      ],
+      pages: [{ id: "p1", size: "A4", orientation: "portrait", blocks: [] }],
+    });
+  } catch (e: any) {
+    const error = (e?.message ?? String(e)).slice(0, 500);
+    await prisma.materializedView.update({
+      where: { id: mv.id },
+      data: { lastRunAt: new Date(), lastStatus: "failed", lastError: error, lastDurationMs: Date.now() - startedAt },
+    });
+    void emitWebhook({
+      tenantId: mv.tenantId,
+      event: "lake.mv.failed",
+      data: { mvId: mv.id, mvName: mv.name, error, durationMs: Date.now() - startedAt },
+    });
+    return { rowCount: 0, durationMs: Date.now() - startedAt, status: "failed", error };
+  }
 
   let rows: any[] = [];
   try {
-    const dataset = await runReport({ report: synth, params: {} });
-    rows = dataset[queryId] ?? [];
+    // Strict: a query that failed must fail the refresh. runReport() would hand
+    // back [] for it, and the swap below would replace the last good table with
+    // nothing and mark the view healthy.
+    rows = await runQueryStrict({ report: synth, params: {}, tenantId: mv.tenantId, viewer: SYSTEM_RUN }, queryId);
   } catch (e: any) {
     const error = (e?.message ?? String(e)).slice(0, 500);
     await prisma.materializedView.update({
@@ -78,15 +106,20 @@ export async function refreshMaterializedView(mvId: string): Promise<Materialize
   }
 
   // Write to the lake under "mv_<safeName>". Always replace — no append.
-  let mvColumns: ReturnType<typeof createOrReplaceTable>["columns"] = [];
+  let mvColumns: Awaited<ReturnType<typeof createOrReplaceTable>>["columns"] = [];
   try {
-    mvColumns = createOrReplaceTable({
+    mvColumns = (await createOrReplaceTable({
       tenantId: mv.tenantId,
       tableName: mvTableName(mv.name),
       rows,
       sourceKind: "manual",
       sourceConfig: { kind: "materialized_view", mvId: mv.id, name: mv.name },
-    }).columns;
+      // Rows come straight from the report runner — force typed DDL so a
+      // downstream MV/pipeline reading this table can compare/aggregate it
+      // without its own CAST. See createOrReplaceTable's forceTypedColumns
+      // doc comment.
+      forceTypedColumns: true,
+    })).columns;
   } catch (e: any) {
     const error = `Lake write failed: ${e?.message ?? e}`.slice(0, 500);
     await prisma.materializedView.update({
@@ -105,25 +138,68 @@ export async function refreshMaterializedView(mvId: string): Promise<Materialize
   // updated row count. Same pattern as restPull.ts — upsert because the
   // first refresh might be when the mv_* lake table comes into existence.
   const sizeBytes = lakeFileSize(mv.tenantId);
+  // A refresh rebuilds the table's columns from the query result, which has no
+  // redaction tags; anything an admin tagged on this mv_* table since the
+  // last refresh would otherwise be wiped every time the schedule fires.
+  // Also inherits the tags of the tables mv.sql reads, so
+  // `SELECT email FROM customers` doesn't come out as a table whose email
+  // column every viewer can read raw — including on the very first refresh,
+  // not just later ones. governDerivedColumns throws on a lookup failure
+  // rather than returning untagged columns (redaction failing open), so this
+  // is caught the same way the write above is: report the failure, write
+  // nothing, rather than let it escape uncaught and skip the write's own
+  // error reporting.
+  let mvColumnsWithGovernance: typeof mvColumns;
+  // Table-level ACL inheritance (sourceGovernance.ts's own header, "TABLE-LEVEL
+  // ACL INHERITANCE" section): an MV over an owner_only/role-restricted source
+  // shouldn't be tenant-wide just because it's a fresh row with no ACL of its
+  // own. null when there's nothing to inherit, or the row already has its own
+  // restriction — omitted from the upsert `data` below either way, never
+  // written as an explicit "clear it" null/[].
+  let tableAcl: { ownerUserId: string | null; visibleToRolesJson: string } | null;
+  try {
+    const sources = await loadDerivationSources(mv.tenantId, mv.sql);
+    mvColumnsWithGovernance = await governDerivedColumns({
+      tenantId: mv.tenantId,
+      tableName: mvTableName(mv.name),
+      sql: mv.sql,
+      columns: mvColumns,
+    });
+    tableAcl = await governDerivedTableAcl({ tenantId: mv.tenantId, tableName: mvTableName(mv.name), sources });
+  } catch (e: any) {
+    const error = `Governance lookup failed: ${e?.message ?? e}`.slice(0, 500);
+    await prisma.materializedView.update({
+      where: { id: mv.id },
+      data: { lastRunAt: new Date(), lastStatus: "failed", lastError: error, lastDurationMs: Date.now() - startedAt },
+    });
+    void emitWebhook({
+      tenantId: mv.tenantId,
+      event: "lake.mv.failed",
+      data: { mvId: mv.id, mvName: mv.name, error, durationMs: Date.now() - startedAt },
+    });
+    return { rowCount: 0, durationMs: Date.now() - startedAt, status: "failed", error };
+  }
   await prisma.lakeTable.upsert({
     where: { tenantId_name: { tenantId: mv.tenantId, name: mvTableName(mv.name) } },
     update: {
       sourceKind: "manual",
       sourceConfigJson: JSON.stringify({ kind: "materialized_view", mvId: mv.id, name: mv.name }),
-      schemaJson: JSON.stringify(mvColumns),
+      schemaJson: JSON.stringify(mvColumnsWithGovernance),
       rowCount: rows.length,
       sizeBytes,
       updatedAt: new Date(),
+      ...tableAcl,
     },
     create: {
       tenantId: mv.tenantId,
       name: mvTableName(mv.name),
       sourceKind: "manual",
       sourceConfigJson: JSON.stringify({ kind: "materialized_view", mvId: mv.id, name: mv.name }),
-      schemaJson: JSON.stringify(mvColumns),
+      schemaJson: JSON.stringify(mvColumnsWithGovernance),
       rowCount: rows.length,
       sizeBytes,
       createdById: mv.createdById,
+      ...tableAcl,
     },
   }).catch(() => null);
 

@@ -2,21 +2,20 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Download, Pencil, FileSpreadsheet, FileText, FileCode, Loader2, Clock, RotateCcw, Eye, RefreshCw, Check, MoreHorizontal,
+  Pencil, Loader2, Clock, RotateCcw, Eye, RefreshCw, Check, MoreHorizontal, AlertTriangle,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { Report } from "@/lib/reporting/schema";
 import type { Dataset } from "@/lib/reporting/interpolate";
 import type { ProvenanceMap } from "@/lib/reporting/provenance";
+import { queryRunState } from "@/lib/reporting/queryRunState";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { FilterBar } from "./FilterBar";
-import { DrillPanel, DRILL_INITIAL, type DrillState } from "./DrillPanel";
+import { DrillPanel, useDrillRows } from "@/components/reports/DrillPanel";
 import { DrillThroughContext } from "@/components/providers/drill-through-context";
 import { Button } from "@/components/ui/button";
 import { AppShell } from "@/components/layout/AppShell";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { ReportExportMenu } from "@/components/reports/ReportExportMenu";
 import { ShareButton } from "./ShareButton";
 import { RegenerateButton } from "./RegenerateButton";
 import { WhatIsThisBadge } from "@/components/viewer/WhatIsThisBadge";
@@ -33,9 +32,12 @@ const SuggestOperateActionsButton = eeClient.reports?.SuggestOperateActionsButto
 const PublishToMarketplaceButton = eeClient.reports?.PublishToMarketplaceButton ?? null;
 import { AutoCurfPublishedBanner } from "./AutoCurfPublishedBanner";
 import { SlowQueryBanner } from "./SlowQueryBanner";
+import { ReportQualityNote } from "./ReportQualityNote";
 import { useResilientSession } from "@/lib/useResilientSession";
 import { useT } from "@/lib/i18n/LocaleContext";
-import { useToast } from "@/lib/toast";
+import { localizeParameter } from "@/lib/reporting/localize";
+import { blockDrill } from "@/lib/reporting/drill";
+import { DrillBreadcrumbBar, type DrillBreadcrumbStep } from "@/components/blocks/DrillBreadcrumbBar";
 import { canBuild } from "@/lib/roles";
 
 export function ReportViewerShell({
@@ -78,7 +80,6 @@ export function ReportViewerShell({
   // right: if you flip the app to Thai, a report with Thai copy authored
   // should show it too.
   const { locale, t } = useT();
-  const { push: pushToast } = useToast();
   const [params, setParams] = useState(initialParams);
   // Auto-refresh's interval callback reads this instead of closing over
   // `params` directly — keeps the timer itself stable (no reset on every
@@ -89,7 +90,7 @@ export function ReportViewerShell({
   const [dataset, setDataset] = useState(initialDataset);
   const [provenance, setProvenance] = useState<ProvenanceMap | undefined>(initialProvenance);
   const [loading, setLoading] = useState(false);
-  const [drill, setDrill] = useState<DrillState>(DRILL_INITIAL);
+  const drill = useDrillRows();
   // Saved-view selection. Stored on the client because /api/reports/:id/run
   // doesn't care about it — the view's params are just applied like any
   // other filter change. We mirror it into ?view=<id> so a copy/paste URL
@@ -119,41 +120,47 @@ export function ReportViewerShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Open the drill panel + fetch the underlying rows for a clicked chart point.
-  // Memoised by closing over `params` so the latest filter-bar state always
-  // rides along with the drill query.
-  async function openDrill(blockId: string, value: unknown) {
-    setDrill({ ...DRILL_INITIAL, open: true, loading: true, blockId });
-    try {
-      const res = await fetch("/api/reports/" + reportId + "/drill", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blockId, value, params }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setDrill((s) => ({ ...s, loading: false, error: json.error ?? "Drill failed" }));
-        return;
-      }
-      setDrill({
-        open: true, loading: false, blockId,
-        title: json.title ?? "Drill-through",
-        filterParam: json.filterParam,
-        filterValue: json.filterValue,
-        rowCount: json.rowCount,
-        columns: json.columns ?? [],
-        rows: json.rows ?? [],
-        truncated: !!json.truncated,
-        error: null,
-        // Pass reportId through so DrillPanel's Operate hook knows which
-        // report the chart-click trigger context should record.
-        reportId,
-      });
-    } catch (e: any) {
-      setDrill((s) => ({ ...s, loading: false, error: e?.message ?? "Drill failed" }));
-    }
+  // Drilled filters (a block's drillParam): each step remembers the
+  // parameter's value before it, so the breadcrumb can step back.
+  const [drillSteps, setDrillSteps] = useState<Array<DrillBreadcrumbStep & { before: unknown }>>([]);
+  function drillLabel(param: string, value: unknown): string {
+    const p = report.parameters.find((x) => x.name === param);
+    const opt = p && localizeParameter(p, locale).options?.find((o) => o.value === String(value));
+    return opt?.label ?? String(value);
   }
-  function closeDrill() { setDrill((s) => ({ ...s, open: false })); }
+  function drillBack(depth: number) {
+    const next = { ...params };
+    for (const step of [...drillSteps.slice(depth)].reverse()) next[step.param] = step.before;
+    setDrillSteps(drillSteps.slice(0, depth));
+    void applyParams(next);
+  }
+  /** A filter-bar change keeps only the drilled steps it still agrees with. */
+  function applyFromBar(next: Record<string, unknown>) {
+    setDrillSteps((steps) => steps.filter((st) => String(next[st.param] ?? "") === String(st.value)));
+    void applyParams(next);
+  }
+
+  // A click on a block's value (lib/reporting/drill.ts): re-scope the whole
+  // report to it, or open the drill panel with the rows behind it. Closes
+  // over `params` so the latest filter-bar state always rides along.
+  async function openDrill(blockId: string, value: unknown) {
+    const block = report.pages.flatMap((p) => p.blocks).find((b) => b.id === blockId);
+    const how = block ? blockDrill(report, block) : null;
+    if (how?.kind === "filter") {
+      // "" (a tile clicked again) clears that drill.
+      const at = drillSteps.findIndex((st) => st.param === how.param);
+      if (value === "" || value == null) { if (at >= 0) drillBack(at); return; }
+      const kept = at >= 0 ? drillSteps.slice(0, at) : drillSteps;
+      const before = at >= 0 ? drillSteps[at]!.before : params[how.param];
+      setDrillSteps([...kept, { param: how.param, value, label: drillLabel(how.param, value), before }]);
+      void applyParams({ ...params, [how.param]: value });
+      return;
+    }
+    void drill.open({
+      reportId, blockId, value, params,
+      reportCurrency: report.currency ?? null, tenantCurrency: tenantCurrency ?? null, dateEra: report.dateEra ?? null,
+    });
+  }
 
   // Dashboard auto-refresh. Pass ?refresh=N (seconds, >=5) to re-run the
   // report on a cadence. Great for TV dashboards; cheap because applyParams
@@ -171,55 +178,6 @@ export function ReportViewerShell({
     // (not a closure) now supplies fresh filters on every tick — see paramsRef above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Relative URLs so these helpers are safe during Next's server render of
-  // this client component (where `window` is undefined). The browser
-  // resolves a leading-slash URL against the current origin automatically.
-  function exportUrl(format: "pdf" | "xlsx" | "docx" | "csv") {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v != null && v !== "") qs.set(`p.${k}`, String(v));
-    }
-    const path = `/api/reports/${reportId}/export/${format}`;
-    const query = qs.toString();
-    return query ? `${path}?${query}` : path;
-  }
-
-  // CSV, unlike pdf/xlsx/docx, has a real "nothing to export" case (no
-  // table block on the report) and the API route reports it as a 400 JSON
-  // error — a plain <a href> navigation (what pdf/xlsx/docx still use,
-  // since they always have *something* to render) dumped that raw JSON
-  // into the whole tab instead of downloading anything. Fetch + blob lets
-  // a failure surface as a toast instead, same pattern as SchedulesManager's
-  // runNow().
-  const [csvExporting, setCsvExporting] = useState(false);
-  async function exportCsv() {
-    setCsvExporting(true);
-    try {
-      const r = await fetch(exportUrl("csv"));
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: "Export failed." }));
-        pushToast({
-          variant: "destructive",
-          title: "Couldn't export CSV",
-          description: err.error ?? "This report doesn't have a table block to export.",
-        });
-        return;
-      }
-      const blob = await r.blob();
-      const cd = r.headers.get("content-disposition") ?? "";
-      const match = /filename="([^"]+)"/.exec(cd);
-      const fname = match?.[1] ?? "report.csv";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = fname; a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      pushToast({ variant: "destructive", title: "Couldn't export CSV", description: "Network error." });
-    } finally {
-      setCsvExporting(false);
-    }
-  }
 
   async function applyParams(next: Record<string, unknown>) {
     setLoading(true);
@@ -271,6 +229,10 @@ export function ReportViewerShell({
   // every query returned — the report-level version of a KPI card's receipt.
   const primaryProof = provenance?.[report.dataSources[0]?.id ?? ""];
   const totalRows = provenance ? Object.values(provenance).reduce((s, p) => s + (p?.rowCount ?? 0), 0) : 0;
+  // "Verified run" is a claim about the queries; it can't stand over a run in which
+  // some of them failed (their empty results are otherwise hashed like real ones).
+  const failedQueries = provenance ? Object.values(provenance).filter((p) => queryRunState(p).kind === "failed").length : 0;
+  const totalQueries = provenance ? Object.keys(provenance).length : 0;
   const shortHash = (h?: string) => {
     if (!h) return null;
     const hex = h.replace(/^sha256:/i, "");
@@ -288,34 +250,6 @@ export function ReportViewerShell({
     const time = d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
     return sameDay ? time : `${d.toLocaleDateString(locale, { day: "numeric", month: "short" })} ${time}`;
   })();
-
-  const exportMenu = (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="outline">
-          <Download className="mr-1.5 h-4 w-4" /> Export
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-44">
-        <DropdownMenuItem asChild>
-          <a href={exportUrl("pdf")} target="_blank" rel="noreferrer"><FileText className="mr-2 h-4 w-4" /> PDF</a>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <a href={exportUrl("xlsx")}><FileSpreadsheet className="mr-2 h-4 w-4" /> Excel</a>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <a href={exportUrl("docx")}><FileText className="mr-2 h-4 w-4" /> Word</a>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => void exportCsv()}
-          disabled={csvExporting}
-          className="cursor-pointer"
-        >
-          {csvExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCode className="mr-2 h-4 w-4" />} CSV
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
 
   return (
     // TableBlock's row "⋮" action button (src/components/blocks/TableBlock.tsx)
@@ -392,6 +326,8 @@ export function ReportViewerShell({
           // create form on /tables. Hidden for fast reports + viewers.
           <SlowQueryBanner reportId={reportId} isAdmin={isEditor} />
         )}
+        {/* A generated report says it was checked, and what the check changed. */}
+        {!replayedAt && report.quality && <ReportQualityNote quality={report.quality} />}
         {loading && (
           <div className="flex items-center justify-center gap-2 border-b border-border bg-primary/5 py-1.5 text-xs text-primary">
             <Loader2 className="h-3 w-3 animate-spin" /> Running report&hellip;
@@ -426,7 +362,18 @@ export function ReportViewerShell({
               {(author || publishedAt) && (
                 <span>{t("viewer.publishedBy")} {author ?? "—"}{publishedAt ? ` · ${publishedAt}` : ""}</span>
               )}
-              {primaryProof && (
+              {failedQueries > 0 && (
+                <>
+                  <span className="text-faint">·</span>
+                  <span role="alert" className="inline-flex items-center gap-1.5 text-destructive">
+                    <span className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border-[1.5px] border-destructive">
+                      <AlertTriangle className="h-2.5 w-2.5" strokeWidth={3} />
+                    </span>
+                    <span>{t("viewer.queriesFailed").replace("{n}", String(failedQueries)).replace("{total}", String(totalQueries))}</span>
+                  </span>
+                </>
+              )}
+              {failedQueries === 0 && primaryProof && (
                 <>
                   <span className="text-faint">·</span>
                   <span className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border-[1.5px] border-success text-success">
@@ -458,7 +405,7 @@ export function ReportViewerShell({
                 against the frozen dataset. */}
             {!replayedAt && AskCurfPanel && <AskCurfPanel reportId={reportId} currentParams={params} />}
             <ShareButton reportId={reportId} />
-            {exportMenu}
+            <ReportExportMenu reportId={reportId} params={params} />
             {isEditor && (
               <Button asChild size="sm" variant="outline">
                 <Link href={`/reports/${reportId}/edit`}>
@@ -496,11 +443,11 @@ export function ReportViewerShell({
         {!replayedAt && (
           <div className="mt-4">
             <FilterBar
-              parameters={report.parameters}
+              parameters={report.parameters.map((p) => localizeParameter(p, locale))}
               values={params}
               defaults={paramDefaults}
               loading={loading}
-              onApply={applyParams}
+              onApply={applyFromBar}
               reportId={reportId}
               activeViewId={activeViewId}
               onSelectView={(id) => {
@@ -519,8 +466,20 @@ export function ReportViewerShell({
           </div>
         )}
 
+        {drillSteps.length > 0 && (
+          <div className="mt-4 overflow-hidden rounded-xl border border-primary/20">
+            <DrillBreadcrumbBar
+              rootLabel={reportName}
+              breadcrumb={drillSteps}
+              loading={loading}
+              onNavigate={drillBack}
+              onReset={() => drillBack(0)}
+            />
+          </div>
+        )}
+
         <div className="mt-5">
-          <DrillThroughContext.Provider value={openDrill}>
+          <DrillThroughContext.Provider value={replayedAt ? null : openDrill}>
             <ReportDocument
               report={report}
               dataset={dataset}
@@ -536,7 +495,7 @@ export function ReportViewerShell({
           </DrillThroughContext.Provider>
         </div>
       </div>
-      <DrillPanel state={drill} onClose={closeDrill} />
+      <DrillPanel state={drill.state} onClose={drill.close} />
       {/* Self-serve onboarding pill. Shows once per browser; user dismisses
           with "Got it, hide" and it stays gone via localStorage flag. */}
       {!IS_COMMUNITY && <WhatIsThisBadge />}

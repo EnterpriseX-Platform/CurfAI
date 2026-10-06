@@ -1,0 +1,98 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-engine-view
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_view
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: name, type: varchar(100), constraints: { nullable: false } }
+              - column: { name: description, type: text }
+              - column: { name: connection_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: sql, type: text, constraints: { nullable: false } }
+              - column: { name: definition, type: jsonb, constraints: { nullable: false } }
+              - column: { name: version, type: int, constraints: { nullable: false } }
+              - column: { name: published_version, type: int }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: updated_by, type: varchar(255), constraints: { nullable: false } }
+        - addUniqueConstraint:
+            tableName: engine_view
+            columnNames: tenant_id, name
+            constraintName: uq_engine_view_tenant_name
+        - addForeignKeyConstraint:
+            baseTableName: engine_view
+            baseColumnNames: connection_id
+            referencedTableName: engine_connection
+            referencedColumnNames: id
+            constraintName: fk_engine_view_connection
+            onDelete: RESTRICT
+      rollback:
+        - dropTable:
+            tableName: engine_view
+
+  - changeSet:
+      id: 006-engine-view-version
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_view_version
+            columns:
+              - column: { name: view_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: version_no, type: int, constraints: { nullable: false } }
+              - column: { name: snapshot, type: jsonb, constraints: { nullable: false } }
+              - column: { name: published_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: published_by, type: varchar(255), constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: engine_view_version
+            columnNames: view_id, version_no
+            constraintName: pk_engine_view_version
+        - addForeignKeyConstraint:
+            baseTableName: engine_view_version
+            baseColumnNames: view_id
+            referencedTableName: engine_view
+            referencedColumnNames: id
+            constraintName: fk_engine_view_version_view
+            onDelete: CASCADE
+      rollback:
+        - dropTable:
+            tableName: engine_view_version
+
+  - changeSet:
+      id: 007-engine-entitlement
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_entitlement
+            columns:
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: subject, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: attribute, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: value, type: varchar(200), constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: engine_entitlement
+            columnNames: tenant_id, subject, attribute, value
+            constraintName: pk_engine_entitlement
+      rollback:
+        - dropTable:
+            tableName: engine_entitlement
+
+  - changeSet:
+      id: 008-engine-query-log-view
+      author: curf-engine
+      changes:
+        - addColumn:
+            tableName: engine_query_log
+            columns:
+              - column: { name: view_id, type: uuid }
+              - column: { name: view_version, type: int }
+      rollback:
+        - dropColumn:
+            tableName: engine_query_log
+            columnName: view_version
+        - dropColumn:
+            tableName: engine_query_log
+            columnName: view_id

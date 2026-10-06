@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireUser, requireAdminOrEditor } from "@/lib/auth";
+import { blockScopedApiKey, requireUser, requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { refreshMaterializedView } from "@/lib/lake/materialize";
 
@@ -19,6 +19,8 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const scoped = blockScopedApiKey(user);
+  if (scoped) return scoped;
   const items = await prisma.materializedView.findMany({
     where: { tenantId: user.tenantId },
     orderBy: { createdAt: "desc" },
@@ -49,18 +51,31 @@ export async function POST(req: NextRequest) {
   });
   if (!ds) return NextResponse.json({ error: "Source connection not found" }, { status: 404 });
 
-  const mv = await prisma.materializedView.create({
-    data: {
-      tenantId: user.tenantId,
-      name: parsed.data.name,
-      sql: parsed.data.sql,
-      dataSourceId: parsed.data.dataSourceId,
-      cron: parsed.data.cron ?? null,
-      enabled: true,
-      lastStatus: "never_run",
-      createdById: user.id,
-    },
-  });
+  let mv;
+  try {
+    mv = await prisma.materializedView.create({
+      data: {
+        tenantId: user.tenantId,
+        name: parsed.data.name,
+        sql: parsed.data.sql,
+        dataSourceId: parsed.data.dataSourceId,
+        cron: parsed.data.cron ?? null,
+        enabled: true,
+        lastStatus: "never_run",
+        createdById: user.id,
+      },
+    });
+  } catch (e: any) {
+    // @@unique([tenantId, name]) — a plain, expected user action (typing a
+    // name that's already taken), not caught before this session's live
+    // testing turned it up as an uncaught PrismaClientKnownRequestError
+    // and an empty 500. Same pattern as the sibling lake routes (e.g.
+    // parquet-exports) already use for their own unique constraints.
+    if (String(e?.code) === "P2002") {
+      return NextResponse.json({ error: `A materialized view named "${parsed.data.name}" already exists.` }, { status: 409 });
+    }
+    return NextResponse.json({ error: e?.message ?? "Create failed" }, { status: 500 });
+  }
   recordAudit({
     user, kind: "lake.mv.create", target: mv.id, req,
     meta: { name: mv.name, dataSourceId: mv.dataSourceId, cron: mv.cron },

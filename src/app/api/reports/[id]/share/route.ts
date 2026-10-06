@@ -4,6 +4,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, requireAdminOrEditor, requireReportInScope } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { hashInviteToken } from "@/lib/invites";
+import { requireShareLinkQuota } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +28,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const rows = await prisma.publicShareToken.findMany({
     where: { reportId: params.id, tenantId: user.tenantId },
     orderBy: { createdAt: "desc" },
-    select: { id: true, token: true, expiresAt: true, createdAt: true, createdById: true },
+    // No secrets: only a hash is stored, and the raw link is shown once, when made.
+    select: { id: true, expiresAt: true, createdAt: true, createdById: true },
   });
   return NextResponse.json({ items: rows });
 }
@@ -47,6 +50,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const parsed = CreateSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });
 
+  const quota = await requireShareLinkQuota(user);
+  if (quota) return quota;
+
   const token = randomBytes(32).toString("base64url");
   const expiresAt = parsed.data.expiresInDays
     ? new Date(Date.now() + parsed.data.expiresInDays * 24 * 3600 * 1000)
@@ -56,7 +62,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     data: {
       tenantId: user.tenantId,
       reportId: params.id,
-      token,
+      tokenHash: hashInviteToken(token),
       expiresAt,
       createdById: user.id,
     },
@@ -69,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   return NextResponse.json({
     id: created.id,
-    token: created.token,
+    token,
     expiresAt: created.expiresAt,
   });
 }
@@ -79,11 +85,14 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (user instanceof NextResponse) return user;
   const scopeBlock = requireReportInScope(user, params.id);
   if (scopeBlock) return scopeBlock;
-  const token = new URL(req.url).searchParams.get("token");
-  if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
+  // Revoke by the link's id (from the list) or by the link itself.
+  const q = new URL(req.url).searchParams;
+  const id = q.get("id");
+  const token = q.get("token");
+  if (!id && !token) return NextResponse.json({ error: "id or token required" }, { status: 400 });
 
   const existing = await prisma.publicShareToken.findFirst({
-    where: { token, reportId: params.id, tenantId: user.tenantId },
+    where: { ...(id ? { id } : { tokenHash: hashInviteToken(token!) }), reportId: params.id, tenantId: user.tenantId },
     select: { id: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });

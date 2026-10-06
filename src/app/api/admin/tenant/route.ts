@@ -5,6 +5,7 @@ import { requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { isKnownCurrencyCode } from "@/lib/reporting/currency";
 import { isKnownRegionCode } from "@/lib/tenantRegion";
+import { validTz } from "@/lib/preferences/lineBrief";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ export async function GET(req: NextRequest) {
     name: row.name,
     currency: (row as any).currency ?? null,
     region: (row as any).region ?? null,
+    timezone: (row as any).timezone ?? null,
     createdAt: row.createdAt,
     counts: {
       users: row._count.memberships,
@@ -45,7 +47,11 @@ const PatchSchema = z.object({
   // gated" reasoning as currency: this is a correctness/compliance setting,
   // not a paid brand feature.
   region: z.string().refine(isKnownRegionCode, "Unknown region code").optional(),
-}).refine((v) => v.name !== undefined || v.currency !== undefined || v.region !== undefined, "No fields to update");
+  // Workspace default time zone (IANA name). Not tier-gated — same
+  // reasoning as currency/region: a correctness setting, not a paid
+  // feature. z.literal("") clears it back to no default.
+  timezone: z.union([z.string().max(64).refine(validTz, "Unknown time zone"), z.literal("")]).optional(),
+}).refine((v) => v.name !== undefined || v.currency !== undefined || v.region !== undefined || v.timezone !== undefined, "No fields to update");
 
 export async function PATCH(req: NextRequest) {
   const user = await requireAdmin(req);
@@ -57,10 +63,11 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Invalid", issues: parsed.error.issues }, { status: 400 });
   }
 
-  const data: Record<string, string> = {};
+  const data: Record<string, string | null> = {};
   if (parsed.data.name !== undefined) data.name = parsed.data.name;
   if (parsed.data.currency !== undefined) data.currency = parsed.data.currency.toUpperCase();
   if (parsed.data.region !== undefined) data.region = parsed.data.region.toLowerCase();
+  if (parsed.data.timezone !== undefined) data.timezone = parsed.data.timezone === "" ? null : parsed.data.timezone;
 
   const updated = await prisma.tenant.update({
     where: { id: user.tenantId },
@@ -74,5 +81,6 @@ export async function PATCH(req: NextRequest) {
     id: updated.id, name: updated.name,
     currency: updated.currency ?? null,
     region: updated.region ?? null,
+    timezone: (updated as any).timezone ?? null,
   });
 }

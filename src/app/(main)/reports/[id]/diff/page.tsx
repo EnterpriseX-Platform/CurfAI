@@ -8,6 +8,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { ReportSchema } from "@/lib/reporting/schema";
+import { exportViewer } from "@/lib/reporting/exportCaller";
+import { visibleReport } from "@/lib/reporting/visibleReport";
+import { savedRunReader, parseSavedRun } from "@/lib/reporting/snapshotAccess";
 import { diffDatasets, type QueryDiff, type FieldChange } from "@/lib/reporting/diff";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/reporting/format";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
@@ -45,7 +48,7 @@ export default async function DiffPage({
   // Pick the two runs to compare. Explicit ids win; otherwise take the two
   // most recent snapshots (first = newer, second = older).
   const runsWithDataset = await prisma.reportRun.findMany({
-    where: { reportId: params.id, dataset: { not: null }, status: "completed" },
+    where: { reportId: params.id, tenantId: user.tenantId, dataset: { not: null }, status: "completed" },
     orderBy: { createdAt: "desc" },
     take: 20,
     select: { id: true, createdAt: true, format: true },
@@ -75,26 +78,32 @@ export default async function DiffPage({
   const [toRun, fromRun] = await Promise.all([
     prisma.reportRun.findFirst({
       where: { id: toId, reportId: params.id, tenantId: user.tenantId },
-      select: { id: true, createdAt: true, dataset: true },
+      select: { id: true, createdAt: true, dataset: true, provenance: true, params: true },
     }),
     prisma.reportRun.findFirst({
       where: { id: fromId, reportId: params.id, tenantId: user.tenantId },
-      select: { id: true, createdAt: true, dataset: true },
+      select: { id: true, createdAt: true, dataset: true, provenance: true, params: true },
     }),
   ]);
 
   if (!toRun?.dataset || !fromRun?.dataset) notFound();
 
-  const toDataset = safeParse<Record<string, any[]>>(toRun.dataset) ?? {};
-  const fromDataset = safeParse<Record<string, any[]>>(fromRun.dataset) ?? {};
+  // Either run may be anyone's, so both are read as this viewer, through
+  // their view of the report (lib/reporting/snapshotAccess.ts). A definition
+  // that no longer parses has no view to read through: nothing is shown.
+  const reportDef = ReportSchema.safeParse(JSON.parse(report.definition));
+  const viewer = await exportViewer(user);
+  const view = reportDef.success ? visibleReport(reportDef.data, viewer) : null;
+  const read = view ? savedRunReader(user.tenantId, view, viewer) : null;
+  const toDataset = read ? (await read(parseSavedRun(toRun))).dataset : {};
+  const fromDataset = read ? (await read(parseSavedRun(fromRun))).dataset : {};
   const diff = diffDatasets(fromDataset, toDataset);
 
   // Resolve friendly query names from the report definition so we can label
   // each section with something readable (not just a queryId).
-  const reportDef = ReportSchema.safeParse(JSON.parse(report.definition));
   const queryNameById = new Map<string, string>();
-  if (reportDef.success) {
-    for (const ds of reportDef.data.dataSources) {
+  if (view) {
+    for (const ds of view.dataSources) {
       queryNameById.set(ds.id, ds.name ?? ds.id);
     }
   }
@@ -295,9 +304,4 @@ function fmt(v: unknown): string {
     return String(v);
   }
   return String(v);
-}
-
-function safeParse<T>(s: string | null | undefined): T | null {
-  if (!s) return null;
-  try { return JSON.parse(s) as T; } catch { return null; }
 }

@@ -1,0 +1,61 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-engine-connection
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_connection
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: name, type: varchar(100), constraints: { nullable: false } }
+              - column: { name: kind, type: varchar(20), constraints: { nullable: false } }
+              - column: { name: host, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: port, type: int, constraints: { nullable: false } }
+              - column: { name: database_name, type: varchar(128), constraints: { nullable: false } }
+              - column: { name: username, type: varchar(128), constraints: { nullable: false } }
+              - column: { name: secret_ciphertext, type: text, constraints: { nullable: false } }
+              - column: { name: key_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: tls_mode, type: varchar(10), constraints: { nullable: false } }
+              - column: { name: allow_raw_sql, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: read_only_verified, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: version, type: int, defaultValueNumeric: 1, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: created_by, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: updated_by, type: varchar(255), constraints: { nullable: false } }
+        - addUniqueConstraint:
+            tableName: engine_connection
+            columnNames: tenant_id, name
+            constraintName: uq_engine_connection_tenant_name
+      rollback:
+        - dropTable:
+            tableName: engine_connection
+
+  - changeSet:
+      id: 004-engine-query-log
+      author: curf-engine
+      changes:
+        - createTable:
+            tableName: engine_query_log
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: tenant_id, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: occurred_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: subject, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: connection_id, type: uuid }
+              - column: { name: sql_hash, type: varchar(64) }
+              - column: { name: params_hash, type: varchar(64) }
+              - column: { name: row_count, type: int }
+              - column: { name: duration_ms, type: bigint }
+              - column: { name: cache_hit, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: outcome, type: varchar(40), constraints: { nullable: false } }
+        - createIndex:
+            tableName: engine_query_log
+            indexName: ix_engine_query_log_tenant_time
+            columns:
+              - column: { name: tenant_id }
+              - column: { name: occurred_at, descending: true }
+      rollback:
+        - dropTable:
+            tableName: engine_query_log

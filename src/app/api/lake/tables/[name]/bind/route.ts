@@ -28,8 +28,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireAdminOrEditor } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { lakeTableFor } from "@/lib/lake/tableAccess";
 import { createOrReplaceTable } from "@/lib/lake/tables";
+import { mergeGovernanceMetadata, parseSchemaJson } from "@/lib/lake/schemaGovernance";
 import { checkWriteAllowed } from "@/lib/lake/quota";
+import { bustLakeCacheForTenant } from "@/lib/lake/bust";
 import { ee } from "@/ee";
 
 export const dynamic = "force-dynamic";
@@ -52,10 +55,10 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 
-  const table = await prisma.lakeTable.findFirst({
-    where: { tenantId: user.tenantId, name: params.name },
-  });
-  if (!table) return NextResponse.json({ error: "Lake table not found" }, { status: 404 });
+  // Binding real rows replaces the table's contents: a builder who can read it.
+  const access = await lakeTableFor(user, params.name, "build");
+  if (access instanceof NextResponse) return access;
+  const table = access.row;
 
   const parsed = BodySchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
@@ -112,7 +115,7 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
 
   let result;
   try {
-    result = createOrReplaceTable({
+    result = await createOrReplaceTable({
       tenantId: user.tenantId,
       tableName: table.name,
       rows,
@@ -131,11 +134,19 @@ export async function POST(req: NextRequest, { params }: { params: { name: strin
     return NextResponse.json({ error: `Bind failed: ${e?.message ?? String(e)}` }, { status: 500 });
   }
 
+  // The rows underneath this table were just swapped for real ones; a cached
+  // result computed on the synthetic rows would keep showing them (with the
+  // SIMULATED DATA badge already gone) until the TTL runs out.
+  setImmediate(() => { void bustLakeCacheForTenant(user.tenantId, table.name); });
+
   await prisma.lakeTable.update({
     where: { id: table.id },
     data: {
       sourceKind: "upload",
-      schemaJson: JSON.stringify(result.columns),
+      // Binding real rows over a synthetic table re-infers every column; the
+      // redaction tags and Master Builder's fk: join hints on the existing row
+      // can't be re-derived from data and must survive the swap.
+      schemaJson: JSON.stringify(mergeGovernanceMetadata(parseSchemaJson(table.schemaJson), result.columns)),
       rowCount: result.rowCount,
       sourceConfigJson: JSON.stringify({
         ...sourceConfig,

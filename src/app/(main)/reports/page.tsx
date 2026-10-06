@@ -15,6 +15,7 @@ import { SuggestedTemplates } from "./SuggestedTemplates";
 import { computeKpiValue, kpiDelta, pickKpiCompare } from "@/lib/reporting/kpi";
 import { formatMetricCompact } from "@/lib/reporting/format";
 import { canBuild } from "@/lib/roles";
+import { DEFAULT_CURRENCY } from "@/lib/reporting/currency";
 
 /**
  * A card's thumbnail is the report's own last verified run, not a picture of
@@ -104,15 +105,25 @@ export default async function ReportsCatalog({ searchParams }: { searchParams: {
       where: { tenantId: user.tenantId }, orderBy: { updatedAt: "desc" },
       include: {
         createdBy: { select: { name: true, email: true } },
-        // Latest snapshot only, and only the columns the thumbnail reads —
-        // provenance JSON is left out on purpose.
-        runs: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true, status: true, dataset: true } },
+        // A handful of recent runs, not just the latest one — export
+        // routes (CSV/XLSX/PDF/DOCX) intentionally create a ReportRun with
+        // no `dataset` snapshot, and a failed run's `dataset` can be
+        // present but empty — either one being the newest row would blank
+        // the thumbnail ("No run yet") on a report that's genuinely been
+        // run before with real data. Freshness still reads the true
+        // latest run regardless of format/status; the thumbnail
+        // separately looks back for the latest COMPLETED one that
+        // actually has a dataset (same format/status/dataset gate
+        // watcherRun.ts's own prior-run query and the report history page
+        // already use for the identical reason). Only the columns each
+        // needs — provenance JSON is left out on purpose.
+        runs: { orderBy: { createdAt: "desc" }, take: 5, select: { createdAt: true, status: true, dataset: true } },
         _count: { select: { schedules: true } },
       },
     }),
     prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { currency: true } as any }),
   ]);
-  const currency = ((tenantRow as any)?.currency as string | null) ?? "USD";
+  const currency = ((tenantRow as any)?.currency as string | null) ?? DEFAULT_CURRENCY;
 
   const filtered = reports.filter((r) => {
     if (category && r.category !== category) return false;
@@ -125,7 +136,8 @@ export default async function ReportsCatalog({ searchParams }: { searchParams: {
 
   const cards: ReportCardData[] = filtered.map((r) => {
     const run = r.runs[0];
-    const { thumb, blocks } = buildThumb(r.definition, run?.dataset, currency);
+    const thumbRun = r.runs.find((x) => x.status === "completed" && x.dataset != null);
+    const { thumb, blocks } = buildThumb(r.definition, thumbRun?.dataset, currency);
     const ageMs = run ? Date.now() - new Date(run.createdAt).getTime() : Infinity;
     const freshness: ReportCardData["freshness"] = !run ? "none" : run.status === "failed" ? "crit" : ageMs > 24 * 3600 * 1000 ? "warn" : "ok";
     return {
@@ -148,6 +160,7 @@ export default async function ReportsCatalog({ searchParams }: { searchParams: {
         blocks: t(locale, "reports.blocks"),
         scheduled: t(locale, "reports.schedules"),
         empty: t(locale, "reports.thumbEmpty"),
+        noSummary: t(locale, "reports.thumbNoSummary"),
       },
     };
   });

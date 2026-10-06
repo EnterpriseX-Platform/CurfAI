@@ -33,7 +33,7 @@ export type ReportCardData = {
   blocks: number;
   thumb: ReportThumb;
   /** Localised copy, resolved on the server so the card stays a pure renderer. */
-  labels: { lastRun: string; neverRun: string; blocks: string; scheduled: string; empty: string };
+  labels: { lastRun: string; neverRun: string; blocks: string; scheduled: string; empty: string; noSummary: string };
 };
 
 const DOT: Record<ReportCardData["freshness"], string> = {
@@ -71,7 +71,18 @@ export function ReportCard({ r, isAdmin }: { r: ReportCardData; isAdmin: boolean
                 ))}
                 {r.thumb.kpis.length === 1 && <div />}
                 {r.thumb.bars.length > 1 && (
-                  <div className="col-span-2 flex min-h-0 items-end gap-[5px] px-0.5">
+                  // row-start-2: a chart-only report (no KPI blocks, e.g.
+                  // Loan Book Register) makes this the grid's ONLY child,
+                  // and CSS grid auto-placement then puts it in the
+                  // "auto"-sized first row instead of the flexible second
+                  // one — every bar's percentage `height` then resolves
+                  // against that auto row's ~0 natural height and the
+                  // whole chart renders invisible, even though the data
+                  // is real (confirmed in the server-rendered HTML: the
+                  // bars are there, just collapsed). Pinning it to row 2
+                  // makes the placement the same regardless of how many
+                  // KPI tiles came before it.
+                  <div className="col-span-2 row-start-2 flex min-h-0 items-end gap-[5px] px-0.5">
                     {r.thumb.bars.map((v, i) => (
                       <i
                         key={i}
@@ -83,7 +94,13 @@ export function ReportCard({ r, isAdmin }: { r: ReportCardData; isAdmin: boolean
                 )}
               </>
             ) : (
-              <div className="col-span-2 row-span-2 flex items-center justify-center font-mono text-xs text-faint">{r.labels.empty}</div>
+              <div className="col-span-2 row-span-2 flex items-center justify-center font-mono text-xs text-faint">
+                {/* A report can run fine and still have nothing to
+                    summarize here — e.g. a table-only layout with no KPI
+                    or chart block. r.lastRun tells them apart: "No run
+                    yet" is only accurate when it's genuinely never run. */}
+                {r.lastRun ? r.labels.noSummary : r.labels.empty}
+              </div>
             )}
           </div>
 

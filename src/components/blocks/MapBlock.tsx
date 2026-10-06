@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Loader2, X, Search, Plus, Minus, Home, AlertTriangle } from "lucide-react";
-import { formatCurrency, formatNumber, formatPercent } from "@/lib/reporting/format";
+import { Loader2, X, Search, Plus, Minus, Home, AlertTriangle, Play, Pause } from "lucide-react";
+import { formatCurrency, formatMetricCompact, formatNumber, formatPercent, readsThaiMoney, thaiDateLabel, thaiMoney } from "@/lib/reporting/format";
+import { useDateStyle } from "@/components/providers/DateStyleProvider";
 import type { BlockRenderContext } from "./types";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import { ShowWorkButton } from "./ShowWorkButton";
@@ -12,6 +13,9 @@ import { useTheme } from "@/components/providers/ThemeProvider";
 import { useCurrency } from "@/components/providers/CurrencyProvider";
 import { BlockActions } from "./BlockActions";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/LocaleContext";
+import { ChartHoverTip } from "./charts/ChartHoverTip";
+import { ProvinceColumns3D } from "./three/ProvinceColumns3D";
 import { THAILAND_MAP_W, THAILAND_MAP_H, THAILAND_PROVINCE_PATHS, THAILAND_PROVINCE_NAMES, thailandProvinceAliases } from "@/lib/reporting/thailandProvincePaths";
 import { projectLon, projectLat } from "@/lib/reporting/thailandDistrictGeo";
 
@@ -56,8 +60,10 @@ const TOPOLOGY_URLS = {
 const D3_GEO_URL    = "https://esm.sh/d3-geo@3";
 const TOPO_CLIENT_URL = "https://esm.sh/topojson-client@3";
 
-function fmt(v: number, kind: "number" | "currency" | "percent" | "compact", currency?: string): string {
+function fmt(v: number, kind: "number" | "currency" | "percent" | "compact", currency?: string, locale?: string): string {
   if (v == null || Number.isNaN(v)) return "";
+  // Baht for a Thai reader in Thai units — the legend read ฿594,240,000.00.
+  if (kind === "currency" && readsThaiMoney(currency, locale)) return thaiMoney(v, false);
   if (kind === "currency") return formatCurrency(v, currency);
   if (kind === "percent")  return formatPercent(v);
   if (kind === "compact") {
@@ -111,27 +117,87 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
 
   const onDrill = useDrillThrough();
   const drillEnabled = !print && (!!cfg.drilldown || !!cfg.drillParam) && !!onDrill;
+  const { t, locale } = useT();
 
-  // Aggregate region -> value once.
-  const byRegion = useMemo(() => {
-    type B = { sum: number; count: number; min: number; max: number };
+  // Time-lapse (cfg.timeField): one frame per value of the time column, in
+  // order. Numbers sort as numbers, anything else (ISO dates, "2026-03")
+  // as text. A print shows the last frame.
+  const frames = useMemo(() => {
+    if (!cfg.timeField) return [] as string[];
+    const vals = [...new Set(rows.map((r) => r[cfg.timeField!]).filter((v) => v != null && v !== "").map(String))];
+    const numeric = vals.every((v) => Number.isFinite(Number(v)));
+    return vals.sort((a, b) => (numeric ? Number(a) - Number(b) : a.localeCompare(b)));
+  }, [rows, cfg.timeField]);
+  // A frame reads as a date in the reader's style ("ก.ย. 2569", "Sep 2026"),
+  // not "2026-09-01": monthly frames (every one the 1st) as the month alone.
+  const dateStyle = useDateStyle();
+  const frameLabel = useMemo(() => {
+    const monthly = frames.length > 0 && frames.every((f) => /^\d{4}-\d{2}-01/.test(f));
+    return (f: string) => {
+      const iso = monthly ? f.slice(0, 7) : f;
+      const thai = thaiDateLabel(iso, dateStyle);
+      if (thai) return thai;
+      if (!/^\d{4}-\d{2}/.test(iso)) return f;
+      const d = new Date(monthly ? `${iso}-01T00:00:00` : f);
+      return isNaN(d.getTime()) ? f
+        : new Intl.DateTimeFormat(locale, monthly ? { month: "short", year: "numeric" } : { day: "numeric", month: "short", year: "numeric" }).format(d);
+    };
+  }, [frames, dateStyle, locale]);
+  const [frameIdx, setFrameIdx] = useState<number | null>(null);
+  // 3D columns on the province map — the report's own choice first; a reader
+  // can switch. Thai provinces only (the 3D land is drawn from their paths);
+  // a print is always flat.
+  const [show3dPick, setShow3d] = useState(cfg.view === "3d");
+  const show3d = show3dPick && cfg.regionType === "thailand-province" && !print;
+  const [playing, setPlaying] = useState(false);
+  const frame = frames.length > 0 ? Math.min(frameIdx ?? frames.length - 1, frames.length - 1) : -1;
+  useEffect(() => {
+    if (!playing || frames.length === 0) return;
+    const id = setInterval(() => {
+      setFrameIdx((i) => {
+        const next = (i ?? frames.length - 1) + 1;
+        if (next >= frames.length) { setPlaying(false); return frames.length - 1; }
+        return next;
+      });
+    }, 900);
+    return () => clearInterval(id);
+  }, [playing, frames.length]);
+
+  // Aggregate region -> value for the rows in view (the current frame, or
+  // every frame up to it when cumulative; all rows without a time column).
+  const aggregate = (inFrame: (r: Record<string, unknown>) => boolean) => {
+    // cw/cn: the colour measure (cfg.colorField), weighted by the value.
+    type B = { sum: number; count: number; min: number; max: number; cw: number; cn: number };
     const acc: Record<string, B> = {};
     for (const r of rows) {
+      if (!inFrame(r)) continue;
       const key = String(r[cfg.regionField] ?? "").trim().toUpperCase();
       if (!key) continue;
       const v = Number(r[cfg.valueField]);
       if (!Number.isFinite(v)) continue;
-      const e = acc[key] ?? { sum: 0, count: 0, min: Infinity, max: -Infinity };
+      const e = acc[key] ?? { sum: 0, count: 0, min: Infinity, max: -Infinity, cw: 0, cn: 0 };
       e.sum += v; e.count += 1;
+      const c = cfg.colorField && r[cfg.colorField] != null && r[cfg.colorField] !== "" ? Number(r[cfg.colorField]) : NaN;
+      if (Number.isFinite(c) && v !== 0) { const w = Math.abs(v); e.cw += c * w; e.cn += w; }
       if (v < e.min) e.min = v;
       if (v > e.max) e.max = v;
       acc[key] = e;
     }
     return acc;
-  }, [rows, cfg.regionField, cfg.valueField]);
+  };
+  const frameFilter = (upTo: number) => (r: Record<string, unknown>) => {
+    if (upTo < 0) return true;
+    const i = frames.indexOf(String(r[cfg.timeField!] ?? ""));
+    return cfg.cumulative ? i >= 0 && i <= upTo : i === upTo;
+  };
+  const byRegion = useMemo(
+    () => aggregate(frameFilter(frame)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, cfg.regionField, cfg.valueField, frame, frames, cfg.cumulative],
+  );
 
-  const valueOf = (key: string): number | null => {
-    const e = byRegion[key];
+  const valueIn = (acc: ReturnType<typeof aggregate>, key: string): number | null => {
+    const e = acc[key];
     if (!e) return null;
     if (cfg.aggregation === "avg") return e.sum / e.count;
     if (cfg.aggregation === "count") return e.count;
@@ -139,9 +205,32 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
     if (cfg.aggregation === "max") return e.max;
     return e.sum;
   };
+  const valueOf = (key: string) => valueIn(byRegion, key);
+  const shadeOf = (key: string): number | null => { const e = byRegion[key]; return e && e.cn > 0 ? e.cw / e.cn : null; };
+  // The colour measure's range over every row, not this frame's: in a
+  // time-lapse a shade means the same in every month.
+  const shadeRange = useMemo((): [number, number] | null => {
+    if (!cfg.colorField) return null;
+    const acc = aggregate(() => true);
+    const vals = Object.values(acc).filter((e) => e.cn > 0).map((e) => e.cw / e.cn);
+    return vals.length ? [Math.min(...vals), Math.max(...vals)] : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, cfg.regionField, cfg.valueField, cfg.colorField]);
 
   const allValues = Object.keys(byRegion).map((k) => valueOf(k)!).filter((v): v is number => v != null);
-  const maxAbs = Math.max(1, ...allValues.map((v) => Math.abs(v)));
+  // One colour scale for every frame of a time-lapse, so a colour means the
+  // same amount throughout; a plain map scales to what it shows.
+  const scaleMax = useMemo(() => {
+    if (frames.length === 0) return null;
+    let m = 1;
+    frames.forEach((_, i) => {
+      const acc = aggregate(frameFilter(i));
+      for (const k of Object.keys(acc)) m = Math.max(m, Math.abs(valueIn(acc, k) ?? 0));
+    });
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, frames, cfg.regionField, cfg.valueField, cfg.cumulative, cfg.aggregation]);
+  const maxAbs = scaleMax ?? Math.max(1, ...allValues.map((v) => Math.abs(v)));
   // The report's own SQL ran fine and returned rows, but not one of them
   // matched a region on this map — almost always means "Region Field" is
   // pointing at the wrong column (a code instead of a name, or the wrong
@@ -163,6 +252,32 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
   const ramp = rampSlug === "primary"
     ? theme.ramps.primary[theme.ramps.primary.length - 1]
     : (FIXED_RAMP_TIPS[rampSlug] ?? theme.ramps.primary[theme.ramps.primary.length - 1]);
+
+  // Point mode (Thai map with latField/lonField): each named point — a
+  // branch, a warehouse — stands at its own coordinates, its value
+  // aggregated like a province's. A text colorField colours by group.
+  const pointMode = cfg.regionType === "thailand-province" && !!cfg.latField && !!cfg.lonField;
+  const colorGroups = useMemo(() => {
+    if (!pointMode || !cfg.colorField) return null;
+    const vals = rows.map((r) => r[cfg.colorField!]).filter((v) => v != null && v !== "");
+    if (vals.length === 0 || vals.every((v) => Number.isFinite(Number(v)))) return null;
+    return [...new Set(vals.map(String))];
+  }, [pointMode, rows, cfg.colorField]);
+  const groupColor = (g: string) => theme.palette[Math.max(0, colorGroups?.indexOf(g) ?? 0) % theme.palette.length]!;
+  const points = useMemo(() => {
+    if (!pointMode) return [];
+    return Object.keys(byRegion).flatMap((key) => {
+      const r = rows.find((x) => String(x[cfg.regionField] ?? "").trim().toUpperCase() === key && x[cfg.latField!] != null && x[cfg.lonField!] != null);
+      const lat = Number(r?.[cfg.latField!]), lon = Number(r?.[cfg.lonField!]);
+      if (!r || !Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+      return [{
+        key, name: String(r[cfg.regionField]), lat, lon, value: valueOf(key),
+        shade: colorGroups ? null : shadeOf(key),
+        group: colorGroups && cfg.colorField ? String(r[cfg.colorField] ?? "") : null,
+      }];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointMode, byRegion, rows, cfg.regionField, cfg.latField, cfg.lonField, colorGroups]);
 
   // Render via dynamic-loaded d3 + topojson.
   const containerRef = useRef<HTMLDivElement>(null);
@@ -470,6 +585,10 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
     const k = matchKey(p);
     return k ? valueOf(k) : null;
   }
+  function shadeForPath(p: { aliases: string[] }): number | null {
+    const k = matchKey(p);
+    return k ? shadeOf(k) : null;
+  }
 
   // Full underlying row for the clicked region (not just the aggregated
   // valueField) — powers the floating detail card, which shows every
@@ -495,6 +614,53 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
     onDrill!(block.id, key);
   }
 
+  const flatMap = (
+    <ChartHoverTip>
+      <svg
+        viewBox={cfg.regionType === "thailand-province" ? `${view.x} ${view.y} ${view.w} ${view.h}` : "0 0 800 420"}
+        width="100%"
+        height="100%"
+        className="block touch-none"
+        style={cfg.regionType === "thailand-province" && view.w < FULL_VIEW.w ? { cursor: isDragging ? "grabbing" : "grab" } : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+      >
+        {paths.map((p) => {
+          const v = valueForPath(p);
+          return (
+            <path
+              key={p.id}
+              d={p.d}
+              fill={colorFor(p)}
+              stroke="rgba(255,255,255,0.85)"
+              strokeWidth={0.4}
+              onClick={() => handleClick(p)}
+              style={{ cursor: (cfg.regionType === "thailand-province" || drillEnabled) && v != null ? "pointer" : "default" }}
+            >
+              <desc className="chart-tip">{v != null
+                ? `${p.name} — ${fmt(v, cfg.format ?? "compact", currency, locale)}`
+                : `${p.name} — no data`}</desc>
+            </path>
+          );
+        })}
+        {/* Point mode: a circle on each point, its area the value. */}
+        {pointMode && points.filter((pt) => pt.value != null && pt.value > 0).sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).map((pt) => {
+          const r = 2 + 9 * Math.sqrt(Math.min(1, (pt.value ?? 0) / maxAbs));
+          return (
+            <circle key={pt.key} cx={projectLon(pt.lon)} cy={projectLat(pt.lat)} r={r}
+              fill={pt.group ? groupColor(pt.group) : ramp} fillOpacity={0.8} stroke="hsl(var(--card))" strokeWidth={0.6}
+              onClick={() => { if (drillEnabled) onDrill!(block.id, pt.name); }} style={{ cursor: drillEnabled ? "pointer" : "default" }}>
+              <desc className="chart-tip">{`${pt.name} — ${fmt(pt.value ?? 0, cfg.format ?? "compact", currency, locale)}${pt.group ? `
+${pt.group}` : ""}`}</desc>
+            </circle>
+          );
+        })}
+      </svg>
+    </ChartHoverTip>
+  );
+
   return (
     <div className={cn(
       "group relative flex h-full flex-col overflow-hidden",
@@ -516,14 +682,35 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
             <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
               {cfg.title}
               {drillEnabled && (
-                <span className="rounded-full border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary">
-                  click to drill
+                <span data-drill-chip className="rounded-full border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary">
+                  {t("drill.chip")}
                 </span>
               )}
             </h3>
           )}
           {cfg.subtitle && <p className="mt-0.5 text-[11px] text-muted-foreground">{cfg.subtitle}</p>}
         </header>
+      )}
+      {!print && frames.length > 1 && (
+        <div className="mb-2 flex shrink-0 items-center gap-2" data-timelapse>
+          <button
+            type="button"
+            onClick={() => { if (!playing && frame >= frames.length - 1) setFrameIdx(0); setPlaying((p) => !p); }}
+            aria-label={t(playing ? "map.timelapse.pause" : "map.timelapse.play")}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted"
+          >
+            {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          </button>
+          <input
+            type="range" min={0} max={frames.length - 1} value={frame}
+            onChange={(e) => { setPlaying(false); setFrameIdx(Number(e.target.value)); }}
+            aria-label={t("map.timelapse.frame")}
+            className="min-w-0 flex-1 accent-[hsl(var(--primary))]"
+          />
+          <span className="min-w-[5rem] shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+            {frameLabel(frames[frame]!)}{cfg.cumulative ? ` · ${t("map.timelapse.soFar")}` : ""}
+          </span>
+        </div>
       )}
       {!loading && !error && dataMismatch && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/60 bg-warning/10 p-2.5 text-warning  ">
@@ -535,8 +722,9 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
       )}
       {/* Search lives outside the map container (which clips overflow) so its
           results dropdown isn't cut off. Client-side only — province names
-          are already fully loaded, no extra query. */}
-      {cfg.regionType === "thailand-province" && !loading && !error && (
+          are already fully loaded, no extra query. Not in 3D: it zooms the
+          flat map, and the stage needs the height. */}
+      {cfg.regionType === "thailand-province" && !loading && !error && !show3d && (
         <div className="relative mb-2 shrink-0">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -573,7 +761,18 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
             be too small to click reliably; lets a viewer zoom in first,
             then click precisely, instead of relying only on the
             click-to-auto-zoom that already happens on a province click. */}
-        {cfg.regionType === "thailand-province" && !loading && !error && (
+        {cfg.regionType === "thailand-province" && !loading && !error && !print && (
+          <button
+            type="button"
+            onClick={() => setShow3d((v) => !v)}
+            aria-pressed={show3d}
+            title={t(show3d ? "map.view.flat" : "map.view.3d")}
+            className="pointer-events-auto absolute left-2 top-2 z-30 rounded-md border border-border bg-background px-2 py-1 text-[10px] font-semibold text-muted-foreground shadow-sm hover:text-foreground aria-pressed:border-primary aria-pressed:text-primary"
+          >
+            {show3d ? t("map.view.flat") : "3D"}
+          </button>
+        )}
+        {cfg.regionType === "thailand-province" && !loading && !error && !show3d && (
           <div className="pointer-events-auto absolute right-2 top-2 z-30 flex flex-col overflow-hidden rounded-md border border-border shadow-sm" style={{ backgroundColor: "hsl(var(--background, 0 0% 100%))" }}>
             <button type="button" onClick={() => zoomBy(0.7)} className="flex h-6 w-6 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground" title="Zoom in" aria-label="Zoom in">
               <Plus className="h-3 w-3" />
@@ -581,7 +780,7 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
             <button type="button" onClick={() => zoomBy(1 / 0.7)} className="flex h-6 w-6 items-center justify-center border-t border-border text-muted-foreground hover:bg-muted hover:text-foreground" title="Zoom out" aria-label="Zoom out">
               <Minus className="h-3 w-3" />
             </button>
-            <button type="button" onClick={resetZoom} className="flex h-6 w-6 items-center justify-center border-t border-border text-muted-foreground hover:bg-muted hover:text-foreground" title="Reset view" aria-label="Reset view">
+            <button type="button" onClick={resetZoom} className="flex h-6 w-6 items-center justify-center border-t border-border text-muted-foreground hover:bg-muted hover:text-foreground" title={t("map.view.reset")} aria-label={t("map.view.reset")}>
               <Home className="h-3 w-3" />
             </button>
           </div>
@@ -596,38 +795,29 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
             Failed to load map: {error}
           </div>
         )}
-        {!loading && !error && (
-          <svg
-            viewBox={cfg.regionType === "thailand-province" ? `${view.x} ${view.y} ${view.w} ${view.h}` : "0 0 800 420"}
-            width="100%"
-            height="100%"
-            className="block touch-none"
-            style={cfg.regionType === "thailand-province" && view.w < FULL_VIEW.w ? { cursor: isDragging ? "grabbing" : "grab" } : undefined}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-          >
-            {paths.map((p) => {
-              const v = valueForPath(p);
-              return (
-                <path
-                  key={p.id}
-                  d={p.d}
-                  fill={colorFor(p)}
-                  stroke="rgba(255,255,255,0.85)"
-                  strokeWidth={0.4}
-                  onClick={() => handleClick(p)}
-                  style={{ cursor: (cfg.regionType === "thailand-province" || drillEnabled) && v != null ? "pointer" : "default" }}
-                >
-                  <title>{v != null
-                    ? `${p.name} — ${fmt(v, cfg.format ?? "compact", currency)}`
-                    : `${p.name} — no data`}</title>
-                </path>
-              );
-            })}
-          </svg>
-        )}
+        {!loading && !error && (show3d ? (
+          <ProvinceColumns3D
+            entries={pointMode
+              ? points.map((pt) => ({ id: pt.key, name: pt.name, value: pt.value, shade: pt.shade, at: [projectLon(pt.lon), projectLat(pt.lat)] as [number, number], ...(pt.group ? { color: groupColor(pt.group) } : {}) }))
+              : paths.map((p) => ({ id: p.id, name: p.name, value: valueForPath(p), shade: shadeForPath(p) }))}
+            clusterLabel={pointMode ? t("map.view.cluster") : undefined}
+            shade={cfg.colorField && shadeRange ? {
+              label: cfg.colorLabel ?? cfg.colorField, range: shadeRange,
+              format: (v: number) => formatNumber(v, Math.abs(v) < 100 ? 1 : 0),
+            } : undefined}
+            maxAbs={maxAbs}
+            color={ramp}
+            label={(v) => formatMetricCompact(v, cfg.format ?? "compact", currency, locale)}
+            version={`${frame}|${maxAbs}|${rows.length}|${Object.keys(byRegion).length}`}
+            onPick={(id) => {
+              if (pointMode) { const pt = points.find((x) => x.key === id); if (pt && drillEnabled) onDrill!(block.id, pt.name); return; }
+              const p = paths.find((x) => x.id === id); if (p) handleClick(p);
+            }}
+            caption={frame >= 0 ? `${frameLabel(frames[frame]!)}${cfg.cumulative ? ` · ${t("map.timelapse.soFar")}` : ""}` : undefined}
+            resetLabel={t("map.view.reset")}
+            fallback={flatMap}
+          />
+        ) : flatMap)}
         {/* District pins — thailand-province only, empty until cfg.pinsQueryId's
             query actually returns rows (typically scoped to the currently
             drilled-into province via the same :drillParam binding used for
@@ -658,7 +848,7 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
                   onClick={() => zoomToPoint(projectLon(lon), projectLat(lat))}
                   className="pointer-events-auto -ml-1.5 -mt-1.5 h-3 w-3 cursor-pointer rounded-full shadow ring-2 ring-background transition-transform hover:scale-150"
                   style={{ backgroundColor: ramp }}
-                  title={`${name}${Number.isFinite(valNum) ? " — " + fmt(valNum, cfg.format ?? "compact", currency) : ""}`}
+                  title={`${name}${Number.isFinite(valNum) ? " — " + fmt(valNum, cfg.format ?? "compact", currency, locale) : ""}`}
                   aria-label={name}
                 />
               </div>
@@ -729,17 +919,30 @@ function MapBlockInner({ block, dataset, provenance, print, report, params, repo
       </div>
       {/* Legend */}
       {!loading && !error && allValues.length > 0 && (
-        <div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground">
-          <span>0</span>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+          {/* Points coloured by group: one swatch per group, no ramp. */}
+          {colorGroups ? colorGroups.map((g) => (
+            <span key={g} className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded-sm" style={{ background: groupColor(g) }} />{g}
+            </span>
+          )) : <>
+          {/* In 3D with a colour measure, the colours read as that measure; the height speaks for itself. */}
+          {show3d && cfg.colorField && shadeRange && (
+            <span>{t("map.shadeBy").replace("{label}", cfg.colorLabel ?? cfg.colorField)}</span>
+          )}
+          <span>{show3d && cfg.colorField && shadeRange ? formatNumber(shadeRange[0], Math.abs(shadeRange[0]) < 100 ? 1 : 0) : "0"}</span>
           {[0.15, 0.35, 0.55, 0.75, 0.95].map((t, i) => (
             <span key={i}
               className="inline-block h-3 w-5 rounded-sm"
               style={{ background: colorMix(ramp, Math.round(12 + t * 70)) }}
             />
           ))}
-          <span>{fmt(maxAbs, cfg.format ?? "compact", currency)}</span>
+          <span>{show3d && cfg.colorField && shadeRange ? formatNumber(shadeRange[1], Math.abs(shadeRange[1]) < 100 ? 1 : 0) : fmt(maxAbs, cfg.format ?? "compact", currency, locale)}</span>
+          </>}
           <span className="ml-auto">
-            {Object.keys(byRegion).length} {cfg.regionType === "country" ? "countries" : cfg.regionType === "us-state" ? "states" : "provinces"} with data
+            {pointMode
+              ? t("map.withData.point").replace("{n}", String(points.length))
+              : t(cfg.regionType === "country" ? "map.withData.country" : cfg.regionType === "us-state" ? "map.withData.state" : "map.withData.province").replace("{n}", String(Object.keys(byRegion).length))}
           </span>
         </div>
       )}
