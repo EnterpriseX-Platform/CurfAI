@@ -749,7 +749,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   }, [forecast, print, reportDbId, block.id]);
 
   if (!queryId || data.length === 0) {
-    const notRun = queryNotRun(provenance?.[queryId]);
+    const notRun = queryNotRun(provenance?.[queryId], t);
     return (
       <BlockEmptyState
         type="chart" blockId={block.id} title={title} typeLabel={t("blockType.chart")}

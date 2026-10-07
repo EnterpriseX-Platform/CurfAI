@@ -28,7 +28,7 @@ export function ReportQualityNote({ quality }: { quality: ReportQuality }) {
   const changeText = (c: ReportQuality["changes"][number]) => {
     const line = fill(t(`reportQuality.change.${c.kind}`), { title: c.title, to: c.to, n: c.n });
     const why = c.rule && t(`reportQuality.reason.${c.rule}`) !== `reportQuality.reason.${c.rule}` ? t(`reportQuality.reason.${c.rule}`) : null;
-    return why && c.kind === "removed" ? `${line} — ${why}` : line;
+    return why && (c.kind === "removed" || c.kind === "adjusted") ? `${line} — ${why}` : line;
   };
 
   return (

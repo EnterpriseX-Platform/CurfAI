@@ -255,7 +255,7 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
   const datasetEntry = dataset[queryId];
 
   if (!queryId || !datasetEntry || datasetEntry.length === 0) {
-    const notRun = queryNotRun(provenance?.[queryId]);
+    const notRun = queryNotRun(provenance?.[queryId], t);
     return (
       <BlockEmptyState
         type="kpi" blockId={block.id} title={label} typeLabel={t("blockType.kpi")}

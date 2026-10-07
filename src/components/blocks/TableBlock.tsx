@@ -198,7 +198,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
   }
 
   if (!queryId || rows.length === 0) {
-    const notRun = queryNotRun(provenance?.[queryId]);
+    const notRun = queryNotRun(provenance?.[queryId], t);
     return (
       <BlockEmptyState
         type="table" blockId={block.id} title={title} typeLabel={t("blockType.table")}

@@ -17,8 +17,11 @@
  */
 import type { Report } from "@/lib/reporting/schema";
 import { formatCell } from "@/lib/reporting/format";
+import { detectNumberRules, type NumberRuleFix } from "./reportRulesNumbers";
 
-export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10" | "R11";
+export { applyRuleFix, targetFromLabel, type NumberRuleFix } from "./reportRulesNumbers";
+
+export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10" | "R11" | "R12" | "R13" | "R14" | "R15" | "R16" | "R17" | "R18" | "R19" | "R20" | "R21" | "R22";
 
 export type ReportRule = {
   id: RuleId;
@@ -122,6 +125,94 @@ export const REPORT_RULES: ReportRule[] = [
     check: "A KPI label that names two different calculations (average and total, highest and lowest — in English, Thai and Chinese) is flagged; it can only show one of them.",
     onFail: "An AI-written block is removed; a hand-written template's is kept with a note.",
   },
+  {
+    id: "R12",
+    title: "A target stated in a KPI's label is the KPI's plan",
+    ai: "A KPI whose label states a target (\"target 85%\", \"เป้าหมาย ≤ 35%\") carries it as the KPI's \"plan\" (a rate as a fraction: 0.85) — set sparkPositive \"down\" when lower is better — so the card shows how far it is from plan.",
+    enforcement: "code",
+    check: "A KPI label with a target (target / เป้าหมาย / 目标, an optional ≥ ≤ at least / not exceeding, a number and %) whose KPI is a percent or a number and has neither plan nor planField.",
+    onFail: "Fixed automatically — the plan is set from the label (lower-is-better targets set sparkPositive down).",
+  },
+  {
+    id: "R13",
+    title: "A KPI reads its number from a field a person can read",
+    ai: "Name every SQL output column in words (\"paid_baht\"), never with digits first (\"2569_100\", \"4_35\", \"8\"): the field name shows in popovers and exports.",
+    enforcement: "code",
+    check: "A KPI whose valueField starts with a digit; renamed to kpi_value when only that KPI reads the query.",
+    onFail: "Fixed automatically where the query is the KPI's own; otherwise kept with a note.",
+  },
+  {
+    id: "R14",
+    title: "A time axis runs forward and a cumulative line never falls",
+    ai: "A line or area chart over time ORDER BY its time key (a month number, a date), never by its measure; a cumulative series rises from the first period to the last.",
+    enforcement: "code",
+    check: "A line, area or combo chart over a time field whose query's first ORDER BY key is one of its measures, a time axis whose numbers run backwards, or a series named cumulative / สะสม / 累计 that falls over its rows. Fixed with the table's month/period order column (or the time field itself when it sorts).",
+    onFail: "Fixed automatically when the query is the chart's own and a time key exists; otherwise kept with a note.",
+  },
+  {
+    id: "R15",
+    title: "A year in a label is the year the query filters to",
+    ai: "A KPI label or chart title that names a fiscal year (FY2569, ปี 2569) must filter its query to that year (WHERE fiscal_year = 2569) — or say it spans several years.",
+    enforcement: "code",
+    check: "A title or label naming a year (FY, ปีงบประมาณ, ปี, 年度 + 20xx/25xx) without words like multiple years or trend, whose SQL holds neither that year nor a year parameter and does not group by the year column, while the table it reads has a year column (or its result spans several years).",
+    onFail: "Kept with a note: the label may claim a scope the number does not have.",
+  },
+  {
+    id: "R16",
+    title: "A share stays between 0 and 100%",
+    ai: "A KPI labelled share, ratio, rate or สัดส่วน is a fraction of a whole: never above 100% or below 0 — recheck its numerator and denominator.",
+    enforcement: "code",
+    check: "A percent KPI with a share/ratio/rate label (and no growth or change word) whose single value is above 105% or below 0.",
+    onFail: "Kept with a note.",
+  },
+  {
+    id: "R17",
+    title: "A column of numbers shows sensible digits",
+    ai: "Give every numeric table column a type (\"number\" with a digit count, \"percent\", \"currency\"): never print 192.2973.",
+    enforcement: "code",
+    check: "A table column with no digit count whose values are numbers with more than two decimals.",
+    onFail: "Fixed automatically — the column becomes a number with 0-2 decimals (a 0-1 rate named pct/share/ratio becomes a percent).",
+  },
+  {
+    id: "R18",
+    title: "A KPI opens the rows behind it",
+    ai: "Give a KPI a \"drilldown\" to the rows behind its number: the report's own detail table when it lists them, else a query of its own over the same table with the same conditions (no aggregate).",
+    enforcement: "code",
+    check: "A KPI with no drilldown. The report's table that reads the same tables, keeps rows by at least the KPI's conditions, is not grouped or a top-N list under 100 rows and binds only the report's parameters; with none, the KPI's own query without its aggregate (guard CTEs kept, the value's CASE WHEN conditions as the WHERE).",
+    onFail: "Fixed automatically — the drilldown points at that table's query, or at a new query written from the KPI's SQL and checked to return rows.",
+  },
+  {
+    id: "R19",
+    title: "A percent or a gauge shows a share, not an amount",
+    ai: "A KPI or gauge shown as a percent holds a ratio (0.85 for 85%), never a raw amount: divide the numerator by the denominator in the query, and never leave a calculation (\"divided by 100\") in a label or title.",
+    enforcement: "code",
+    check: "A percent KPI whose value is above 1000%, a gauge or percent-formatted chart whose value is far beyond its maximum, a label or title that says it was divided or multiplied by something (divided by, ÷, หาร, 除以).",
+    onFail: "Kept with a note; the repair brief names the amount and the columns a denominator could come from.",
+  },
+  {
+    id: "R20",
+    title: "A ratio covers the scope its label names",
+    ai: "A ratio whose label names a scope (investment, operating spend, a year) limits both its numerator and its denominator to it. Say in the label what the figures are.",
+    enforcement: "code",
+    check: "A percent KPI whose label names investment / ลงทุน or operating spend while its query never mentions it (it divides, or reads a share already worked out in a column). The verifier also runs the numerator and the denominator separately and prints both.",
+    onFail: "Kept with a note; the repair brief gives the numerator, the denominator and the scope the label asks for.",
+  },
+  {
+    id: "R21",
+    title: "A gap equals the actual minus the target beside it",
+    ai: "A KPI that shows the gap to a target is the actual KPI's value minus the target — computed over the same rows and the same period as the actual, not averaged over months while the actual is the year-end figure.",
+    enforcement: "code",
+    check: "A KPI labelled gap / variance / ส่วนต่าง / เทียบเป้า with an actual KPI of the same query and unit and a target (a plan, a target in a label, or the constant the query subtracts) whose difference does not match the gap (beyond 1 point and 15%).",
+    onFail: "Kept with a note: the two cards give two answers to one question.",
+  },
+  {
+    id: "R22",
+    title: "A series has a value in every row, and no value dwarfs the rest",
+    ai: "A bar or line series shows a value (0 when there is none) for every category it lists; check a value ten times the median is real.",
+    enforcement: "code",
+    check: "A bar, line, area or combo chart with a series that is blank in some rows while others have a value (a bar missing among bars); a table column with blanks (a note for the verifier); a chart value more than 10 times the median and 3 times the next (a note for the verifier).",
+    onFail: "Kept with a note for a missing bar; the rest is a note for the repair brief.",
+  },
 ];
 
 /**
@@ -152,7 +243,7 @@ export type Violation = {
   /** Short English description, for the reviewer and the logs. */
   detail: string;
   /** Deterministic repair the gate applies itself. */
-  fix?: { kind: "limit"; queryId: string; n: number } | { kind: "height"; h: number };
+  fix?: { kind: "limit"; queryId: string; n: number } | { kind: "height"; h: number } | NumberRuleFix;
 };
 
 /** The count a title promises: "Top 10", "10 อันดับ", "อันดับ 1-10", "前10". */
@@ -199,6 +290,14 @@ const TABLE_WRAP_PX = 20;
 /** The most rows a table is sized for: past it the list scrolls in its card instead of growing a screen tall. */
 export const TABLE_MAX_LINES = 30;
 export const TABLE_MAX_H = 28;
+/**
+ * The tallest a table of up to TABLE_MAX_LINES rows is made. Wrapped cells (Thai
+ * headings and names in a narrow column) can need twice the height of one-line
+ * rows; capping those at TABLE_MAX_H left a 25-row table scrolling inside its
+ * card, two screens of text in a 1444px box (Public Works build, 2026-10-06).
+ * A longer list still stops at TABLE_MAX_H and scrolls.
+ */
+export const TABLE_MAX_H_WRAPPED = 60;
 /**
  * What the estimate adds for the browser's line breaking, which the glyph table
  * can't reproduce exactly (Thai especially): a card a row short scrolls, one
@@ -363,6 +462,17 @@ export function tableRowHeights(rows: Row[], columns: TableColumnSpec[], widthPx
   });
 }
 
+/** A block `w` grid columns wide, in px, in the app at a 1440px screen (the width model the table sizing and the verify probes share). */
+export function blockCardWidthPx(w = 12): number {
+  const span = Math.min(12, Math.max(1, w));
+  return ((APP_CONTENT_PX - 11 * GRID_GAP_PX) * span) / 12 + GRID_GAP_PX * (span - 1);
+}
+
+/** The room a table's columns have inside a card `w` columns wide. */
+export function tableInnerWidthPx(w = 12): number {
+  return blockCardWidthPx(w) - TABLE_CARD_INSET_PX;
+}
+
 /**
  * Grid rows for a table showing these `rows`, each as tall as its text wraps
  * to. Estimates the viewer's own layout (`tableRowHeights`) for a block `w`
@@ -371,11 +481,10 @@ export function tableRowHeights(rows: Row[], columns: TableColumnSpec[], widthPx
  * key list measures the keys as the headings and the values as plain text.
  */
 export function tableHeightForRows(rows: Row[], columns: Array<string | TableColumnSpec>, w = 12, opts: { showTotals?: boolean } = {}): number {
-  const span = Math.min(12, Math.max(1, w));
-  const cardPx = ((APP_CONTENT_PX - 11 * GRID_GAP_PX) * span) / 12 + GRID_GAP_PX * (span - 1);
+  const cardPx = blockCardWidthPx(w);
   const specs = columns.map((c) => (typeof c === "string" ? { key: c } : c));
   const linesPx = tableRowHeights(rows.slice(0, TABLE_MAX_LINES), specs, cardPx - TABLE_CARD_INSET_PX).reduce((a, b) => a + b, 0) * TABLE_SLACK;
-  return Math.min(TABLE_MAX_H, Math.max(6, Math.ceil((TABLE_CHROME_PX + TABLE_HEAD_PX + (opts.showTotals ? TABLE_HEAD_PX : 0) + linesPx) / GRID_STEP_PX)));
+  return Math.min(rows.length > TABLE_MAX_LINES ? TABLE_MAX_H : TABLE_MAX_H_WRAPPED, Math.max(6, Math.ceil((TABLE_CHROME_PX + TABLE_HEAD_PX + (opts.showTotals ? TABLE_HEAD_PX : 0) + linesPx) / GRID_STEP_PX)));
 }
 
 /** Grid rows for a table block showing `rows`: the tallest it comes out in any language it carries. */
@@ -444,14 +553,14 @@ function selectItems(sql: string): string[] {
 }
 
 /** The SELECT item that produces `alias` — in the outer query, after any `WITH x AS (…)`. */
-function itemFor(sql: string, alias: string): string | null {
+export function itemFor(sql: string, alias: string): string | null {
   const cteEnd = sql.search(/\)\s*select\b/i);
   const items = selectItems(cteEnd >= 0 ? sql.slice(cteEnd + 1) : sql);
   const aliasRe = new RegExp(`\\bas\\s+"?${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"?\\s*$`, "i");
   return items.find((i) => aliasRe.test(i)) ?? null;
 }
 
-function aggregateOf(item: string): string | null {
+export function aggregateOf(item: string): string | null {
   const m = item.match(/\b(SUM|AVG|MIN|MAX|COUNT)\s*\(/i);
   return m ? m[1]!.toUpperCase() : null;
 }
@@ -607,6 +716,9 @@ export function detectViolations(
       out.push({ rule: "R6", target: b.id, detail: `"${name}" is ${b.h < fitted.h ? "too short" : "too tall"} for its ${fitted.what}`, fix: { kind: "height", h: fitted.h } });
     }
   }
+
+  // R12-R18 — what the report's numbers and words say about each other.
+  out.push(...detectNumberRules(report, dataset, { tableColumns: opts.tableColumns }).filter((v) => !v.info));
 
   // R4 — figures in the prose.
   const ground = groundingFor(report, dataset);

@@ -19,6 +19,7 @@ import type { EngineQuery } from "@/lib/reporting/schema";
 import { mintEngineToken, type EngineViewer } from "@/lib/engine/identity";
 import { engineUrlPolicy, type EngineTarget } from "@/lib/connections/engine";
 import { pinnedPublicFetch } from "@/lib/security/pinnedFetch";
+import { ENGINE_REASON } from "@/lib/engine/reasons";
 
 export const ENGINE_REQUEST_TIMEOUT_MS = 30_000;
 /** When the engine says it is busy, wait this long at most before the single retry. */
@@ -162,10 +163,10 @@ export async function engineCall(opts: EngineCallOptions): Promise<Response> {
     } catch (e: any) {
       // Which private address a name resolved to is not for a viewer to read (it would map the internal network).
       if (e?.code === "ESSRF") throw new Error("The engine URL is not allowed: it does not point at a public address.");
-      if (e?.name === "TimeoutError" || e?.name === "AbortError") throw new Error("The engine did not answer in time.");
-      throw new Error("The engine could not be reached.");
+      if (e?.name === "TimeoutError" || e?.name === "AbortError") throw new Error(ENGINE_REASON.noAnswer.text);
+      throw new Error(ENGINE_REASON.unreachable.text);
     }
-    if (res.status >= 300 && res.status < 400) throw new Error("The engine answered with a redirect, which is not followed.");
+    if (res.status >= 300 && res.status < 400) throw new Error(ENGINE_REASON.redirect.text);
 
     if ((res.status === 429 || res.status === 503) && canRetry && attempt === 0) {
       const asked = Number(res.headers.get("retry-after"));
@@ -179,12 +180,12 @@ export async function engineCall(opts: EngineCallOptions): Promise<Response> {
 /** A short, specific message for an answer that is not a success; null when `res` is ok. */
 export async function engineStatusError(res: Response, subject = "request"): Promise<string | null> {
   if (res.ok) return null;
-  if (res.status === 401) return "The engine did not accept Curf's identity token (check its issuer and key settings).";
-  if (res.status === 403) return "The engine does not allow this person to do that.";
-  if (res.status === 404) return "That does not exist on the engine, is not published, or is not available to you.";
-  if (res.status === 429) return "The engine is busy with your other queries. Try again in a moment.";
-  if (res.status === 503) return "The engine is not ready to answer.";
-  if (res.status === 504) return "The query ran past the engine's time limit and was cancelled.";
+  if (res.status === 401) return ENGINE_REASON.identity.text;
+  if (res.status === 403) return ENGINE_REASON.forbidden.text;
+  if (res.status === 404) return ENGINE_REASON.notAvailable.text;
+  if (res.status === 429) return ENGINE_REASON.busy.text;
+  if (res.status === 503) return ENGINE_REASON.notReady.text;
+  if (res.status === 504) return ENGINE_REASON.timeLimit.text;
   if (res.status === 422) return `The engine rejected the ${subject}: ${(await engineProblemMessage(res)) || `invalid ${subject}`}`;
   return `The engine failed to answer (${res.status}).`;
 }
@@ -216,8 +217,8 @@ export async function runEngineQuery(opts: {
   const problem = await engineStatusError(res, "query");
   if (problem) {
     // The report path keeps its own wording for the two answers a reader is most likely to meet.
-    if (res.status === 404) throw new Error("That view does not exist on the engine, is not published, or is not available to you.");
-    if (res.status === 403) throw new Error("The engine does not allow this person to run queries.");
+    if (res.status === 404) throw new Error(ENGINE_REASON.viewNotAvailable.text);
+    if (res.status === 403) throw new Error(ENGINE_REASON.forbiddenQuery.text);
     throw new Error(problem);
   }
   return rowsFromEngineResult(await engineJson(res));

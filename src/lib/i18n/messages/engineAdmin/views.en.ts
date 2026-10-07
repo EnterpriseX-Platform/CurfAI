@@ -75,7 +75,7 @@ export const engineAdminViewsEn: Dictionary = {
   "engineAdmin.views.wizard.saveDraft": "Save draft",
   "engineAdmin.views.wizard.saveAndPublish": "Save and publish",
   "engineAdmin.views.wizard.discard": "Discard your changes?",
-  "engineAdmin.views.wizard.confirmPublic": "This view is available to the public with no sign-in. Anyone with a public link to a report that uses it can read its visible columns.\n\nSave and publish it?",
+  "engineAdmin.views.wizard.confirmPublic": "This view is available to the public with no sign-in. Anyone with a public link to a report that uses it can read its visible columns.",
   "engineAdmin.views.wizard.publishFailed": "The draft was saved, but publishing failed.",
 
   "engineAdmin.views.stale.title": "Someone else changed this view",

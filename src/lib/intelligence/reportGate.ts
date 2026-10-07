@@ -34,7 +34,7 @@ import { neededQueries } from "@/lib/reporting/queryRefs";
 import { ReportSchema, type Report, type ReportQuality } from "@/lib/reporting/schema";
 import { applyAverageLines } from "./averageLines";
 import { qaInstantView, type QaCheck, type QaResult } from "./instantViewQa";
-import { blockTitle, detectViolations, queryIdOf, topNFromTitle, type Dataset, type Violation } from "./reportRules";
+import { applyRuleFix, blockTitle, detectViolations, queryIdOf, topNFromTitle, type Dataset, type NumberRuleFix, type Violation } from "./reportRules";
 import { prisma } from "@/lib/db";
 import { parseSchemaJson } from "@/lib/lake/schemaGovernance";
 
@@ -117,10 +117,12 @@ export async function gateGeneratedReport(args: {
   const { dataset, queryErrors } = await runQueries(report, args);
   const tableColumns = await lakeTableColumns(args.tenantId);
   const checks = () => ({ ...prose(), tableColumns });
+  // Drill queries the code wrote (R18) are run once each, so a drill-down that opens nothing is never kept.
+  const drillsChecked = new Map<string, boolean>();
   if (args.averageLineBlockIds?.length) report = applyAverageLines(report, dataset, args.averageLineBlockIds);
 
   // 2. What code fixes by itself.
-  report = await applyCodeFixes(report, dataset, queryErrors, args, changes, prose());
+  report = await applyCodeFixes(report, dataset, queryErrors, args, changes, checks(), drillsChecked);
 
   // 3. The checks and the review, told what is still flagged.
   args.onChecking?.();
@@ -184,10 +186,12 @@ export async function gateGeneratedReport(args: {
   }
 
   // 4. Check again; enforce what is still wrong.
-  report = await applyCodeFixes(report, dataset, queryErrors, args, changes, prose());
+  report = await applyCodeFixes(report, dataset, queryErrors, args, changes, checks(), drillsChecked);
   const confirmed = new Map(qa.review.confirmed.map((c) => [`${c.target}:${c.rule}`, c.reason]));
   const drop: string[] = [];
   for (const v of detectViolations(report, dataset, checks())) {
+    // A drill-down is an improvement the code adds when it can: one it could not make (no rows) is no flag on the report.
+    if (v.rule === "R18") continue;
     const reason = confirmed.get(`${v.target}:${v.rule}`);
     if (reason && CONFIRMABLE.has(v.rule)) { notes.push(`${titleFor(report, v)}: ${reason}`); continue; }
     // On a report people already read, a block is flagged rather than taken
@@ -336,7 +340,7 @@ async function limitQuery(report: Report, queryId: string, n: number, dataset: D
  * period from a snapshot (R10). Best effort — without them R10 reads the
  * query itself for a period column.
  */
-async function lakeTableColumns(tenantId: string): Promise<Record<string, string[]> | undefined> {
+export async function lakeTableColumns(tenantId: string): Promise<Record<string, string[]> | undefined> {
   try {
     const tables = await prisma.lakeTable.findMany({ where: { tenantId }, select: { name: true, schemaJson: true } });
     return Object.fromEntries(tables.map((t) => [t.name, parseSchemaJson(t.schemaJson).map((c) => c.name)]));
@@ -348,7 +352,8 @@ async function lakeTableColumns(tenantId: string): Promise<Record<string, string
 /** The fixes reportRules.ts can name on its own: a promised count, a chart's height. */
 async function applyCodeFixes(
   report: Report, dataset: Dataset, queryErrors: Record<string, string>, args: RunArgs, changes: Change[],
-  text: { caption?: string; subtitle?: string },
+  text: { caption?: string; subtitle?: string; tableColumns?: Record<string, string[]> },
+  drillsChecked: Map<string, boolean> = new Map(),
 ): Promise<Report> {
   // Limits first: a chart's height follows the rows it ends up with.
   for (const v of detectViolations(report, dataset, text)) {
@@ -363,7 +368,43 @@ async function applyCodeFixes(
     report = resizeBlock(report, block.id, v.fix.h);
     changes.push({ kind: "resized", rule: "R6", title: blockTitle(block) });
   }
-  return report;
+  // The other mechanical repairs (R12-R18): a plan from the label, a readable field, time order, digits, a KPI's drill-down.
+  // (A drill the code wrote and found empty is not written again.)
+  const rest = detectViolations(report, dataset, text).filter((v) => v.fix && v.fix.kind !== "limit" && v.fix.kind !== "height" && !(v.fix.kind === "drill-new" && drillsChecked.get(v.fix.queryId) === false));
+  if (rest.length > 0) {
+    report = structuredClone(report);
+    for (const v of rest) {
+      const done = applyRuleFix(report, v.fix as NumberRuleFix, dataset);
+      if (!done) continue;
+      changes.push({ kind: "adjusted", rule: v.rule, title: done.title });
+      // A re-sorted query returns its rows in a new order: the checks after this read them.
+      if (v.fix!.kind === "order") await runOne(report, (v.fix as { queryId: string }).queryId, dataset, queryErrors, { ...args, onQuery: undefined });
+    }
+  }
+  return dropDeadDrills(report, dataset, queryErrors, args, drillsChecked);
+}
+
+/** A drill-down whose query the code wrote (q_drill_*) must return rows as the reader: one that fails or opens nothing is taken off its block. */
+async function dropDeadDrills(report: Report, dataset: Dataset, queryErrors: Record<string, string>, args: RunArgs, checked: Map<string, boolean>): Promise<Report> {
+  const ids = new Set<string>();
+  for (const b of report.pages.flatMap((p) => p.blocks)) {
+    const q = (b.config as any)?.drilldown?.queryId;
+    if (typeof q === "string" && q.startsWith("q_drill_") && checked.get(q) !== true && checked.get(q) !== false) ids.add(q);
+  }
+  if (ids.size === 0) return report;
+  const next = structuredClone(report);
+  for (const q of ids) {
+    // Run with no blocks, as the drill route does: the runner skips a query only drills read when blocks exist.
+    await runOne({ ...next, pages: [] }, q, dataset, queryErrors, { ...args, onQuery: undefined });
+    const alive = !queryErrors[q] && (dataset[q]?.length ?? 0) > 0;
+    checked.set(q, alive);
+    if (alive) continue;
+    delete queryErrors[q];
+    delete dataset[q];
+    for (const b of next.pages.flatMap((p) => p.blocks)) if ((b.config as any)?.drilldown?.queryId === q) delete (b.config as any).drilldown;
+    next.dataSources = next.dataSources.filter((d) => d.id !== q);
+  }
+  return next;
 }
 
 // ── Layout ─────────────────────────────────────────────────────────────

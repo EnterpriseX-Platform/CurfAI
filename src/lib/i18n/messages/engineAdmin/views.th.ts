@@ -75,7 +75,7 @@ export const engineAdminViewsTh: Dictionary = {
   "engineAdmin.views.wizard.saveDraft": "บันทึกฉบับร่าง",
   "engineAdmin.views.wizard.saveAndPublish": "บันทึกและเผยแพร่",
   "engineAdmin.views.wizard.discard": "ละทิ้งการเปลี่ยนแปลงของคุณหรือไม่",
-  "engineAdmin.views.wizard.confirmPublic": "วิวนี้เปิดให้สาธารณะใช้ได้โดยไม่ต้องเข้าสู่ระบบ ผู้ที่มีลิงก์สาธารณะของรายงานที่ใช้วิวนี้จะอ่านคอลัมน์ที่แสดงอยู่ได้\n\nต้องการบันทึกและเผยแพร่หรือไม่",
+  "engineAdmin.views.wizard.confirmPublic": "วิวนี้เปิดให้สาธารณะใช้ได้โดยไม่ต้องเข้าสู่ระบบ ผู้ที่มีลิงก์สาธารณะของรายงานที่ใช้วิวนี้จะอ่านคอลัมน์ที่แสดงอยู่ได้",
   "engineAdmin.views.wizard.publishFailed": "บันทึกฉบับร่างแล้ว แต่เผยแพร่ไม่สำเร็จ",
 
   "engineAdmin.views.stale.title": "มีคนอื่นแก้ไขวิวนี้แล้ว",

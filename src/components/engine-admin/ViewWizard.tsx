@@ -13,6 +13,7 @@ import {
   sqlForTable, stepOfProblem, suggestViewName, syncParams, toViewRequest, validateStep, roleSuggestions,
   type RoutedProblem, type ViewErrors, type ViewForm, type ViewStep,
 } from "@/lib/engine/viewForm";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Notice, problemText, useAdminCall } from "./adminUi";
 import { AccessStep, ColumnsStep, PublicStep, ReviewStep, RowsStep, SourceStep } from "./ViewWizardSteps";
 
@@ -53,6 +54,8 @@ export function ViewWizard({ dataSourceId, connections, start, roles, attributeN
   const [routed, setRouted] = useState<RoutedProblem | null>(null);
   const [general, setGeneral] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  /** The question on screen, if any: leaving with unsaved changes, or publishing a view to the public. */
+  const [ask, setAsk] = useState<null | "discard" | "public">(null);
   const [busy, setBusy] = useState<null | "read" | "save" | "publish" | "preview">(null);
   const [intros, setIntros] = useState<Intros>({});
   const [preview, setPreview] = useState<QueryResult | null>(null);
@@ -121,7 +124,7 @@ export function ViewWizard({ dataSourceId, connections, start, roles, attributeN
 
   const requestClose = () => {
     if (busy) return;
-    if (dirty && !window.confirm(t("engineAdmin.views.wizard.discard"))) return;
+    if (dirty) { setAsk("discard"); return; }
     onClose(changed.current);
   };
 
@@ -191,9 +194,9 @@ export function ViewWizard({ dataSourceId, connections, start, roles, attributeN
     return false;
   };
 
-  const doSave = async (alsoPublish: boolean) => {
+  const doSave = async (alsoPublish: boolean, confirmedPublic = false) => {
     if (!checkAll()) return;
-    if (alsoPublish && form.isPublic && !window.confirm(t("engineAdmin.views.wizard.confirmPublic"))) return;
+    if (alsoPublish && form.isPublic && !confirmedPublic) { setAsk("public"); return; }
     setBusy(alsoPublish ? "publish" : "save");
     // The statement is saved with the columns step; here only the policy and labels move.
     const saved = await persist(sourceKey(form) !== savedSource);
@@ -244,7 +247,8 @@ export function ViewWizard({ dataSourceId, connections, start, roles, attributeN
   const messages = routed?.byStep[step];
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) requestClose(); }}>
+    <>
+    <Dialog open onOpenChange={(open) => { if (!open && !ask) requestClose(); }}>
       <DialogContent className="max-w-4xl" aria-describedby="wizard-desc">
         <DialogHeader>
           <DialogIcon><Layers className="h-4 w-4" aria-hidden="true" /></DialogIcon>
@@ -334,5 +338,26 @@ export function ViewWizard({ dataSourceId, connections, start, roles, attributeN
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {ask === "discard" && (
+      <ConfirmDialog
+        title={t("engineAdmin.views.wizard.discard")}
+        confirmLabel={t("engineAdmin.confirm.discardAction")}
+        cancelLabel={t("engineAdmin.confirm.keepEditing")}
+        destructive
+        onConfirm={() => { setAsk(null); onClose(changed.current); }}
+        onCancel={() => setAsk(null)}
+      />
+    )}
+    {ask === "public" && (
+      <ConfirmDialog
+        title={t("engineAdmin.confirm.publicTitle")}
+        message={t("engineAdmin.views.wizard.confirmPublic")}
+        confirmLabel={t("engineAdmin.views.wizard.saveAndPublish")}
+        cancelLabel={t("engineAdmin.views.wizard.cancel")}
+        onConfirm={() => { setAsk(null); void doSave(true, true); }}
+        onCancel={() => setAsk(null)}
+      />
+    )}
+    </>
   );
 }

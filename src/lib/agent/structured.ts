@@ -113,6 +113,8 @@ export type StructuredResult<T> =
       fatal?: boolean;
       /** Formatted Zod issues from the final attempt, when it got that far. */
       issues?: string[];
+      /** The last answer was cut off by the output ceiling even after the widened retry: the request was too big, not badly written. */
+      truncated?: boolean;
     };
 
 /**
@@ -138,6 +140,10 @@ export type GenerateStructuredOptions<S extends z.ZodTypeAny> = {
   /** See LlmRequest.thinkingCap / retryTimeouts — passed to every model call. */
   thinkingCap?: number;
   retryTimeouts?: boolean;
+  /** See LlmRequest.reasoning: "off" for a schema-checked answer that gains nothing from chain-of-thought. */
+  reasoning?: "off" | "default";
+  /** Ceiling for the one widened retry after a truncated answer (default 8000). */
+  truncationCeiling?: number;
   /**
    * The caller's abort signal (usually the HTTP request's). Passed to every
    * model call, and no further attempt starts once it fires — a client that
@@ -280,6 +286,14 @@ export async function generateStructured<S extends z.ZodTypeAny>(
   // once, then we stop guessing.
   let maxTokens = opts.maxTokens ?? 2000;
   let widened = false;
+  // A SEPARATE allowance for an answer cut off mid-JSON. It used to share
+  // `widened` with the reasoning case, so a call that spent it on a reasoning
+  // retry and was then truncated (the iterate step of a verify loop, 3 of 3
+  // attempts) got a repair turn that re-sent the broken answer and truncated
+  // in the same place, ~30k input tokens each time.
+  let widenedForTruncation = false;
+  let truncatedAtEnd = false;
+  const truncationCeiling = Math.max(opts.truncationCeiling ?? 8000, 1);
 
   // Repair turns actually SENT — not loop iterations. A widened retry burns
   // an iteration without ever asking the model to fix anything, so counting
@@ -308,6 +322,7 @@ export async function generateStructured<S extends z.ZodTypeAny>(
       timeoutMs: opts.timeoutMs,
       thinkingCap: opts.thinkingCap,
       retryTimeouts: opts.retryTimeouts,
+      reasoning: opts.reasoning,
       signal: opts.signal,
       // Repairs run colder than the original: this turn is a correction
       // against a stated spec, not a design decision, and sampling
@@ -359,11 +374,18 @@ export async function generateStructured<S extends z.ZodTypeAny>(
       // needs a bigger ceiling. Observed as `Expected ',' or ']' after
       // array element at position 4316` on a stage capped at 1600 tokens.
       const looksTruncated = looksTruncatedJson(rawText);
-      if (looksTruncated && !widened) {
-        widened = true;
-        maxTokens = Math.min(Math.round(maxTokens * 3), 8000);
+      if (looksTruncated && !widenedForTruncation && maxTokens < truncationCeiling) {
+        widenedForTruncation = true;
+        maxTokens = Math.min(Math.round(maxTokens * 3), truncationCeiling);
         opts.onProgress?.({ kind: "widened", attempt, maxTokens });
         continue;
+      }
+      if (looksTruncated) {
+        // Out of room and out of widening: a repair turn re-sends the cut-off answer and is cut off at the same place.
+        lastIssues = [`(root) - the response was cut off at ${maxTokens} tokens (not valid JSON: ${e?.message ?? String(e)})`];
+        opts.onProgress?.({ kind: "invalid", attempt, issues: lastIssues });
+        truncatedAtEnd = true;
+        break;
       }
       lastIssues = [`(root) — the response was not valid JSON: ${e?.message ?? String(e)}`];
       opts.onProgress?.({ kind: "invalid", attempt, issues: lastIssues });
@@ -419,6 +441,7 @@ export async function generateStructured<S extends z.ZodTypeAny>(
     raw: lastRaw || undefined,
     attempts: repairAttempts + 1,
     usage,
+    ...(truncatedAtEnd ? { truncated: true } : {}),
   };
 }
 
@@ -435,6 +458,8 @@ export type Stage = {
   temperature?: number;
   timeoutMs?: number;
   thinkingCap?: number;
+  /** Ceiling for the widened retry after a cut-off answer (see GenerateStructuredOptions.truncationCeiling). */
+  truncationCeiling?: number;
   normalise?: (raw: any) => void;
 };
 
@@ -526,6 +551,7 @@ export async function generateStaged<S extends z.ZodTypeAny>(
       temperature: stage.temperature,
       timeoutMs: stage.timeoutMs,
       thinkingCap: stage.thinkingCap,
+      truncationCeiling: stage.truncationCeiling,
       normalise: stage.normalise,
       onProgress: (event) => opts.onProgress?.({ kind: "stage_attempt", name: stage.name, index: i, event }),
       repairAttempts: opts.repairAttempts,

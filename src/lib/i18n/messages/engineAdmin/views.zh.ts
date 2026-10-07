@@ -75,7 +75,7 @@ export const engineAdminViewsZh: Dictionary = {
   "engineAdmin.views.wizard.saveDraft": "保存草稿",
   "engineAdmin.views.wizard.saveAndPublish": "保存并发布",
   "engineAdmin.views.wizard.discard": "要放弃您的更改吗？",
-  "engineAdmin.views.wizard.confirmPublic": "此视图对公众开放，无需登录。任何拥有使用该视图的报表公开链接的人都可以读取其可见的列。\n\n确定要保存并发布吗？",
+  "engineAdmin.views.wizard.confirmPublic": "此视图对公众开放，无需登录。任何拥有使用该视图的报表公开链接的人都可以读取其可见的列。",
   "engineAdmin.views.wizard.publishFailed": "草稿已保存，但发布失败。",
 
   "engineAdmin.views.stale.title": "其他人修改了此视图",

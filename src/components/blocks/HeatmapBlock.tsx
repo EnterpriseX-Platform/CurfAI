@@ -77,7 +77,7 @@ export function HeatmapBlock({ block, dataset, provenance, print, report, params
   const ds = !print ? report.dataSources.find((d) => d.id === cfg.queryId) ?? null : null;
 
   if (!cfg.queryId || rows.length === 0) {
-    const notRun = queryNotRun(provenance?.[cfg.queryId]);
+    const notRun = queryNotRun(provenance?.[cfg.queryId], t);
     return (
       <BlockEmptyState
         type="heatmap" blockId={block.id} title={cfg.title} typeLabel={t("blockType.heatmap")}

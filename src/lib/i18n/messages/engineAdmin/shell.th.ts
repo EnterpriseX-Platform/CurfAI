@@ -10,5 +10,8 @@ export const engineAdminShellTh: Dictionary = {
   "engineAdmin.tab.status": "สถานะ",
   "engineAdmin.tab.people": "ผู้ใช้และสิทธิ์",
   "engineAdmin.tab.views": "วิว",
+  "engineAdmin.confirm.discardAction": "ละทิ้งการเปลี่ยนแปลง",
+  "engineAdmin.confirm.keepEditing": "แก้ไขต่อ",
+  "engineAdmin.confirm.publicTitle": "เปิดวิวนี้ให้สาธารณะใช้หรือไม่",
   "engineAdmin.tab.databases": "ฐานข้อมูล",
 };

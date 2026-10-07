@@ -11,6 +11,7 @@ import {
   CONNECTION_KINDS, TLS_MODES, changeKind, connectionField, fromConnection, toConnectionRequest, validateConnection,
   type ConnectionForm,
 } from "@/lib/engine/connectionForm";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Field, NativeSelect, Notice, problemText, useAdminCall } from "./adminUi";
 
 type Props = {
@@ -38,6 +39,7 @@ export function ConnectionDialog({ dataSourceId, initial, onClose, onSaved }: Pr
   const [general, setGeneral] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const firstError = useRef<string | null>(null);
 
   const dirty = useMemo(() => JSON.stringify(form) !== baseline, [form, baseline]);
@@ -47,7 +49,7 @@ export function ConnectionDialog({ dataSourceId, initial, onClose, onSaved }: Pr
   };
 
   const requestClose = () => {
-    if (dirty && !window.confirm(t("engineAdmin.databases.dialog.discard"))) return;
+    if (dirty) { setDiscarding(true); return; }
     onClose();
   };
 
@@ -96,7 +98,8 @@ export function ConnectionDialog({ dataSourceId, initial, onClose, onSaved }: Pr
   const tlsNote = form.tlsMode === "VERIFY" ? null : form.tlsMode === "REQUIRE" ? "engineAdmin.databases.tls.requireWarning" : "engineAdmin.databases.tls.disableWarning";
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) requestClose(); }}>
+    <>
+    <Dialog open onOpenChange={(open) => { if (!open && !discarding) requestClose(); }}>
       <DialogContent className="max-w-xl" aria-describedby="conn-desc">
         <form onSubmit={submit} noValidate>
           <DialogHeader>
@@ -199,5 +202,16 @@ export function ConnectionDialog({ dataSourceId, initial, onClose, onSaved }: Pr
         </form>
       </DialogContent>
     </Dialog>
+    {discarding && (
+      <ConfirmDialog
+        title={t("engineAdmin.databases.dialog.discard")}
+        confirmLabel={t("engineAdmin.confirm.discardAction")}
+        cancelLabel={t("engineAdmin.confirm.keepEditing")}
+        destructive
+        onConfirm={() => { setDiscarding(false); onClose(); }}
+        onCancel={() => setDiscarding(false)}
+      />
+    )}
+    </>
   );
 }

@@ -101,7 +101,8 @@ async function main() {
         v.rule === "R4" ? v.detail :
         v.rule === "R10" ? `${title(v.target)} adds up a balance across periods` :
         v.rule === "R11" ? `${title(v.target)} names two numbers but shows one` :
-        `${title(v.target)} has more categories than fit`;
+        v.rule === "R6" ? `${title(v.target)} has more categories than fit` :
+        v.detail;
       console.log(`  ${v.rule}  ${what}`);
     }
   }

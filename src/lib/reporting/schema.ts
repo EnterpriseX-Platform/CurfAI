@@ -1075,7 +1075,7 @@ export const ReportQualitySchema = z.object({
   reviewed: z.boolean(),
   /** What the gate changed — structured, so the viewer words it in the reader's language. */
   changes: z.array(z.object({
-    kind: z.enum(["limited", "resized", "retitled", "removed", "captionRewritten", "captionDropped", "subtitleRewritten", "subtitleDropped"]),
+    kind: z.enum(["limited", "resized", "retitled", "removed", "adjusted", "captionRewritten", "captionDropped", "subtitleRewritten", "subtitleDropped"]),
     rule: z.string().optional(),
     title: z.string().optional(),
     to: z.string().optional(),

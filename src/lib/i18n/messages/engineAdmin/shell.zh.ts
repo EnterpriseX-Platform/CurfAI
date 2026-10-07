@@ -10,5 +10,8 @@ export const engineAdminShellZh: Dictionary = {
   "engineAdmin.tab.status": "状态",
   "engineAdmin.tab.people": "人员与权限",
   "engineAdmin.tab.views": "视图",
+  "engineAdmin.confirm.discardAction": "放弃更改",
+  "engineAdmin.confirm.keepEditing": "继续编辑",
+  "engineAdmin.confirm.publicTitle": "要向公众开放此视图吗？",
   "engineAdmin.tab.databases": "数据库",
 };

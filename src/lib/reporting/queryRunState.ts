@@ -10,6 +10,7 @@
  * for its hashing, which a browser bundle can't include.
  */
 import type { ProvenanceMap, ProvenanceRecord } from "./provenance";
+import { localizeEngineReason } from "@/lib/engine/reasons";
 
 export type QueryRunState =
   | { kind: "ran" }
@@ -24,10 +25,15 @@ export function queryRunState(record: ProvenanceRecord | undefined): QueryRunSta
 
 export type QueryNotRun = Exclude<QueryRunState, { kind: "ran" }>;
 
-/** queryRunState, narrowed: undefined when the query ran. */
-export function queryNotRun(record: ProvenanceRecord | undefined): QueryNotRun | undefined {
+/**
+ * queryRunState, narrowed: undefined when the query ran. Pass the reader's `t` from a block to have the
+ * engine's own fixed answers ("not available", "busy"…) shown in their language; any other reason (a
+ * database's error text) stays exactly as reported.
+ */
+export function queryNotRun(record: ProvenanceRecord | undefined, t?: (key: string) => string): QueryNotRun | undefined {
   const s = queryRunState(record);
-  return s.kind === "ran" ? undefined : s;
+  if (s.kind === "ran") return undefined;
+  return t ? { ...s, reason: localizeEngineReason(s.reason, t) } : s;
 }
 
 /**
