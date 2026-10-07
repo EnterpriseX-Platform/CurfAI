@@ -12,11 +12,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const findFirst = vi.fn();
 const create = vi.fn();
 const runWithProof = vi.fn();
+const findSources = vi.fn();
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     report: { findFirst: (...a: any[]) => findFirst(...a) },
     reportRun: { create: (...a: any[]) => create(...a) },
+    dataSource: { findMany: (...a: any[]) => findSources(...a) },
   },
 }));
 vi.mock("./runner", () => ({ runReportWithProof: (...a: any[]) => runWithProof(...a) }));
@@ -34,8 +36,49 @@ const definition = JSON.stringify({
 });
 
 beforeEach(() => {
-  findFirst.mockReset(); create.mockReset(); runWithProof.mockReset();
+  findFirst.mockReset(); create.mockReset(); runWithProof.mockReset(); findSources.mockReset();
   create.mockResolvedValue({});
+  findSources.mockResolvedValue([]); // no engine data sources unless a test says so
+});
+
+describe("engine data", () => {
+  const withEngine = JSON.stringify({
+    version: 1, name: "R", parameters: [],
+    dataSources: [
+      { id: "pg", name: "PG", dataSourceId: "ds-pg", sql: "SELECT 1" },
+      { id: "eng", name: "Engine", dataSourceId: "ds-engine", engine: { viewId: "v1" } },
+    ],
+    pages: [{ id: "p1", size: "A4", orientation: "portrait", blocks: [] }],
+  });
+
+  it("does not run engine queries: a system warm-up has no one to answer for, and an admin's view is not what a reader gets", async () => {
+    findFirst.mockResolvedValue({ id: "r1", definition: withEngine });
+    findSources.mockResolvedValue([{ id: "ds-engine" }]);
+    runWithProof.mockResolvedValue({ dataset: { pg: [{ a: 1 }] }, provenance: {} });
+    await warmRunReport({ tenantId: "t1", reportId: "r1", userId: "u1" });
+    expect(runWithProof.mock.calls[0][0].report.dataSources.map((q: any) => q.id)).toEqual(["pg"]);
+    expect(findSources.mock.calls[0][0].where).toMatchObject({ tenantId: "t1", kind: "engine" });
+  });
+
+  it("keeps no engine rows in what it records, even if some slipped through", async () => {
+    findFirst.mockResolvedValue({ id: "r1", definition: withEngine });
+    findSources.mockResolvedValue([{ id: "ds-engine" }]);
+    runWithProof.mockResolvedValue({
+      dataset: { pg: [{ a: 1 }], eng: [{ secret: "x" }] },
+      provenance: { pg: { dataSourceKind: "postgres", rowCount: 1 }, eng: { dataSourceKind: "engine", rowCount: 1, dataHash: "h" } },
+    });
+    await warmRunReport({ tenantId: "t1", reportId: "r1" });
+    const row = create.mock.calls[0][0].data;
+    expect(JSON.parse(row.dataset)).toEqual({ pg: [{ a: 1 }], eng: [] });
+    expect(row.dataset + row.provenance).not.toContain("secret");
+  });
+
+  it("a report with no engine queries is run whole, as before", async () => {
+    findFirst.mockResolvedValue({ id: "r1", definition });
+    runWithProof.mockResolvedValue({ dataset: {}, provenance: {} });
+    await warmRunReport({ tenantId: "t1", reportId: "r1" });
+    expect(runWithProof.mock.calls[0][0].report.dataSources).toEqual([]);
+  });
 });
 
 describe("a successful warm run", () => {

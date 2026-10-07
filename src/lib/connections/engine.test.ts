@@ -3,6 +3,7 @@ import {
   decodeEngineConnection,
   encodeEngineConnection,
   engineBaseUrlError,
+  engineUrlPolicy,
   maskEngineConnectionForClient,
   resolveEngineTarget,
 } from "./engine";
@@ -55,14 +56,51 @@ describe("engine URL policy for a workspace's own URL", () => {
     expect(await engineBaseUrlError("not a url")).toMatch(/valid URL/);
   });
 
-  it("allows a public address", async () => {
-    expect(await engineBaseUrlError("http://93.184.216.34:8080")).toBe("");
+  it("allows a public address over https", async () => {
+    expect(await engineBaseUrlError("https://93.184.216.34:8443")).toBe("");
   });
 
-  it("lets an internal host through only when the operator allow-listed that host", async () => {
+  it("refuses plain http outside the operator's own network, so the token never crosses the internet in the clear", async () => {
+    expect(await engineBaseUrlError("http://93.184.216.34:8080")).toMatch(/https/);
+    expect(engineUrlPolicy("http://engine.example.com")).toMatchObject({ ok: false });
+  });
+
+  it("lets an internal host through only when the operator allow-listed that host, and then http is fine", async () => {
     expect(await engineBaseUrlError("http://engine.internal:8080")).not.toBe("");
     process.env.CURF_ENGINE_ALLOWED_HOSTS = "Other.internal, ENGINE.internal";
     expect(await engineBaseUrlError("http://engine.internal:8080")).toBe("");
     expect(await engineBaseUrlError("http://not-listed.internal:8080")).not.toBe("");
+  });
+
+  it("accepts an address and nothing else: no path, query or fragment, however it is spelled", async () => {
+    process.env.CURF_ENGINE_ALLOWED_HOSTS = "engine.internal";
+    for (const url of [
+      "http://engine.internal:9200/_cluster/settings", "http://engine.internal:5000/admin", "http://engine.internal:9200/_cluster/settings#",
+      "http://engine.internal:5000?x=", "http://engine.internal:5000/?x=1", "http://engine.internal:5000#", "http://engine.internal:5000/?",
+      "https://engine.example.com/engine-prefix", "https://engine.example.com/a/..%2fb",
+    ]) {
+      expect(engineUrlPolicy(url), url).toMatchObject({ ok: false });
+      expect(await engineBaseUrlError(url), url).not.toBe("");
+    }
+    for (const url of ["http://engine.internal:5000", "http://engine.internal:5000/", "https://engine.example.com", "https://engine.example.com/"]) {
+      expect(engineUrlPolicy(url), url).toMatchObject({ ok: true });
+    }
+  });
+
+  it("an allow-list entry with a port reaches that port only; one without a port reaches any", () => {
+    process.env.CURF_ENGINE_ALLOWED_HOSTS = "engine.internal:8080, other.internal";
+    expect(engineUrlPolicy("http://engine.internal:8080")).toEqual({ ok: true, trusted: true });
+    expect(engineUrlPolicy("http://engine.internal:9200")).toMatchObject({ ok: false }); // not listed, so it is untrusted, and http
+    expect(engineUrlPolicy("https://engine.internal:9200")).toEqual({ ok: true, trusted: false });
+    expect(engineUrlPolicy("http://other.internal:9200")).toEqual({ ok: true, trusted: true });
+    expect(engineUrlPolicy("https://engine.internal")).toEqual({ ok: true, trusted: false }); // default port 443 is not 8080
+  });
+});
+
+describe("what is stored", () => {
+  it("is the normalised address, so what is later requested is what was checked", () => {
+    expect(JSON.parse(encodeEngineConnection({ baseUrl: "HTTPS://Engine.Example.COM:443/" })).baseUrl).toBe("https://engine.example.com");
+    expect(JSON.parse(encodeEngineConnection({ baseUrl: "http://engine.internal:80" })).baseUrl).toBe("http://engine.internal");
+    expect(JSON.parse(encodeEngineConnection({ baseUrl: "https://e.example:8443" })).baseUrl).toBe("https://e.example:8443");
   });
 });

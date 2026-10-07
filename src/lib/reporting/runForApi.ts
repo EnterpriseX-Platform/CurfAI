@@ -17,6 +17,7 @@ import { prisma } from "@/lib/db";
 import { ReportSchema, type Report } from "@/lib/reporting/schema";
 import { runReportWithProof, type RunResult, type RunViewer } from "@/lib/reporting/runner";
 import { visibleReport } from "@/lib/reporting/visibleReport";
+import { snapshotOf } from "@/lib/reporting/runSnapshot";
 import { parseParams } from "@/lib/reporting/params";
 import { getUserRoles, reportWhere, type CurfSessionUser } from "@/lib/auth";
 import { ensureLimit } from "@/lib/rateLimit";
@@ -87,8 +88,8 @@ export async function runReportForApi(
 
     // Time-travel: snapshot the dataset + provenance for replay on /history.
     // Cap snapshot size at 2 MB so we don't balloon the DB on huge exports.
-    const datasetJson = JSON.stringify(dataset);
-    const snapshot = datasetJson.length < 2_000_000 ? datasetJson : null;
+    // Engine data is answered per person and must not be replayed to someone else: snapshotOf() leaves it out.
+    const snapshot = snapshotOf(dataset, provenance);
     const outcome = runOutcome(provenance, withheld);
     await (prisma as any).reportRun.create({
       data: {
@@ -100,8 +101,8 @@ export async function runReportForApi(
         status: outcome.status,
         error: outcome.error ?? null,
         durationMs: Date.now() - started,
-        dataset: snapshot,
-        provenance: snapshot ? JSON.stringify(provenance) : null,
+        dataset: snapshot.dataset,
+        provenance: snapshot.provenance,
       },
     }).catch(() => null);
 

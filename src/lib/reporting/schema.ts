@@ -32,40 +32,49 @@ export type Parameter = z.infer<typeof ParameterSchema>;
 
 // ---------- Data sources (named queries within a report) ----------
 
+/** A value in an engine query, or a reference to a report parameter filled in when the report runs. */
+const EngineValueSchema = z.union([z.string().max(1000), z.number(), z.boolean(), z.null(), z.object({ $param: z.string().min(1).max(100) }).strict()]);
+const EngineName = z.string().min(1).max(255);
+
 /**
- * A named query inside a report. Two shapes, picked at runtime by the
+ * What a query on a Java-engine data source asks of a published view. Bounded, because a saved definition is
+ * data a person controls: a query is not a way to send the engine arbitrarily large requests.
+ */
+export const EngineQuerySchema = z.object({
+  // Empty while the author has added the query but not yet chosen a view: a draft must be savable. Running it says
+  // so (runner.ts: "names no view to read"); the engine is never asked.
+  viewId: z.string().max(100),
+  columns: z.array(EngineName).max(200).optional(),
+  filters: z.array(z.object({
+    column: EngineName,
+    op: z.enum(["EQ", "NE", "GT", "GE", "LT", "LE", "IN", "NOT_IN", "LIKE", "BETWEEN", "IS_NULL", "IS_NOT_NULL"]),
+    value: EngineValueSchema.optional(),
+    values: z.array(EngineValueSchema).max(1000).optional(),
+    /** Drop this filter when its parameter is blank ("blank means no filter"). */
+    skipIfEmpty: z.boolean().optional(),
+  })).max(50).optional(),
+  groupBy: z.array(EngineName).max(20).optional(),
+  aggregates: z.array(z.object({
+    fn: z.enum(["COUNT", "SUM", "AVG", "MIN", "MAX"]),
+    column: EngineName.optional(),
+    as: EngineName.optional(),
+  })).max(20).optional(),
+  orderBy: z.array(z.object({ column: EngineName, descending: z.boolean().optional() })).max(20).optional(),
+  /** No more than the runner's own row cap (QUERY_ROW_CAP). */
+  limit: z.number().int().positive().max(200_000).optional(),
+});
+export type EngineQuery = z.infer<typeof EngineQuerySchema>;
+
+/**
+ * A named query inside a report. Three shapes, picked at runtime by the
  * kind of the DataSource row it points at:
  *   - SQL sources (sqlite/postgres/...): use sql with :param placeholders.
  *   - REST sources: use method/path (with :param in path), optional body
  *     template (JSON string with {{param.x}} tokens), and jsonPath to pluck
  *     the rows array out of the response (e.g. "$.data.items").
+ *   - Java engine sources: use `engine` (a view and what to ask of it), never SQL.
  * Only the fields relevant to the chosen kind need to be set; others are ignored.
  */
-/** A value in an engine query, or a reference to a report parameter filled in when the report runs. */
-const EngineValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), z.object({ $param: z.string().min(1) }).strict()]);
-
-export const EngineQuerySchema = z.object({
-  viewId: z.string().min(1),
-  columns: z.array(z.string().min(1)).optional(),
-  filters: z.array(z.object({
-    column: z.string().min(1),
-    op: z.enum(["EQ", "NE", "GT", "GE", "LT", "LE", "IN", "NOT_IN", "LIKE", "BETWEEN", "IS_NULL", "IS_NOT_NULL"]),
-    value: EngineValueSchema.optional(),
-    values: z.array(EngineValueSchema).optional(),
-    /** Drop this filter when its parameter is blank ("blank means no filter"). */
-    skipIfEmpty: z.boolean().optional(),
-  })).optional(),
-  groupBy: z.array(z.string().min(1)).optional(),
-  aggregates: z.array(z.object({
-    fn: z.enum(["COUNT", "SUM", "AVG", "MIN", "MAX"]),
-    column: z.string().min(1).optional(),
-    as: z.string().min(1).optional(),
-  })).optional(),
-  orderBy: z.array(z.object({ column: z.string().min(1), descending: z.boolean().optional() })).optional(),
-  limit: z.number().int().positive().optional(),
-});
-export type EngineQuery = z.infer<typeof EngineQuerySchema>;
-
 export const DataSourceDefSchema = z.object({
   id: z.string(),
   name: z.string(),

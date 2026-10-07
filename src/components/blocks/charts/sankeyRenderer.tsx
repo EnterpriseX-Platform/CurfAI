@@ -222,8 +222,9 @@ function SankeyFlows({ ctx }: { ctx: ChartRenderCtx }) {
                 fontWeight={500}
                 fill={NAME_FILL}
               >
-                {/* Both sides shortened: a long right-hand name ran off the frame when enlarged (2026-10-03). */}
-                {clip(n.name, oneLine ? (labelOnRight ? 14 : 9) : 20)}
+                {/* Both sides shortened: a long right-hand name ran off the frame when enlarged (2026-10-03).
+                    A thin right-hand node shares its line with the amount, so the name gets what that leaves. */}
+                {clip(n.name, oneLine ? (labelOnRight ? Math.min(14, Math.max(5, Math.floor((88 - 5 * amount.length) / 5.6))) : 9) : 20)}
                 {oneLine && <tspan dx={6} fontSize={9} fontWeight={400} fill={LABEL_FILL}>{amount}</tspan>}
                 <desc className="chart-tip">{`${n.name}: ${amount}${drillsIn && text.drillIn ? `\n${text.drillIn}` : ""}`}</desc>
               </text>

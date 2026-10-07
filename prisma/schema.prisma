@@ -242,6 +242,7 @@ model Tenant {
   dataSources              DataSource[]
   schedules                Schedule[]
   roles                    Role[]
+  userAttributes           UserAttribute[]
   actionRuns               ActionRun[]
   reportRuns               ReportRun[]
   reportVersions           ReportVersion[]
@@ -315,6 +316,7 @@ model User {
   schedules         Schedule[]         @relation("ScheduleCreatedBy")
   versions          ReportVersion[]    @relation("ReportVersionCreatedBy")
   comments          Comment[]          @relation("CommentAuthor")
+  attributes        UserAttribute[]
   memberships       Membership[]
   orgMemberships    OrgMembership[]
 }
@@ -540,6 +542,25 @@ model Role {
 
   @@unique([tenantId, slug])
   @@index([tenantId])
+}
+
+// What a person holds for the Java engine's row rules, such as agency_code = "A001": the engine shows them only the
+// rows whose column holds one of their values. Curf is the source of truth; lib/engine/attributes.ts sends it to the
+// engine (its entitlement table) whenever it changes, and reports any drift. A person may hold several values.
+model UserAttribute {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // The engine's rule for an attribute name: a letter, then letters, digits and underscores (max 64).
+  name      String
+  value     String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, userId, name, value])
+  @@index([tenantId, name])
+  @@index([tenantId, userId])
 }
 
 model ActionRun {

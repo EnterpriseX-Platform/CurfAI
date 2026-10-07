@@ -5,6 +5,7 @@ import { getSession, getUserRoles } from "@/lib/auth";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { runReportWithProof, type RunViewer } from "@/lib/reporting/runner";
 import { visibleReport } from "@/lib/reporting/visibleReport";
+import { snapshotOf } from "@/lib/reporting/runSnapshot";
 import { ee } from "@/ee";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { ReportViewerShell } from "./ReportViewerShell";
@@ -195,8 +196,8 @@ export default async function ViewerPage({
     // Snapshot up to 2 MB — larger datasets get metadata only.
     if (!print) {
       try {
-        const datasetJson = JSON.stringify(dataset);
-        const snapshot = datasetJson.length < 2_000_000 ? datasetJson : null;
+        // Engine data is answered per person and must not be replayed to someone else: snapshotOf() leaves it out.
+        const snapshot = snapshotOf(dataset, provenance);
         // A load that threw, or in which a query didn't run, must not be recorded as a
         // healthy "completed" snapshot: it would become the day's latest KPI-history point
         // and the next run's "previous" value (see runOutcome).
@@ -212,8 +213,8 @@ export default async function ViewerPage({
             status: outcome.status,
             error: outcome.error ?? null,
             durationMs: Date.now() - started,
-            dataset: snapshot,
-            provenance: snapshot ? JSON.stringify(provenance) : null,
+            dataset: snapshot.dataset,
+            provenance: snapshot.provenance,
             userId: sessionUser?.id ?? null,
           },
         });

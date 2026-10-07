@@ -947,7 +947,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
           })
         ) : chartType === "sankey" ? (
           renderSankeyChart({
-            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, emptyText: t("chart.sankeyNoFlows"), text: { all: t("chart.drill.all"), drillIn: t("chart.drill.in") },
+            data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, emptyText: t("chart.sankeyNoFlows"), text: { all: t("chart.drill.all"), drillIn: t("chart.drill.in"), target: t("chart.target") },
             handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
           })
         ) : chartType === "boxplot" ? (

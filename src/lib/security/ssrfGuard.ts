@@ -109,6 +109,16 @@ function expandIpv6(ip: string): number[] | null {
 }
 
 /**
+ * True when `address` (a literal IPv4 or IPv6 address, as a socket would see it) is private, loopback,
+ * link-local, metadata or otherwise reserved. For callers that check the address a connection is really about
+ * to use (lib/security/pinnedFetch.ts) instead of resolving the name a second time.
+ */
+export function isBlockedAddress(address: string): boolean {
+  const bare = address.replace(/^\[|\]$/g, "");
+  return ipv4ToInt(bare) != null ? isBlockedIpv4(bare) : isBlockedIpv6(bare);
+}
+
+/**
  * Throws if `hostname` is (or resolves to) a private/reserved address.
  * Protocol-agnostic — the actual guard logic behind assertPublicHttpUrl()
  * below, extracted so a non-HTTP outbound connection (SFTP's host, e.g.)

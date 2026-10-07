@@ -1346,7 +1346,7 @@ components:
         details: { type: [string, "null"], description: JSON text. Never contains secrets. }
     ConnectionKind:
       type: string
-      enum: [POSTGRESQL, MYSQL, MARIADB, ORACLE, SQLSERVER]
+      enum: [POSTGRESQL, MYSQL, MARIADB, ORACLE, SQLSERVER, TRINO]
     TlsMode:
       type: string
       enum: [VERIFY, REQUIRE, DISABLE]

@@ -617,7 +617,7 @@ function GridHeatmap({ rows, cfg }: { rows: Record<string, unknown>[]; cfg: any 
                 <text x={CELL_W / 2} y={CELL_H / 2 + 3} textAnchor="middle" fontSize={10}
                   fill={Math.abs(v) / maxAbs > 0.6 ? "white" : "#334155"} fontWeight={500}>
                   {/* A cell holds a few characters: the short form (฿118K), the exact one is in its title. */}
-                  {formatMetricCompact(v, cfg.format ?? "compact", currency)}
+                  {formatMetricCompact(v, cfg.format ?? "compact", currency, dateStyle.locale)}
                 </text>
               )}
             </g>

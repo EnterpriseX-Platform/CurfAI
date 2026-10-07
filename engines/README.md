@@ -51,23 +51,57 @@ the `engine` field of the report's query, the same format the engine's own repor
 person running the report, so the engine's row rules and personal-data masking decide what comes back.
 
 - **Identity.** Curf signs a one-minute RS256 token per query (`src/lib/engine/identity.ts`) naming the person
-  (`sub`), the workspace (`tenant`) and their roles (`realm_access.roles`: Curf's custom role slugs pass through, an
-  admin is `curf-admin` inside that workspace only, everyone else `curf-viewer`). The engine fetches the public key
-  from `GET <curf>/api/engine/jwks`. Engine settings:
+  (`sub`), the workspace (`tenant`) and their roles (`realm_access.roles`). Curf's custom role slugs pass through,
+  because a view's `allowedRoles` / `piiRoles` name them, **except the engine's own names**: `curf-*` and `public`
+  are dropped, so a custom role cannot be called `curf-approver` to gain the engine's permissions. An admin is
+  `curf-admin` inside that workspace only, everyone else `curf-viewer`. The token's `aud` is the engine's own
+  address unless the connection sets one (configure the engine's audience to match to make a token useless at any
+  other engine). The engine fetches the public key set from `GET <curf>/api/engine/jwks`. Engine settings:
   `CURF_ENGINE_SECURITY_ISSUERS_0_ISSUER=<CURF_ENGINE_ISSUER>`, `..._JWKSETURI=<curf>/api/engine/jwks`,
   `CURF_ENGINE_SECURITY_CLAIMS_TENANT=tenant`. Curf's side: `CURF_ENGINE_SIGNING_KEY` (see `.env.example`).
+  **Rotating the key:** set the new key, move the old one to `CURF_ENGINE_SIGNING_KEY_PREVIOUS`; both are published,
+  only the new one signs, so tokens in flight stay valid. Remove the old one a few minutes later.
 - **Where the engine is.** One platform engine (`CURF_ENGINE_URL`) serves every workspace, which the tenant claim
   keeps apart; or a workspace gives a data source its own engine URL (an engine inside its own network). A
-  workspace's URL must be public like any other outbound URL, unless the operator lists its host in
-  `CURF_ENGINE_ALLOWED_HOSTS`. The platform URL is operator configuration and trusted as written.
-- **Who holds which attribute.** Curf does not send row-rule attributes (an agency code): they come from the
-  engine's entitlement table (`PUT /engine/v1/policies/entitlements`, keyed by the Curf user id), or from a token
-  claim when one is added.
-- **Not cached, not anonymous.** Engine answers are per person, so Curf never puts them in its shared query cache,
-  and an anonymous or system run of an engine query returns nothing with a reason.
-- **What is not there yet.** The report designer has no editor for engine queries (a definition is saved through the
-  API); REST sources and cross-source joins stay on Curf's own runner; the engine's own report store, exports and
-  schedules are not used by Curf, which keeps its own.
+  workspace's URL is an address and nothing more (no path, query or credentials), must be `https`, and must be
+  public: the connection checks the address it is really about to use, so a DNS answer that changes between the
+  check and the connection has nothing to flip. The operator may list hosts in `CURF_ENGINE_ALLOWED_HOSTS`
+  (`host` or `host:port`) for an engine on the same network, and a listed host may use `http`. The platform URL is
+  operator configuration and trusted as written. Answers are read up to 32 MB.
+- **Who holds which attribute: Curf is the source of truth.** What a person holds for a row rule (an agency code, a
+  region) is kept in Curf (`UserAttribute`, one row per person, attribute name and value) and edited in the admin
+  console's *People & access* tab, one person at a time or imported from a spreadsheet. A change is written through
+  to the engine's entitlement table at once (`PUT /engine/v1/policies/entitlements`, keyed by the Curf user id, which
+  is the `sub` of the token), to every engine the workspace uses. The engine's entitlement API *replaces*, so
+  Curf sends a person's complete set for an attribute, and an empty set removes it. A *drift check* lists who is
+  missing on the engine (they would see too little) and who is extra there (they might see rows Curf would not give
+  them), and *Sync now* makes the engine match, sending only what differs. A person with no value for an attribute
+  a view's rule names sees **no rows**, never all rows.
+- **One console.** An admin manages an engine from `/connections/engine/<id>` and never meets the engine's API:
+  *Status* (a connection test that says which step fails and what to change — reachable, accepts Curf's token,
+  the right workspace, how many views), *People & access*, *Views* (create from a table or a SELECT, choose
+  masking per column, who may query, row rules, publish) and *Databases* (the engine's own connections to the
+  customer's databases, with a read-only check). The screens call the engine through one guarded proxy
+  (`/api/engine/admin/…`) that allows a fixed list of paths and methods, only for admins, and audits every change
+  (method and path, never the body: a connection holds a password).
+- **Building a report.** In the report designer, a query on an engine data source has its own editor (no SQL): pick a
+  view, choose columns, filters (bound to report parameters, or ignored when empty), totals, sort and a preview as
+  yourself. *Describe what you want* proposes a query from a sentence: the model sees only the catalogue of views
+  and columns the person may use (and which are masked for them), never data, and its answer is checked in code
+  against that catalogue before it can be used.
+- **Public (anonymous) access is explicit, per view.** A visitor with no account (a public link, an embed) reaches
+  the engine as the reserved role `public` and nothing else. The engine serves them only views whose allowed roles
+  include `public`, and it refuses to save such a view if it has row rules or an unmasked column that looks like
+  personal data. Any other view answers "not available". Nothing is public by default or by side effect.
+- **Not cached, not stored.** Engine answers are per person, so Curf never puts them in its shared query cache and
+  never keeps them in a saved run (`ReportRun`: replay, history, diff, watchers and the Brief read those and show
+  them to other people; a test fails any new write path that skips `snapshotOf()`). A run as the system (no person
+  to answer for) returns nothing with a reason. A watcher on engine data therefore checks the rows it has now,
+  without a stored baseline to diff against.
+- **What is not there yet.** REST sources and cross-source joins stay on Curf's own runner; the engine's own report
+  store, exports and schedules are not used by Curf, which keeps its own. AI features that send sample rows to a
+  model provider (chart suggestions, summaries) send an engine report's rows as the person may see them; there is
+  no per-connection "never send to AI" switch yet.
 
 ## Sharing and publishing
 

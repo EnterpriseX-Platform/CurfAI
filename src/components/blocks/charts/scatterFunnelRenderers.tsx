@@ -34,17 +34,23 @@ import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, GRID_STROKE, LE
  * value LabelList below is also showing, so the two don't overlap.
  */
 function FunnelCenteredLabel(props: any) {
-  const { x, y, width, height, value, dyOffset } = props;
+  const { x, y, width, height, value, dyOffset, light } = props;
   if (typeof x !== "number" || typeof y !== "number" || typeof width !== "number" || typeof height !== "number") {
     return null;
   }
+  // White on the palest segments, or spilling out of a narrow one, vanished into
+  // the card: those labels are dark with a white halo, readable on either ground.
+  const dark = light || String(value ?? "").length * 6.4 > width;
   return (
     <text
       x={x + width / 2}
       y={y + height / 2 + dyOffset}
       textAnchor="middle"
       dominantBaseline="middle"
-      fill="#ffffff"
+      fill={dark ? "#0f172a" : "#ffffff"}
+      stroke={dark ? "#ffffff" : undefined}
+      strokeWidth={dark ? 3 : undefined}
+      paintOrder="stroke"
       fontSize={11}
       fontWeight={600}
     >
@@ -59,6 +65,11 @@ export function renderScatterChart(ctx: ChartRenderCtx): ReactElement {
   const numOpts = { locale: ctx.dateStyle?.locale };
   const yTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
   const tooltipFormatter = seriesTooltip(ctx, true);
+  // colorField splits the dots into one series per group (a region), each in its own
+  // palette colour and named in the legend; without it every dot is one series.
+  const groups = cfg.colorField
+    ? Array.from(new Set((data as any[]).map((r) => String(r?.[cfg.colorField] ?? ""))))
+    : null;
   // Scatter / bubble. xField = x, yFields[0] = y, optional sizeField
   // drives the bubble size via ZAxis.
   return (
@@ -74,13 +85,25 @@ export function renderScatterChart(ctx: ChartRenderCtx): ReactElement {
       {renderReferenceLines()}
       {renderAnnotations()}
       {renderForecastDecor()}
-      <Scatter
-        data={data as any[]}
-        fill={palette[0]}
-        fillOpacity={0.7}
-        isAnimationActive={!print}
-        animationDuration={700}
-      />
+      {groups ? groups.map((g, i) => (
+        <Scatter
+          key={g}
+          name={g}
+          data={(data as any[]).filter((r) => String(r?.[cfg.colorField] ?? "") === g)}
+          fill={palette[i % palette.length]}
+          fillOpacity={0.7}
+          isAnimationActive={!print}
+          animationDuration={700}
+        />
+      )) : (
+        <Scatter
+          data={data as any[]}
+          fill={palette[0]}
+          fillOpacity={0.7}
+          isAnimationActive={!print}
+          animationDuration={700}
+        />
+      )}
     </ScatterChart>
   );
 }
@@ -110,12 +133,21 @@ function funnelSegmentColor(name: unknown, index: number, total: number, ramp: s
   return stops[Math.min(stops.length - 1, Math.max(0, i))];
 }
 
+/** A #rrggbb fill pale enough that white text on it is unreadable. */
+function isLightFill(color: string | undefined): boolean {
+  const m = /^#([0-9a-f]{6})$/i.exec(color ?? "");
+  if (!m) return false;
+  const n = parseInt(m[1]!, 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.72;
+}
+
 export function renderFunnelChart(ctx: ChartRenderCtx): ReactElement {
   const { data, xField, yFields, palette, fmt, currency, print, showDataLabels, ramp, semantic } = ctx;
 
   const numOpts = { locale: ctx.dateStyle?.locale };
   const tooltipFormatter = seriesTooltip(ctx, true);
   const rows = data as any[];
+  const fills = rows.map((d, i) => funnelSegmentColor(d[xField], i, rows.length, ramp ?? palette, semantic));
   // Funnel. yFields[0] is the stage size; rows render top-to-bottom
   // in the order they arrive (so the SQL author controls ordering).
   return (
@@ -124,14 +156,14 @@ export function renderFunnelChart(ctx: ChartRenderCtx): ReactElement {
       <Funnel
         data={rows.map((d, i) => ({
           ...d,
-          fill: funnelSegmentColor(d[xField], i, rows.length, ramp ?? palette, semantic),
+          fill: fills[i],
         }))}
         dataKey={yFields[0]}
         nameKey={xField}
         isAnimationActive={!print}
         animationDuration={700}
       >
-        <LabelList dataKey={xField} content={<FunnelCenteredLabel dyOffset={showDataLabels ? -7 : 0} />} />
+        <LabelList dataKey={xField} content={(p: any) => <FunnelCenteredLabel {...p} dyOffset={showDataLabels ? -7 : 0} light={isLightFill(fills[p.index])} />} />
         {showDataLabels && (
           // compact: false — this label sits inside its own segment, not a
           // 56px axis gutter; a reader looking at one segment's number wants

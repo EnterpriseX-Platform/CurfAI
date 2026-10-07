@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { resolveEngineFilters, rowsFromEngineResult, runEngineQuery } from "./client";
 
-const target = { baseUrl: "http://93.184.216.34:8080", source: "workspace" as const };
+// The platform's own engine goes over a plain connection (operator-trusted), which these tests stub; the workspace
+// transport rules are in engineCall.test.ts and pinnedFetch.test.ts.
+const target = { baseUrl: "http://93.184.216.34:8080", source: "platform" as const };
 const viewer = { id: "u1", isAdmin: false, roles: ["analyst"] };
 const query = { viewId: "v1", columns: ["id", "name"], orderBy: [{ column: "id" }], limit: 10 };
 

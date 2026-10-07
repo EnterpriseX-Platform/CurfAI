@@ -587,8 +587,12 @@ async function runOnRest(ds: DataSourceDef, dsRow: { connection: string; readOnl
 
 /**
  * Runs a query on the Java engine (lib/engine/client.ts) as the viewer. The engine answers per person — their
- * row rules and masking — so a run with nobody to speak for (a system job, an anonymous public link) must not
- * borrow someone's identity or see unfiltered data: it fails with a message instead.
+ * row rules and masking — so a run with nobody to speak for (a system job) must not borrow someone's identity or
+ * see unfiltered data: it fails with a message instead.
+ *
+ * An anonymous visitor (a public link, an embed) is the engine's `public` role and nothing else: the engine
+ * serves them only the views someone explicitly marked public — which it has checked carry no row rules and no
+ * unmasked personal data — and answers "not available" for any other view.
  */
 async function runOnEngine(
   ds: DataSourceDef,
@@ -597,17 +601,16 @@ async function runOnEngine(
   viewer: RunViewer | undefined,
   tenantId: string,
 ): Promise<Row[]> {
-  if (!ds.engine) throw new Error(`Engine query "${ds.name}" names no view to read.`);
-  if (!viewer || viewer.id === ANONYMOUS_VIEWER.id) {
-    throw new Error("Engine data is answered per person: it cannot run anonymously or as the system.");
-  }
+  if (!ds.engine || !ds.engine.viewId) throw new Error(`Engine query "${ds.name}" names no view to read.`);
+  if (!viewer) throw new Error("Engine data is answered per person: it cannot run as the system.");
   let target;
   try {
     target = resolveEngineTarget(decodeEngineConnection(dsRow.connection));
   } catch (e: any) {
     throw new Error(`Engine DataSource "${ds.dataSourceId}" has invalid connection: ${e?.message ?? "unknown error"}`);
   }
-  return runEngineQuery({ target, viewer, tenantId, query: ds.engine, params });
+  const engineViewer = viewer.id === ANONYMOUS_VIEWER.id ? { id: ANONYMOUS_VIEWER.id, isAdmin: false, roles: [], anonymous: true } : viewer;
+  return runEngineQuery({ target, viewer: engineViewer, tenantId, query: ds.engine, params });
 }
 
 // ---------- Top-level dispatch ----------

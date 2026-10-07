@@ -7,7 +7,8 @@ import { useT } from "@/lib/i18n/LocaleContext";
  * Non-admin users see the list but not the mutation buttons.
  */
 import { useEffect, useRef, useState } from "react";
-import { Trash2, Database, Layers, Globe, RefreshCw, Pencil, X as CloseIcon, FileSpreadsheet, Lock, Users as UsersIcon, User as UserIcon } from "lucide-react";
+import Link from "next/link";
+import { Trash2, Database, Layers, Settings2, Globe, RefreshCw, Pencil, X as CloseIcon, FileSpreadsheet, Lock, Users as UsersIcon, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/lib/toast";
 import { ConnectionForm } from "@/components/connections/ConnectionForm";
@@ -132,7 +133,7 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
                 <th className="px-4 py-2.5 text-left font-medium">{t("connections.kindHeader")}</th>
                 <th className="px-4 py-2.5 text-left font-medium">{t("connections.endpointHeader")}</th>
                 <th className="px-4 py-2.5 text-left font-medium">{t("connections.visibilityHeader")}</th>
-                <th className="w-24" />
+                <th className="w-auto" />
               </tr>
             </thead>
             <tbody>
@@ -176,6 +177,14 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
                             title={t("connections.excelRefreshTitle")}
                           >
                             <RefreshCw className={`h-4 w-4 ${refreshingId === it.id ? "animate-spin" : ""}`} />
+                          </Button>
+                        )}
+                        {it.kind === "engine" && (
+                          <Button asChild size="sm" variant="outline" className="mr-1">
+                            <Link href={`/connections/engine/${it.id}`}>
+                              <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              {t("engineAdmin.manage")}
+                            </Link>
                           </Button>
                         )}
                         {it.kind !== "excel" && (

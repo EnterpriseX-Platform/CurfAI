@@ -1,20 +1,30 @@
 /**
- * Runs one Curf query on the Java engine, as the person asking.
+ * Everything Curf says to the Java engine, as the person asking.
  *
- * A query on an engine data source names a published *view* plus structured parts (columns, filters, grouping,
- * aggregates, ordering, limit) — never SQL. The engine applies the caller's row rules and personal-data masking
- * before any of it, so what comes back is exactly what that person may see. Everything the engine says about a
- * refusal ends up in the message the runner stores in the query's provenance, so messages here are short,
- * and never carry the token.
+ * `engineCall` is the one place a request leaves for an engine: it checks the URL rules, picks a connection that
+ * can only reach a public address (unless the operator trusts the host), signs a one-minute token for this
+ * person and workspace, applies a timeout, never follows a redirect, and retries once when the engine says it
+ * is busy. Every feature that talks to an engine (queries, the view catalogue, the connection test, view and
+ * policy administration) goes through it, so the security rules live here once.
  *
- * The request is POST {engine}/engine/v1/queries/execute with `viewId` (engines/contracts/engine-v1.openapi.yaml).
+ * `runEngineQuery` is the report path: a query on an engine data source names a published *view* plus structured
+ * parts (columns, filters, grouping, aggregates, ordering, limit) — never SQL. The engine applies the caller's row
+ * rules and personal-data masking before any of it, so what comes back is exactly what that person may see.
+ * Messages here are short and never carry the token; the runner stores them in the query's provenance.
+ *
+ * Contract: engines/contracts/engine-v1.openapi.yaml.
  */
 import type { Row } from "@/lib/reporting/interpolate";
 import type { EngineQuery } from "@/lib/reporting/schema";
 import { mintEngineToken, type EngineViewer } from "@/lib/engine/identity";
-import { engineBaseUrlError, type EngineTarget } from "@/lib/connections/engine";
+import { engineUrlPolicy, type EngineTarget } from "@/lib/connections/engine";
+import { pinnedPublicFetch } from "@/lib/security/pinnedFetch";
 
 export const ENGINE_REQUEST_TIMEOUT_MS = 30_000;
+/** When the engine says it is busy, wait this long at most before the single retry. */
+export const ENGINE_RETRY_MAX_WAIT_MS = 2_000;
+/** The most of an engine's answer Curf will read. Curf's own row cap (200,000 rows) fits well inside it. */
+export const ENGINE_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 type ParamRef = { $param: string };
 const isParamRef = (v: unknown): v is ParamRef =>
@@ -55,7 +65,8 @@ export function rowsFromEngineResult(result: { columns?: Array<{ name: string }>
   });
 }
 
-async function problemMessage(res: Response): Promise<string> {
+/** The engine's own explanation of a refusal (RFC 9457), first message only and kept short. */
+export async function engineProblemMessage(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { detail?: string; errors?: Array<{ message?: string }> };
     const first = body.errors?.[0]?.message;
@@ -65,6 +76,119 @@ async function problemMessage(res: Response): Promise<string> {
   }
 }
 
+export type EngineFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal }) => Promise<Response>;
+
+const plainFetch: EngineFetch = (url, init) => fetch(url, { ...init, redirect: "manual" });
+const pinnedFetch: EngineFetch = (url, init) => pinnedPublicFetch(url, { ...init, maxBytes: ENGINE_MAX_RESPONSE_BYTES });
+
+/**
+ * An engine's answer as JSON, refusing one larger than `maxBytes` instead of holding it. The pinned connection
+ * stops at its own cap while reading; a plain connection (the platform's engine, an operator-listed host) is
+ * read here, so a misbehaving engine cannot make Curf buffer more than this in a request.
+ */
+export async function engineJson(res: Response, maxBytes = ENGINE_MAX_RESPONSE_BYTES): Promise<any> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("The engine's answer is larger than Curf will read.");
+  if (!res.body) return res.json();
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("The engine's answer is larger than Curf will read.");
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function audienceOf(baseUrl: string): string | undefined {
+  try { return new URL(baseUrl).origin; } catch { return undefined; }
+}
+
+export type EngineCallOptions = {
+  target: EngineTarget;
+  viewer: EngineViewer;
+  tenantId: string;
+  path: string; // under /engine/v1, for example "/queries/execute"
+  method?: string;
+  body?: unknown;
+  timeoutMs?: number;
+  /** A read that is safe to repeat: allows one retry when the engine says it is busy. */
+  idempotent?: boolean;
+  /** For tests: replaces the transport the policy would pick. */
+  fetchImpl?: EngineFetch;
+};
+
+/**
+ * One request to the engine. Returns the response for the caller to read; throws only for what is not the engine's
+ * answer: the URL is not allowed, the engine could not be reached, or it did not answer in time.
+ */
+export async function engineCall(opts: EngineCallOptions): Promise<Response> {
+  const { target } = opts;
+
+  // Which transport: the platform's own engine, and a host the operator listed, are trusted as written; a
+  // workspace's URL goes over a connection that can only reach a public address, checked on the address it uses.
+  let transport: EngineFetch = plainFetch;
+  if (target.source === "workspace") {
+    const policy = engineUrlPolicy(target.baseUrl);
+    if (!policy.ok) throw new Error(`The engine URL is not allowed: ${policy.reason}`);
+    if (!policy.trusted) transport = pinnedFetch;
+  }
+  if (opts.fetchImpl) transport = opts.fetchImpl;
+
+  const method = (opts.method ?? "GET").toUpperCase();
+  const url = `${target.baseUrl}/engine/v1${opts.path}`;
+  const body = opts.body === undefined ? undefined : JSON.stringify(opts.body);
+  const canRetry = opts.idempotent === true || method === "GET";
+
+  for (let attempt = 0; ; attempt++) {
+    // A new token each time: one minute is plenty, and a retry should not ride on a nearly-expired one.
+    // The token names the engine it is for, by default its own address, so one captured from a workspace's own
+    // server is of no use against another engine that checks the audience. An explicit audience wins.
+    const token = mintEngineToken({ viewer: opts.viewer, tenantId: opts.tenantId, audience: target.audience ?? audienceOf(target.baseUrl) });
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+
+    let res: Response;
+    try {
+      res = await transport(url, { method, headers, body, signal: AbortSignal.timeout(opts.timeoutMs ?? ENGINE_REQUEST_TIMEOUT_MS) });
+    } catch (e: any) {
+      // Which private address a name resolved to is not for a viewer to read (it would map the internal network).
+      if (e?.code === "ESSRF") throw new Error("The engine URL is not allowed: it does not point at a public address.");
+      if (e?.name === "TimeoutError" || e?.name === "AbortError") throw new Error("The engine did not answer in time.");
+      throw new Error("The engine could not be reached.");
+    }
+    if (res.status >= 300 && res.status < 400) throw new Error("The engine answered with a redirect, which is not followed.");
+
+    if ((res.status === 429 || res.status === 503) && canRetry && attempt === 0) {
+      const asked = Number(res.headers.get("retry-after"));
+      await sleep(Math.min(Number.isFinite(asked) && asked > 0 ? asked * 1000 : 500, ENGINE_RETRY_MAX_WAIT_MS));
+      continue;
+    }
+    return res;
+  }
+}
+
+/** A short, specific message for an answer that is not a success; null when `res` is ok. */
+export async function engineStatusError(res: Response, subject = "request"): Promise<string | null> {
+  if (res.ok) return null;
+  if (res.status === 401) return "The engine did not accept Curf's identity token (check its issuer and key settings).";
+  if (res.status === 403) return "The engine does not allow this person to do that.";
+  if (res.status === 404) return "That does not exist on the engine, is not published, or is not available to you.";
+  if (res.status === 429) return "The engine is busy with your other queries. Try again in a moment.";
+  if (res.status === 503) return "The engine is not ready to answer.";
+  if (res.status === 504) return "The query ran past the engine's time limit and was cancelled.";
+  if (res.status === 422) return `The engine rejected the ${subject}: ${(await engineProblemMessage(res)) || `invalid ${subject}`}`;
+  return `The engine failed to answer (${res.status}).`;
+}
+
 export async function runEngineQuery(opts: {
   target: EngineTarget;
   viewer: EngineViewer;
@@ -72,16 +196,9 @@ export async function runEngineQuery(opts: {
   query: EngineQuery;
   params: Record<string, unknown>;
   timeoutMs?: number;
+  fetchImpl?: EngineFetch;
 }): Promise<Row[]> {
-  const { target, query } = opts;
-
-  // A workspace's own URL is re-checked on every call, so a rule that tightened after it was saved applies.
-  if (target.source === "workspace") {
-    const why = await engineBaseUrlError(target.baseUrl);
-    if (why) throw new Error(`The engine URL is not allowed: ${why}`);
-  }
-
-  const token = mintEngineToken({ viewer: opts.viewer, tenantId: opts.tenantId, audience: target.audience });
+  const { query } = opts;
   const body: Record<string, unknown> = { viewId: query.viewId };
   if (query.columns?.length) body.columns = query.columns;
   const filters = resolveEngineFilters(query.filters, opts.params);
@@ -91,29 +208,17 @@ export async function runEngineQuery(opts: {
   if (query.orderBy?.length) body.orderBy = query.orderBy;
   if (query.limit) body.limit = query.limit;
 
-  let res: Response;
-  try {
-    res = await fetch(`${target.baseUrl}/engine/v1/queries/execute`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
-      // Never follow a redirect: it could lead somewhere the URL rules did not clear.
-      redirect: "manual",
-      signal: AbortSignal.timeout(opts.timeoutMs ?? ENGINE_REQUEST_TIMEOUT_MS),
-    });
-  } catch (e: any) {
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw new Error("The engine did not answer in time.");
-    throw new Error("The engine could not be reached.");
+  const res = await engineCall({
+    target: opts.target, viewer: opts.viewer, tenantId: opts.tenantId,
+    method: "POST", path: "/queries/execute", body, idempotent: true,
+    timeoutMs: opts.timeoutMs, fetchImpl: opts.fetchImpl,
+  });
+  const problem = await engineStatusError(res, "query");
+  if (problem) {
+    // The report path keeps its own wording for the two answers a reader is most likely to meet.
+    if (res.status === 404) throw new Error("That view does not exist on the engine, is not published, or is not available to you.");
+    if (res.status === 403) throw new Error("The engine does not allow this person to run queries.");
+    throw new Error(problem);
   }
-
-  if (res.status >= 300 && res.status < 400) throw new Error("The engine answered with a redirect, which is not followed.");
-  if (res.status === 401) throw new Error("The engine did not accept Curf's identity token (check its issuer and key settings).");
-  if (res.status === 403) throw new Error("The engine does not allow this person to run queries.");
-  if (res.status === 404) throw new Error("That view does not exist on the engine, is not published, or is not available to you.");
-  if (res.status === 429) throw new Error("The engine is busy with your other queries. Try again in a moment.");
-  if (res.status === 504) throw new Error("The query ran past the engine's time limit and was cancelled.");
-  if (res.status === 422) throw new Error(`The engine rejected the query: ${(await problemMessage(res)) || "invalid request"}`);
-  if (!res.ok) throw new Error(`The engine failed to answer (${res.status}).`);
-
-  return rowsFromEngineResult(await res.json());
+  return rowsFromEngineResult(await engineJson(res));
 }

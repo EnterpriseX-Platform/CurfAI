@@ -28,6 +28,7 @@ import { prisma } from "@/lib/db";
 import { ReportSchema } from "./schema";
 import { runReportWithProof } from "./runner";
 import { runOutcome } from "@/lib/reporting/queryRunState";
+import { snapshotOf } from "@/lib/reporting/runSnapshot";
 
 export type WarmRunResult =
   | { ok: true; durationMs: number; rows: number }
@@ -62,19 +63,28 @@ export async function warmRunReport(args: {
     const pvals: Record<string, unknown> = {};
     for (const p of report.parameters) pvals[p.name] = p.default ?? "";
 
+    // Engine queries are not warmed. They answer per person (row rules, masking), so a system warm-up has no one
+    // to answer for: running them as this pseudo-admin would ask the engine for an admin's view of the data,
+    // for nothing — the result is never kept (lib/reporting/runSnapshot.ts) — and a viewer's own load runs them.
+    const engineSources = await prisma.dataSource.findMany({
+      where: { tenantId, kind: "engine", id: { in: report.dataSources.map((q) => q.dataSourceId) } },
+      select: { id: true },
+    });
+    const engineIds = new Set(engineSources.map((s) => s.id));
+    const warmable = engineIds.size === 0 ? report : { ...report, dataSources: report.dataSources.filter((q) => !engineIds.has(q.dataSourceId)) };
+
     // Warm-up runs as an admin viewer on purpose: this is a system action on
     // a report the build just created, not a read on behalf of whoever
     // happens to be looking. Row-level visibility still applies at view time,
     // when a real viewer's identity is known.
     const result = await runReportWithProof({
-      report,
+      report: warmable,
       params: pvals,
       tenantId,
       viewer: { id: userId ?? "system", isAdmin: true, roles: [] },
     });
 
-    const datasetJson = JSON.stringify(result.dataset);
-    const snapshot = datasetJson.length < 2_000_000 ? datasetJson : null;
+    const snapshot = snapshotOf(result.dataset, result.provenance);
     const rows = Object.values(result.dataset).reduce(
       (n, list) => n + (Array.isArray(list) ? list.length : 0),
       0,
@@ -91,8 +101,8 @@ export async function warmRunReport(args: {
         status: outcome.status,
         error: outcome.error ?? null,
         durationMs,
-        dataset: snapshot,
-        provenance: snapshot ? JSON.stringify(result.provenance ?? {}) : null,
+        dataset: snapshot.dataset,
+        provenance: snapshot.provenance,
         userId: userId ?? null,
       },
     });

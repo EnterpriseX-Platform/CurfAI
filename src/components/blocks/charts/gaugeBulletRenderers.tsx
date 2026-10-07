@@ -33,6 +33,7 @@ export function renderGaugeChart(ctx: ChartRenderCtx): ReactElement {
       palette={palette}
       format={(n: number) => formatValue(n, fmt, currency, numOpts)}
       semantic={semantic}
+      targetLabel={ctx.text?.target}
     />
   );
 }
@@ -54,6 +55,7 @@ export function renderBulletChart(ctx: ChartRenderCtx): ReactElement {
       format={(n: number) => formatValue(n, fmt, currency, numOpts)}
       label={cfg.subtitle}
       semantic={semantic}
+      targetLabel={ctx.text?.target}
     />
   );
 }

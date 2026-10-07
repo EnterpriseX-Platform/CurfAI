@@ -16,6 +16,7 @@
  * bundled to run inside the pod) and the viewer's quality note.
  */
 import type { Report } from "@/lib/reporting/schema";
+import { formatCell } from "@/lib/reporting/format";
 
 export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10" | "R11";
 
@@ -78,7 +79,7 @@ export const REPORT_RULES: ReportRule[] = [
     title: "A chart can be read at its size",
     ai: "Rank at most 15 categories unless asked for more; use a horizontal bar for long category names.",
     enforcement: "code+ai",
-    check: "A horizontal bar, a grid heatmap and a table get the height their rows need (a full-width heatmap or table that is taller than that is shortened); a bar with more rows than fit even at the tallest size, or a pie with more than 8 slices, is flagged for the reviewer to limit.",
+    check: "A horizontal bar, a grid heatmap and a table get the height their rows need (a full-width heatmap or table that is taller than that is shortened); a table's is worked out the way the viewer lays it out — each column its browser width, each cell's text wrapped into it, in the widest language the block carries — and a list of more than 30 rows scrolls in its card; a bar with more rows than fit even at the tallest size, or a pie with more than 8 slices, is flagged for the reviewer to limit.",
     onFail: "Height is fixed automatically; a chart still too dense is kept with a note.",
   },
   {
@@ -189,52 +190,199 @@ export function horizontalBarHeight(rows: number): number {
  * afford; a table or heatmap sized that way shows a band of empty card.
  */
 const GRID_STEP_PX = 52;
+/** Card frame around a table's scroll box (padding, title line, border: measured 54) plus the 12px gap a grid height leaves out. */
+const TABLE_CHROME_PX = 66;
+const TABLE_HEAD_PX = 37;
 const TABLE_LINE_PX = 41;
-const TABLE_CHROME_PX = 100;
+/** A wrapped cell's extra line (text-sm, 20px line height). */
+const TABLE_WRAP_PX = 20;
+/** The most rows a table is sized for: past it the list scrolls in its card instead of growing a screen tall. */
+export const TABLE_MAX_LINES = 30;
+export const TABLE_MAX_H = 28;
 /**
- * Grid rows for a table showing `rows` lines, so a list is read whole, not
- * scrolled inside its card (อบต. บ้านกลาง's "15 โครงการที่ล่าช้าที่สุด" showed
- * nine, 2026-10-03): its title and column header, then 41px a line.
+ * What the estimate adds for the browser's line breaking, which the glyph table
+ * can't reproduce exactly (Thai especially): a card a row short scrolls, one
+ * 2% tall doesn't. Measured over 56 tables in three languages, without it 3
+ * came out a grid row short; with it none.
+ */
+const TABLE_SLACK = 1.02;
+
+/**
+ * Grid rows for a table of `rows` one-line rows, from a row count alone —
+ * for callers that have no cell text yet (autoCurf's layout pass).
  */
 export function tableBlockHeight(rows = 20): number {
-  return Math.min(24, Math.max(6, Math.ceil((TABLE_CHROME_PX + TABLE_LINE_PX * rows) / GRID_STEP_PX)));
+  return Math.min(TABLE_MAX_H, Math.max(6, Math.ceil((TABLE_CHROME_PX + TABLE_HEAD_PX + TABLE_LINE_PX * Math.min(rows, TABLE_MAX_LINES)) / GRID_STEP_PX)));
 }
 
 /**
- * A wrapped cell's extra line, and a character's width in the table's own
- * font (a 34-character Thai product name wrapped in a 241px cell: ~6.5px).
+ * The page's own fonts, in px per character (measured in the browser on the
+ * seeded apps, var/r6): Instrument Sans for Latin and digits, Prompt for Thai.
+ * A Thai vowel or tone mark above/below a consonant adds little. Cells are
+ * text-sm (14px); headers 11px uppercase with letter-spacing.
  */
-const TABLE_WRAP_PX = 20;
-const TABLE_CHAR_PX = 6.6;
+type Glyph =
+  | "thai" | "mark" | "tone" | "lead" | "baht" | "wide" | "digit" | "comma" | "dot" | "percent" | "paren" | "dash" | "slash"
+  | "lowern" | "lower" | "lowerw" | "uppern" | "upper" | "upperw" | "space" | "other";
+const CELL_PX: Record<Glyph, number> = {
+  thai: 7.85, mark: 1.4, tone: 0.4, lead: 5.15, baht: 11, wide: 14, digit: 7.75, comma: 3.75, dot: 2.4, percent: 10.7, paren: 5.6, dash: 7, slash: 8.3,
+  lowern: 4.5, lower: 7.8, lowerw: 11.9, uppern: 4, upper: 9.35, upperw: 12, space: 3.3, other: 7,
+};
+/** Headings are drawn in capitals, so only the capital classes count. */
+const HEAD_PX: Record<Glyph, number> = {
+  thai: 6.7, mark: 1.1, tone: 0.25, lead: 4.6, baht: 9.15, wide: 11.5, digit: 6.6, comma: 3.5, dot: 2.45, percent: 8.75, paren: 5, dash: 5.85, slash: 6.8,
+  lowern: 3.4, lower: 7.85, lowerw: 10.4, uppern: 3.4, upper: 7.85, upperw: 10.4, space: 3, other: 6.4,
+};
+/** px-3 either side of a cell. */
 const TABLE_CELL_PAD_PX = 24;
-/** The least a column takes: its header (Thai headers held number columns at 105–125px). */
-const TABLE_COL_MIN_PX = 104;
+/** The app's content width at a 1440px screen, and the grid's 12px gaps — a block's width follows from its grid columns. */
+const APP_CONTENT_PX = 1028;
+const GRID_GAP_PX = 12;
+/** px-5 and the border around the table inside its card. */
+const TABLE_CARD_INSET_PX = 42;
+
+function glyphOf(ch: string): Glyph {
+  const c = ch.codePointAt(0)!;
+  if (c >= 0x0e00 && c <= 0x0e7f) {
+    if (c === 0x0e3f) return "baht";
+    if (c >= 0x0e48 && c <= 0x0e4b) return "tone";
+    if (c === 0x0e31 || (c >= 0x0e34 && c <= 0x0e3a) || (c >= 0x0e47 && c <= 0x0e4e)) return "mark";
+    return c === 0x0e40 || c === 0x0e43 || c === 0x0e44 ? "lead" : "thai";
+  }
+  if (ch >= "0" && ch <= "9") return "digit";
+  if (ch >= "a" && ch <= "z") return "ijltfr".includes(ch) ? "lowern" : "mw".includes(ch) ? "lowerw" : "lower";
+  if (ch >= "A" && ch <= "Z") return "IJ".includes(ch) ? "uppern" : "MW".includes(ch) ? "upperw" : "upper";
+  switch (ch) {
+    case ",": return "comma";
+    case ".": return "dot";
+    case "%": return "percent";
+    case "(": case ")": case "[": case "]": return "paren";
+    case "-": case "–": case "—": return "dash";
+    case "/": return "slash";
+    case " ": return "space";
+  }
+  return c > 0x2e7f ? "wide" : "other";
+}
+
+function textPx(s: string, px: Record<Glyph, number>): number {
+  let w = 0;
+  for (const ch of s) w += px[glyphOf(ch)];
+  return w;
+}
+
+const thaiWords = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter("th", { granularity: "word" }) : null;
+
+/** The pieces a browser may break a cell between: words, and — Thai having no spaces — dictionary words. */
+function breakable(text: string): string[] {
+  const out: string[] = [];
+  for (const word of text.split(/\s+/)) {
+    if (!word) continue;
+    if (thaiWords && /[฀-๿]/.test(word)) for (const seg of thaiWords.segment(word)) out.push(seg.segment);
+    else out.push(word);
+  }
+  return out;
+}
+
+/** What a table column needs to be laid out: the key, how its cells format, and its heading. */
+export type TableColumnSpec = { key: string; type?: string; format?: string; label?: string };
+
 /**
- * A full-width (12-column) table's width, in px, inside an app — where the
- * side panel narrows the report (measured 986px). A table that fits on its
- * own page can still wrap there.
+ * The columns of a table block, once per language the block is written in
+ * (its own, then each in its `i18n`) — a heading is longer in some languages
+ * than others, and one report serves them all.
  */
-const FULL_WIDTH_PX = 980;
+export function tableColumnSpecs(block: { config?: any; i18n?: Record<string, Record<string, string>> }, rows: Row[]): TableColumnSpec[][] {
+  const cols: any[] = Array.isArray(block.config?.columns) && block.config.columns.length
+    ? block.config.columns
+    : Object.keys(rows[0] ?? {}).map((key) => ({ key }));
+  return [undefined, ...Object.keys(block.i18n ?? {})].map((lang) =>
+    cols.map((c, i) => ({
+      key: String(c?.key ?? c),
+      type: c?.type,
+      format: c?.format,
+      label: (lang && block.i18n?.[lang]?.[`columns.${i}.label`]) || c?.label,
+    })));
+}
+
+const cellText = (r: Row, c: TableColumnSpec) => {
+  const v = r?.[c.key];
+  return v == null || v === "" ? "" : formatCell(v, c.type ?? "string", c.format);
+};
+
+/**
+ * Each column's width in a table `widthPx` wide, the way a browser's auto
+ * layout gives it: its widest cell while the columns all fit; otherwise from
+ * its widest word (or its heading — headings never wrap) up toward its widest
+ * cell, in proportion to the room left.
+ */
+export function tableColumnWidths(rows: Row[], columns: TableColumnSpec[], widthPx: number): number[] {
+  const max: number[] = [], min: number[] = [];
+  columns.forEach((c) => {
+    const head = textPx((c.label ?? c.key).toUpperCase(), HEAD_PX);
+    let widest = head, word = head;
+    for (const r of rows) {
+      const t = cellText(r, c);
+      const whole = textPx(t, CELL_PX);
+      widest = Math.max(widest, whole);
+      // A short string never wraps (the cell is nowrap), and a number has no break.
+      const unbreakable = typeof r?.[c.key] !== "string" || String(r[c.key]).length <= 12;
+      word = Math.max(word, unbreakable ? whole : Math.max(0, ...breakable(t).map((p) => textPx(p, CELL_PX))));
+    }
+    max.push(widest + TABLE_CELL_PAD_PX);
+    min.push(Math.min(word, widest) + TABLE_CELL_PAD_PX);
+  });
+  const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+  const sumMax = sum(max), sumMin = sum(min);
+  if (sumMax <= widthPx) return max.map((m) => m + ((widthPx - sumMax) * m) / sumMax);
+  if (sumMin >= widthPx) return min;
+  return min.map((m, i) => m + ((widthPx - sumMin) * (max[i]! - m)) / Math.max(1, sumMax - sumMin));
+}
+
+/**
+ * The height, in px, of each of the `rows` in the viewer's table: every cell
+ * wrapped greedily into its column (`tableColumnWidths`), a row as tall as its
+ * tallest cell. Cell text is what the table prints (formatCell), so
+ * "14,609.7" is measured, not 14609.7123.
+ */
+export function tableRowHeights(rows: Row[], columns: TableColumnSpec[], widthPx: number): number[] {
+  const col = tableColumnWidths(rows, columns, widthPx);
+  return rows.map((r) => {
+    let lines = 1;
+    columns.forEach((c, i) => {
+      const t = cellText(r, c);
+      const room = col[i]! - TABLE_CELL_PAD_PX;
+      if (textPx(t, CELL_PX) <= room) return;
+      let line = 0, n = 1;
+      for (const w of breakable(t)) {
+        const px = textPx(w, CELL_PX);
+        if (line > 0 && line + CELL_PX.space + px > room) { n++; line = px; } else line += (line > 0 ? CELL_PX.space : 0) + px;
+      }
+      lines = Math.max(lines, n);
+    });
+    return TABLE_LINE_PX + (lines - 1) * TABLE_WRAP_PX;
+  });
+}
+
 /**
  * Grid rows for a table showing these `rows`, each as tall as its text wraps
- * to — twenty product names that wrapped to two lines in an app still
- * scrolled in a card sized for one line each (Pet Lovers' "สินค้าขายดี 20
- * อันดับแรก", 2026-10-03). Columns are laid out the way a browser does: each
- * at its text's width while they all fit; when they don't, the longest-text
- * column gives up the difference and wraps. `w` is the block's grid width.
+ * to. Estimates the viewer's own layout (`tableRowHeights`) for a block `w`
+ * grid columns wide, so a table is read whole instead of scrolling inside its
+ * card — and so an author never has to override the number by hand. A bare
+ * key list measures the keys as the headings and the values as plain text.
  */
-export function tableHeightForRows(rows: Array<Record<string, unknown>>, columns: string[], w = 12): number {
-  const width = (FULL_WIDTH_PX * Math.min(12, Math.max(1, w))) / 12;
-  const textPx = (v: unknown) => String(v ?? "").length * TABLE_CHAR_PX;
-  const natural = columns.map((c) => Math.max(TABLE_COL_MIN_PX, Math.max(0, ...rows.map((r) => textPx(r?.[c]))) + TABLE_CELL_PAD_PX));
-  const excess = natural.reduce((a, b) => a + b, 0) - width;
-  const widest = natural.indexOf(Math.max(...natural));
-  const room = excess > 0 ? Math.max(140, natural[widest]! - excess) - TABLE_CELL_PAD_PX : Infinity;
-  const linesPx = rows.reduce((sum, row) => {
-    const lines = excess > 0 ? Math.ceil(textPx(row?.[columns[widest]!]) / room) : 1;
-    return sum + TABLE_LINE_PX + (Math.min(Math.max(lines, 1), 3) - 1) * TABLE_WRAP_PX;
-  }, 0);
-  return Math.min(24, Math.max(6, Math.ceil((TABLE_CHROME_PX + linesPx) / GRID_STEP_PX)));
+export function tableHeightForRows(rows: Row[], columns: Array<string | TableColumnSpec>, w = 12, opts: { showTotals?: boolean } = {}): number {
+  const span = Math.min(12, Math.max(1, w));
+  const cardPx = ((APP_CONTENT_PX - 11 * GRID_GAP_PX) * span) / 12 + GRID_GAP_PX * (span - 1);
+  const specs = columns.map((c) => (typeof c === "string" ? { key: c } : c));
+  const linesPx = tableRowHeights(rows.slice(0, TABLE_MAX_LINES), specs, cardPx - TABLE_CARD_INSET_PX).reduce((a, b) => a + b, 0) * TABLE_SLACK;
+  return Math.min(TABLE_MAX_H, Math.max(6, Math.ceil((TABLE_CHROME_PX + TABLE_HEAD_PX + (opts.showTotals ? TABLE_HEAD_PX : 0) + linesPx) / GRID_STEP_PX)));
+}
+
+/** Grid rows for a table block showing `rows`: the tallest it comes out in any language it carries. */
+export function tableHeightForBlock(block: { w?: number; config?: any; i18n?: Record<string, Record<string, string>> }, rows: Row[]): number {
+  const cols: any[] = block.config?.columns ?? [];
+  const showTotals = !!block.config?.showTotals && cols.some((c) => c?.total && c.total !== "none");
+  return Math.max(...tableColumnSpecs(block, rows).map((specs) => tableHeightForRows(rows, specs, block.w, { showTotals })));
 }
 
 /** A grid heatmap's row of cells (28px + 2px gap) at the scale a full-width card usually draws it. */
@@ -452,14 +600,7 @@ export function detectViolations(
       : b.type === "heatmap" && cfg.mode === "grid" && typeof cfg.yField === "string"
         ? { h: gridHeatmapHeight(new Set(rows.map((r) => String(r?.[cfg.yField] ?? "—"))).size), what: "rows of cells" }
       : b.type === "table"
-        ? {
-          h: tableHeightForRows(
-            rows.slice(0, typeof cfg.pageSize === "number" && cfg.pageSize > 0 ? cfg.pageSize : 20),
-            Array.isArray(cfg.columns) && cfg.columns.length ? cfg.columns.map((c: any) => String(c?.key ?? c)) : Object.keys(rows[0] ?? {}),
-            b.w,
-          ),
-          what: "lines",
-        }
+        ? { h: tableHeightForBlock(b, rows), what: "lines" }
       : null;
     if (fitted && (b.h < fitted.h || (b.h > fitted.h && b.w >= 12))) {
       const name = cfg.title ?? b.id;

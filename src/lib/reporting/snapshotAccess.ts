@@ -32,6 +32,7 @@ import { hashQueryDef, type ProvenanceMap, type ProvenanceRecord } from "@/lib/r
 import { metricSlugFromQueryId } from "@/lib/reporting/metricQueryId";
 import { ee } from "@/ee";
 import { queryRefs } from "@/lib/reporting/queryRefs";
+import { ENGINE_NOT_STORED_NOTE, isEngineDerived } from "@/lib/reporting/runSnapshot";
 import type { Dataset, Row } from "@/lib/reporting/interpolate";
 import type { Report } from "@/lib/reporting/schema";
 
@@ -103,6 +104,9 @@ export function savedRunReader(tenantId: string, report: Report, viewer: RunView
     }
 
     if (!prov) return WITHHELD_NOTE;
+    // Engine rows are answered per person (their row rules and masking) and no check made now can recover what
+    // the engine would give THIS reader, so they are never replayed — and runSnapshot.ts stops them being stored.
+    if (isEngineDerived(prov)) return ENGINE_NOT_STORED_NOTE;
     // Nothing was stored for a query that didn't run: its rows are [].
     if (prov.accessDeniedNote || prov.executionError) return rows;
     const src = await source(prov.dataSourceName);

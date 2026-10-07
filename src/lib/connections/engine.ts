@@ -38,29 +38,59 @@ export function platformEngineUrl(): string {
   return (process.env.CURF_ENGINE_URL ?? "").trim().replace(/\/$/, "");
 }
 
-function allowedEngineHosts(): Set<string> {
-  return new Set(
-    (process.env.CURF_ENGINE_ALLOWED_HOSTS ?? "")
-      .split(",")
-      .map((h) => h.trim().toLowerCase())
-      .filter(Boolean),
-  );
+/**
+ * Hosts the operator lets a workspace's engine URL name even when they are private: `host` (any port) or
+ * `host:port` (that port only — list the port, so a listed host's other services are not reachable).
+ */
+function allowedEngineHosts(): string[] {
+  return (process.env.CURF_ENGINE_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isAllowListed(url: URL): boolean {
+  const port = url.port || (url.protocol === "https:" ? "443" : "80");
+  const host = url.hostname.toLowerCase();
+  return allowedEngineHosts().some((entry) => (entry.includes(":") && !entry.startsWith("[") ? entry === `${host}:${port}` : entry === host));
 }
 
 /**
- * Why a workspace-supplied engine URL may not be used, or "" when it may. Used at save time (so the person
- * can fix it) and again before every call (so a URL stored before a rule tightened stops working).
+ * The part of the URL rule that needs no network. A workspace's URL is the address of an engine, nothing more:
+ * scheme, host and port, with no path, query, fragment or credentials — so whatever the host is, Curf only ever
+ * asks it for /engine/v1/…, and not for a path someone chose. `trusted` means the operator listed the host
+ * (CURF_ENGINE_ALLOWED_HOSTS), so it may be a private address; anything else must be public and over https, which
+ * the connection itself enforces on the address it uses (lib/security/pinnedFetch.ts).
  */
-export async function engineBaseUrlError(rawUrl: string): Promise<string> {
+export function engineUrlPolicy(rawUrl: string): { ok: true; trusted: boolean } | { ok: false; reason: string } {
   let url: URL;
   try {
     url = new URL(rawUrl);
   } catch {
-    return "That is not a valid URL.";
+    return { ok: false, reason: "That is not a valid URL." };
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return "The engine URL must start with http:// or https://.";
-  if (url.username || url.password) return "Put credentials in the engine, not in its URL.";
-  if (allowedEngineHosts().has(url.hostname.toLowerCase())) return "";
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, reason: "The engine URL must start with http:// or https://." };
+  if (url.username || url.password) return { ok: false, reason: "Put credentials in the engine, not in its URL." };
+  // `?` and `#` are tested on the raw text too: an empty query or fragment is dropped by the parser, but it would
+  // still turn "/engine/v1/…" appended to the string into a query on another path.
+  if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash || /[?#]/.test(rawUrl)) {
+    return { ok: false, reason: "Give only the engine's address, such as https://engine.example.com — without a path or query." };
+  }
+  const trusted = isAllowListed(url);
+  if (url.protocol === "http:" && !trusted) {
+    return { ok: false, reason: "Use https:// for an engine outside your own network, so the identity token is not sent in the clear." };
+  }
+  return { ok: true, trusted };
+}
+
+/**
+ * Why a workspace-supplied engine URL may not be saved, or "" when it may — checked while the person saving it
+ * can still fix it. The runtime check is the pinned connection's own, which looks at the address it uses.
+ */
+export async function engineBaseUrlError(rawUrl: string): Promise<string> {
+  const policy = engineUrlPolicy(rawUrl);
+  if (!policy.ok) return policy.reason;
+  if (policy.trusted) return "";
   try {
     await assertPublicHttpUrl(rawUrl);
     return "";
@@ -71,8 +101,12 @@ export async function engineBaseUrlError(rawUrl: string): Promise<string> {
 
 export function encodeEngineConnection(input: EngineConnectionInput): string {
   const stored: EngineConnectionStored = {};
-  const baseUrl = input.baseUrl?.trim().replace(/\/$/, "");
-  if (baseUrl) stored.baseUrl = baseUrl;
+  const raw = input.baseUrl?.trim();
+  if (raw) {
+    // Keep the normalised origin, not the text as typed: lower-case host, no default port, no trailing slash.
+    // (Unparseable text is stored as typed; the policy refuses it before it is ever used.)
+    try { stored.baseUrl = new URL(raw).origin; } catch { stored.baseUrl = raw.replace(/\/$/, ""); }
+  }
   const audience = input.audience?.trim();
   if (audience) stored.audience = audience;
   return JSON.stringify(stored);

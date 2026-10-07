@@ -64,7 +64,8 @@ function fmt(v: number, kind: "number" | "currency" | "percent" | "compact", cur
   if (v == null || Number.isNaN(v)) return "";
   // Baht for a Thai reader in Thai units — the legend read ฿594,240,000.00.
   if (kind === "currency" && readsThaiMoney(currency, locale)) return thaiMoney(v, false);
-  if (kind === "currency") return formatCurrency(v, currency);
+  // Millions and up compact (the legend read ฿964,098,077.00); smaller keeps its digits.
+  if (kind === "currency") return Math.abs(v) >= 1e6 ? formatMetricCompact(v, "currency", currency, locale) : formatCurrency(v, currency);
   if (kind === "percent")  return formatPercent(v);
   if (kind === "compact") {
     const abs = Math.abs(v);
@@ -731,7 +732,7 @@ ${pt.group}` : ""}`}</desc>
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="ค้นหาจังหวัด…"
+            placeholder={t("map.search.province")}
             className="w-full rounded-md border border-border bg-background py-1.5 pl-7 pr-2.5 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
           {search.trim() && (

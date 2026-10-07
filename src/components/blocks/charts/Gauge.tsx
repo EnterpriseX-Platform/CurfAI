@@ -24,7 +24,7 @@ export type GaugeZone = {
 };
 
 export function GaugeChart({
-  value, min, max, target, zones, palette, format, semantic,
+  value, min, max, target, zones, palette, format, semantic, targetLabel = "target",
 }: {
   value: number;
   min: number;
@@ -35,6 +35,8 @@ export function GaugeChart({
   format: (v: number) => string;
   /** Theme semantic tokens (theme.semantic) — zones tint from these, not a fixed pastel map. */
   semantic: Record<string, string>;
+  /** The word before the target figure, in the reader's language. */
+  targetLabel?: string;
 }) {
   const safe = Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : min;
   const span = max - min || 1;
@@ -119,7 +121,7 @@ export function GaugeChart({
         </text>
         {target !== undefined && Number.isFinite(target) && (
           <text x={cx} y={cy + 16} textAnchor="middle" fontSize={10} fill="#64748b">
-            target {format(target)}
+            {targetLabel} {format(target)}
           </text>
         )}
         <text
@@ -142,7 +144,7 @@ export function GaugeChart({
 }
 
 export function BulletChart({
-  value, min, max, target, zones, palette, format, label, semantic,
+  value, min, max, target, zones, palette, format, label, semantic, targetLabel = "target",
 }: {
   value: number;
   min: number;
@@ -154,6 +156,8 @@ export function BulletChart({
   label?: string;
   /** Theme semantic tokens (theme.semantic) — zones tint from these, not a fixed pastel map. */
   semantic: Record<string, string>;
+  /** The word before the target figure, in the reader's language. */
+  targetLabel?: string;
 }) {
   const safe = Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : min;
   const span = max - min || 1;
@@ -192,7 +196,7 @@ export function BulletChart({
           <div
             className="absolute -inset-y-1 w-[3px] rounded bg-foreground"
             style={{ left: `calc(${pos(target)}% - 1.5px)` }}
-            title={`target ${format(target)}`}
+            title={`${targetLabel} ${format(target)}`}
           />
         )}
       </div>

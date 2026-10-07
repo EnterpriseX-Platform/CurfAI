@@ -322,7 +322,9 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
     Number.isFinite(value) &&
     (format === "currency" || format === "number") &&
     Math.abs(value) >= 1000 &&
-    !isIdentifierLabel(label) &&
+    // Only a bare number can be a year or a code; money never is, so "approved
+    // money by year-end" or "multi-year commitments" still compact.
+    !(format === "number" && isIdentifierLabel(label)) &&
     !roomForFull;
   // Baht for a Thai reader reads in Thai units once it reaches the millions
   // ("20.35 พันล้านบาท") — the way the budget documents the card sits beside
@@ -340,7 +342,7 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
     if (
       (format === "currency" || format === "number") &&
       Math.abs(n) >= 1000 &&
-      !isIdentifierLabel(label) &&
+      !(format === "number" && isIdentifierLabel(label)) &&
       !roomForFull
     ) {
       return compactCurrency(n, format as "currency" | "number", currency);

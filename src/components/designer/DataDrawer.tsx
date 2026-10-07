@@ -27,6 +27,8 @@ import {
 import { useDesignerStore } from "@/lib/reporting/store";
 import type { DataSourceDef } from "@/lib/reporting/schema";
 import { InsertSnippetButton } from "./InsertSnippetButton";
+import { EngineQueryEditor } from "./EngineQueryEditor";
+import { initialQuery } from "@/lib/engine/queryBuilder";
 import { ConnectionForm } from "@/components/connections/ConnectionForm";
 import type { DataSourceListItem, EditingConnection } from "@/components/connections/types";
 
@@ -83,11 +85,13 @@ function QueriesTab() {
 
   function addQuery() {
     const id = "ds_" + Math.random().toString(36).slice(2, 8);
+    const first = connections[0];
     const q: DataSourceDef = {
       id,
       name: t("dataDrawer.newQueryName"),
-      dataSourceId: connections[0]?.id ?? "",
-      sql: "SELECT 1",
+      dataSourceId: first?.id ?? "",
+      // A Java-engine source takes a structured query on a published view, never SQL.
+      ...(first?.kind === "engine" ? { engine: initialQuery() } : { sql: "SELECT 1" }),
     };
     updateQueries([...report.dataSources, q]);
     setSelected(id);
@@ -103,6 +107,24 @@ function QueriesTab() {
   }
 
   const activeConnection = connections.find((c) => c.id === activeQuery?.dataSourceId);
+
+  /**
+   * Another connection. Moving between an engine source and any other swaps the query's body (view and
+   * structured query, or SQL), since neither means anything on the other kind.
+   */
+  function changeConnection(q: DataSourceDef, id: string) {
+    const wasEngine = connections.find((c) => c.id === q.dataSourceId)?.kind === "engine";
+    const isEngine = connections.find((c) => c.id === id)?.kind === "engine";
+    if (isEngine && !wasEngine) {
+      const { sql: _sql, ...rest } = q;
+      updateQueries(report.dataSources.map((x) => (x.id === q.id ? { ...rest, dataSourceId: id, engine: initialQuery() } : x)));
+    } else if (!isEngine && wasEngine) {
+      const { engine: _engine, ...rest } = q;
+      updateQueries(report.dataSources.map((x) => (x.id === q.id ? { ...rest, dataSourceId: id, sql: "SELECT 1" } : x)));
+    } else {
+      patchQuery(q.id, { dataSourceId: id });
+    }
+  }
 
   return (
     <div className="grid grid-cols-[240px_1fr] gap-4 min-h-[420px]">
@@ -157,7 +179,7 @@ function QueriesTab() {
           <Field label={t("dataDrawer.connection")}>
             <Select
               value={activeQuery.dataSourceId}
-              onValueChange={(v) => patchQuery(activeQuery.id, { dataSourceId: v })}
+              onValueChange={(v) => changeConnection(activeQuery, v)}
             >
               <SelectTrigger><SelectValue placeholder={t("dataDrawer.pickConnection")} /></SelectTrigger>
               <SelectContent>
@@ -171,7 +193,15 @@ function QueriesTab() {
             </Select>
           </Field>
 
-          {activeConnection?.kind === "rest" ? (
+          {activeConnection?.kind === "engine" ? (
+            <EngineQueryEditor
+              // A fresh catalogue and fresh section state per query and per connection.
+              key={`${activeQuery.id}:${activeQuery.dataSourceId}`}
+              query={activeQuery}
+              parameters={report.parameters ?? []}
+              onChange={(p) => patchQuery(activeQuery.id, p)}
+            />
+          ) : activeConnection?.kind === "rest" ? (
             <RestQueryEditor q={activeQuery} onChange={(p) => patchQuery(activeQuery.id, p)} />
           ) : (
             <SqlQueryEditor q={activeQuery} onChange={(p) => patchQuery(activeQuery.id, p)} />
@@ -190,13 +220,16 @@ function QueriesTab() {
             siblings={report.dataSources.filter((q) => q.id !== activeQuery.id)}
             onChange={(p) => patchQuery(activeQuery.id, p)}
           />
-          <QueryPreview
-            query={activeQuery}
-            reportParams={(report.parameters ?? []).reduce<Record<string, unknown>>((acc, p) => {
-              if (p.default !== undefined) acc[p.name] = p.default;
-              return acc;
-            }, {})}
-          />
+          {/* An engine query has its own preview inside its editor. */}
+          {activeConnection?.kind !== "engine" && (
+            <QueryPreview
+              query={activeQuery}
+              reportParams={(report.parameters ?? []).reduce<Record<string, unknown>>((acc, p) => {
+                if (p.default !== undefined) acc[p.name] = p.default;
+                return acc;
+              }, {})}
+            />
+          )}
         </div>
       ) : (
         <div className="flex items-center justify-center rounded-md border border-dashed p-12 text-sm text-muted-foreground">
