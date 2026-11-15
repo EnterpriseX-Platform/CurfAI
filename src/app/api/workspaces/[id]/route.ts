@@ -1,11 +1,10 @@
 /**
- * DELETE /api/workspaces/[id] — permanently delete a workspace (tenant).
+ * DELETE /api/workspaces/[id] — ask for a workspace (tenant) to be deleted.
  *
- * Every relation back to Tenant in prisma/schema.prisma is declared with
- * `onDelete: Cascade`, so a plain `prisma.tenant.delete()` correctly removes
- * every report, dashboard, data source, membership, etc. that belonged to
- * it — there is no separate manual cleanup pass to keep in sync with the
- * schema.
+ * This no longer deletes anything at once. It closes the workspace (status "pending_deletion", closed to everyone like a
+ * suspension), makes a copy of its data for the admins to download, and starts a grace period (30 days by default,
+ * CURF_DELETION_GRACE_DAYS). An admin can cancel in that time (POST /api/workspaces/[id]/deletion/cancel); when it ends
+ * the cron tick purges the rows, the files on disk, the backups and the certificate (lib/lifecycle/purge.ts).
  *
  * Guardrails (all destructive-action, not just "is this an admin"):
  *  - Caller must hold a REAL (non-virtual — see CurfMembership.isVirtual)
@@ -17,23 +16,20 @@
  *    only membership would leave the account with nowhere to land.
  *  - Caller must echo back the exact slug in the request body (type-to-
  *    confirm), so this can't be triggered by a stray click.
- *  - Blocked outright if the tenant has an active/trialing/past-due paid
- *    Stripe subscription — cancel billing first, or a customer keeps
- *    getting charged for a workspace that no longer exists.
+ *  - Blocked if the tenant has an active/trialing/past-due paid Stripe
+ *    subscription (checked in lib/lifecycle/deletion.ts) — cancel billing
+ *    first, or a customer keeps getting charged for a closed workspace.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { recordAudit } from "@/lib/audit";
-import { withSystemDbContext } from "@/lib/dbContext";
 import { findWorkspaceById } from "@/lib/workspaceDirectory";
+import { LifecycleError, scheduleDeletion } from "@/lib/lifecycle/deletion";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const BLOCKING_STRIPE_STATUSES = new Set(["active", "trialing", "past_due"]);
-
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (user.viaApiKey) {
@@ -46,14 +42,16 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (!membership || membership.role !== "admin") {
     return NextResponse.json({ error: "Only an admin of this workspace can delete it" }, { status: 403 });
   }
-  if (realMemberships.length <= 1) {
+  if (membership.tenantStatus === "pending_deletion") {
+    return NextResponse.json({ error: "This workspace is already scheduled for deletion" }, { status: 409 });
+  }
+  if (realMemberships.filter((m) => m.tenantStatus !== "pending_deletion").length <= 1) {
     return NextResponse.json({ error: "You can't delete your only workspace" }, { status: 400 });
   }
 
-  // The target is usually not the workspace this request is bound to, so
-  // its row is read and deleted in the system scope — the admin-membership
-  // check above is the authorization (lib/workspaceDirectory.ts).
-  const tenant = await findWorkspaceById(targetId, { name: true, slug: true, stripeSubscriptionId: true, stripeStatus: true });
+  // The target is usually not the workspace this request is bound to, so its row is read in the system scope — the
+  // admin-membership check above is the authorization (lib/workspaceDirectory.ts).
+  const tenant = await findWorkspaceById(targetId, { name: true, slug: true });
   if (!tenant) return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
 
   const body = await req.json().catch(() => null);
@@ -61,26 +59,12 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     return NextResponse.json({ error: "Confirmation text did not match the workspace slug" }, { status: 400 });
   }
 
-  if (tenant.stripeSubscriptionId && BLOCKING_STRIPE_STATUSES.has(tenant.stripeStatus ?? "")) {
-    return NextResponse.json(
-      { error: "This workspace has an active subscription. Cancel billing (Admin → Billing) before deleting it." },
-      { status: 400 },
-    );
+  try {
+    const r = await scheduleDeletion(targetId, { email: user.email, id: user.id }, { via: "admin", reason: typeof body.reason === "string" ? body.reason.slice(0, 500) : undefined });
+    console.warn(`[workspace-delete] tenant=${targetId} slug=${tenant.slug} scheduledBy=${user.email} purgeAt=${r.purgeAt.toISOString()}`);
+    return NextResponse.json({ ok: true, purgeAt: r.purgeAt.toISOString(), exportId: r.exportId });
+  } catch (e) {
+    if (e instanceof LifecycleError) return NextResponse.json({ error: e.message }, { status: e.status });
+    throw e;
   }
-
-  // Best-effort: this row lives under the tenant being deleted, so it
-  // cascades away with everything else a moment later — the durable trail
-  // is the server log line below, which survives the DB cascade.
-  recordAudit({
-    user, kind: "tenant.delete", target: targetId, req,
-    meta: { workspaceName: tenant.name, slug: tenant.slug },
-  });
-  console.warn(
-    `[workspace-delete] tenant=${targetId} slug=${tenant.slug} name=${JSON.stringify(tenant.name)} ` +
-    `deletedBy=${user.email} at=${new Date().toISOString()}`,
-  );
-
-  await withSystemDbContext(() => prisma.tenant.delete({ where: { id: targetId } }));
-
-  return NextResponse.json({ ok: true });
 }

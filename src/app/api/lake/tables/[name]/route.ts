@@ -20,7 +20,8 @@ import { lakeTableFor } from "@/lib/lake/tableAccess";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET(req: NextRequest, { params }: { params: { name: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -107,7 +108,8 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
   });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { name: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 

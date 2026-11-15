@@ -7,7 +7,8 @@ import { recordAudit } from "@/lib/audit";
  * it's what's actually stored on every Membership.rolesJson and every
  * visibleToRolesJson column, so changing it would mean rewriting every
  * reference (same reasoning DELETE already applies when a tag is removed). */
-export async function PATCH(req: NextRequest, { params }: { params: { slug: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
 
@@ -30,7 +31,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { slug: stri
   return NextResponse.json({ role: updated });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { slug: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
   // Tenant-scope the delete so cross-tenant slug collisions aren't an issue.

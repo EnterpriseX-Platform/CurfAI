@@ -5,7 +5,8 @@ import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
   const body = await req.json().catch(() => null) as { roles?: string[] } | null;
@@ -46,7 +47,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
  * orphaned invite, not a person who's pending here but already active in
  * another workspace.
  */
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
 

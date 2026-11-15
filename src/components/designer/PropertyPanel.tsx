@@ -5,7 +5,7 @@
  */
 import { Fragment, useEffect, useState } from "react";
 import { z } from "zod";
-import { Trash2, Copy, LayoutGrid, Settings2, ChevronDown, ShieldCheck, MousePointerClick } from "lucide-react";
+import { Trash2, Copy, LayoutGrid, Settings2, ShieldCheck, MousePointerClick } from "lucide-react";
 import { BlockConfigSchemas } from "@/lib/reporting/schema";
 import { useDesignerStore } from "@/lib/reporting/store";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ import { DRILLABLE_BLOCKS } from "@/lib/reporting/drill";
 /** Edited together in the "When clicked" section (DrillEditor), not as fields of their own. */
 const DRILL_FIELDS = new Set(["drilldown", "drillParam", "drillField"]);
 import { ChartTypeField } from "./ChartTypeField";
+import { PanelSection } from "./PanelSection";
+import { ReportSettingsPanel } from "./ReportSettingsPanel";
 import { BlockGuide } from "./BlockGuide";
 import { InlineTagManager } from "@/components/common/InlineTagManager";
 import type { Dataset } from "@/lib/reporting/interpolate";
@@ -34,7 +36,7 @@ import { useT } from "@/lib/i18n/LocaleContext";
 
 type MetricOpt = { slug: string; label: string };
 
-export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
+export function PropertyPanel({ dataset, reportId }: { dataset?: Dataset; reportId?: string }) {
   const { t } = useT();
   // Published metrics — offered alongside the report's own queries in the
   // queryId picker (Roadmap Phase 2.3) so binding a KPI to a governed
@@ -61,19 +63,9 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
   const duplicate = useDesignerStore((s) => s.duplicateBlock);
 
   const block = report.pages.find((p) => p.id === activePageId)?.blocks.find((b) => b.id === selectedId);
-  if (!block) {
-    return (
-      <div className="flex h-full items-center justify-center p-6 text-center">
-        <div>
-          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-            <Settings2 className="h-4 w-4 text-muted-foreground" />
-          </div>
-          <p className="text-sm font-medium">{t("propertyPanel.noSelection")}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t("propertyPanel.noSelectionHint")}</p>
-        </div>
-      </div>
-    );
-  }
+  // Nothing selected: the inspector shows the whole report's settings
+  // (display, year style, theme, schedule, history) instead of an empty state.
+  if (!block) return <ReportSettingsPanel reportId={reportId} />;
 
   const MetaIcon = BlockRegistry[block.type].icon;
   const schema = BlockConfigSchemas[block.type] as z.ZodObject<any>;
@@ -90,10 +82,10 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
         </div>
         <div className="flex items-center gap-1">
           <BlockGuide blockType={block.type} />
-          <Button size="icon" variant="ghost" onClick={() => duplicate(block.id)} title={t("action.duplicate")}>
+          <Button size="icon" variant="ghost" onClick={() => duplicate(block.id)} title={t("action.duplicate")} aria-label={t("action.duplicate")}>
             <Copy className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={() => remove(block.id)} title={t("action.delete")}>
+          <Button size="icon" variant="ghost" onClick={() => remove(block.id)} title={t("action.delete")} aria-label={t("action.delete")}>
             <Trash2 className="h-4 w-4 text-destructive/80" />
           </Button>
         </div>
@@ -101,7 +93,7 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
 
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
         {/* Layout section */}
-        <Section icon={LayoutGrid} label={t("propertyPanel.layout")}>
+        <PanelSection icon={LayoutGrid} label={t("propertyPanel.layout")} defaultOpen={false}>
           <div className="grid grid-cols-4 gap-2">
             <NumberField label="X" value={block.x} onChange={(v) => updateLayout(block.id, { ...block, x: clamp(v, 0, 11) })} />
             <NumberField label="Y" value={block.y} onChange={(v) => updateLayout(block.id, { ...block, y: Math.max(0, v) })} />
@@ -109,9 +101,9 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
             <NumberField label={t("propertyPanel.height")} value={block.h} onChange={(v) => updateLayout(block.id, { ...block, h: Math.max(1, v) })} />
           </div>
           <MmReadout block={block} report={report} />
-        </Section>
+        </PanelSection>
 
-        <Section icon={Settings2} label={t("propertyPanel.content")}>
+        <PanelSection icon={Settings2} label={t("propertyPanel.content")}>
           <div className="grid gap-3">
             {Object.entries(shape).filter(([key]) => !DRILL_FIELDS.has(key)).map(([key, field]) => (
               <Fragment key={key}>
@@ -128,17 +120,17 @@ export function PropertyPanel({ dataset }: { dataset?: Dataset }) {
               </Fragment>
             ))}
           </div>
-        </Section>
+        </PanelSection>
 
         {(DRILLABLE_BLOCKS as readonly string[]).includes(block.type) && (
-          <Section icon={MousePointerClick} label={t("drill.editor.section")}>
+          <PanelSection icon={MousePointerClick} label={t("drill.editor.section")} defaultOpen={false}>
             <DrillEditor
               blockType={block.type}
               config={block.config as any}
               report={report}
               onChange={(patch) => update(block.id, patch)}
             />
-          </Section>
+          </PanelSection>
         )}
 
         <VisibilitySection
@@ -174,43 +166,18 @@ function VisibilitySection({
   }
 
   return (
-    <Section icon={ShieldCheck} label={t("propertyPanel.visibility")}>
+    <PanelSection icon={ShieldCheck} label={t("propertyPanel.visibility")} defaultOpen={false}>
       <p className="mb-2 text-xs text-muted-foreground">{t("propertyPanel.visibilityHint")}</p>
       {!loaded && <p className="text-xs text-muted-foreground">{t("propertyPanel.loadingRoles")}</p>}
       {loaded && (
         <InlineTagManager options={roles} selected={value} onToggle={toggle} onOptionsChange={setRoles} />
       )}
       {value.length > 0 && (
-        <p className="mt-2 text-[10px] text-muted-foreground">
+        <p className="mt-2 text-2xs text-muted-foreground">
           {t("propertyPanel.showingFor")} <span className="font-mono">{value.join(", ")}</span>
         </p>
       )}
-    </Section>
-  );
-}
-
-function Section({
-  icon: Icon, label, children, defaultOpen = true,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="space-y-2.5">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
-      >
-        <Icon className="h-3 w-3" />
-        <span>{label}</span>
-        <ChevronDown className={`ml-auto h-3 w-3 transition-transform ${open ? "" : "-rotate-90"}`} />
-      </button>
-      {open && <div className="space-y-2.5">{children}</div>}
-    </div>
+    </PanelSection>
   );
 }
 
@@ -404,7 +371,7 @@ function Field({
             className="h-4 w-4 accent-[hsl(var(--primary))]"
           />
         </div>
-        {hint && <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+        {hint && <p className="mt-1 text-2xs leading-snug text-muted-foreground">{hint}</p>}
       </div>
     );
   }
@@ -419,7 +386,7 @@ function Field({
           value={value ?? ""}
           onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
         />
-        {hint && <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+        {hint && <p className="text-2xs leading-snug text-muted-foreground">{hint}</p>}
       </div>
     );
   }
@@ -427,7 +394,7 @@ function Field({
   if (inner instanceof z.ZodArray) {
     return (
       <div className="grid gap-1">
-        <Label>{label} <span className="text-[10px] text-muted-foreground">(JSON)</span></Label>
+        <Label>{label} <span className="text-2xs text-muted-foreground">(JSON)</span></Label>
         <textarea
           className="min-h-[96px] rounded-md border border-input bg-background p-2 font-mono text-xs shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
           value={JSON.stringify(value ?? [], null, 2)}
@@ -447,7 +414,7 @@ function Field({
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value)}
       />
-      {stringHint && <p className="text-[11px] leading-snug text-muted-foreground">{stringHint}</p>}
+      {stringHint && <p className="text-2xs leading-snug text-muted-foreground">{stringHint}</p>}
     </div>
   );
 }
@@ -502,7 +469,7 @@ function MmReadout({ block, report }: { block: { x: number; y: number; w: number
   const wMm = (block.w * mmPerCol).toFixed(0);
   const hMm = (block.h * mmPerRow).toFixed(0);
   return (
-    <div className="mt-1 flex items-center justify-between rounded-md border border-dashed border-border/70 bg-muted/30 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+    <div className="mt-1 flex items-center justify-between rounded-md border border-dashed border-border/70 bg-muted/30 px-2 py-1 font-mono text-2xs text-muted-foreground">
       <span>x: {xMm}mm · y: {yMm}mm</span>
       <span>w: {wMm}mm · h: {hMm}mm</span>
     </div>

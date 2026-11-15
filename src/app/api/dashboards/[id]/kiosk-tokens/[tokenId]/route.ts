@@ -14,8 +14,9 @@ import { recordAudit } from "@/lib/audit";
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string; tokenId: string } },
+  props: { params: Promise<{ id: string; tokenId: string }> }
 ) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 

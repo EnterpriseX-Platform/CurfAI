@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFoo
 import { useToast } from "@/lib/toast";
 import { refreshNavCounts } from "@/lib/navCounts";
 import { KioskTokenPanel } from "@/app/(main)/dashboards/manage/KioskTokenPanel";
+import { PairScreenPanel } from "./PairScreenPanel";
 import { UpgradeLock, isFeatureAvailable } from "@/components/common/UpgradeLock";
 import { InlineTagManager } from "@/components/common/InlineTagManager";
 
@@ -271,11 +272,14 @@ export function OnScreenManager({ isAdmin, currentTier }: { isAdmin: boolean; cu
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-medium text-foreground">{t("dashboardsMgr.kioskTokens")}</h3>
               {isFeatureAvailable(currentTier, "dashboard.kiosk_token") ? (
-                <KioskTokenPanel
-                  dashboardId={editing.id}
-                  initialTokens={editing.kioskTokens}
-                  apiBase="/api/on-screen"
-                />
+                <div className="space-y-4">
+                  <PairScreenPanel onScreenId={editing.id} />
+                  <KioskTokenPanel
+                    dashboardId={editing.id}
+                    initialTokens={editing.kioskTokens}
+                    apiBase="/api/on-screen"
+                  />
+                </div>
               ) : (
                 <UpgradeLock
                   feature="dashboard.kiosk_token"
@@ -416,7 +420,7 @@ function OnScreenForm({
                 <rect x="4" y="22" width="40" height="4" rx="1" fill="currentColor" fillOpacity="0.5" />
               </svg>
               <span className="text-xs font-medium">{t("dashboardsMgr.tpl.tableOnly")}</span>
-              <span className="text-[10px] text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.tableOnly.desc")}</span>
+              <span className="text-2xs text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.tableOnly.desc")}</span>
             </div>
           </label>
           <label className={`cursor-pointer rounded-lg border-2 p-3 hover:bg-accent/50 transition-colors ${layout === "table_chart" ? "border-primary bg-primary/5" : "border-transparent bg-muted/30"}`}>
@@ -431,7 +435,7 @@ function OnScreenForm({
                 <rect x="28" y="24" width="16" height="4" rx="1" fill="currentColor" fillOpacity="0.5" />
               </svg>
               <span className="text-xs font-medium text-center">{t("dashboardsMgr.tpl.tableChart")}</span>
-              <span className="text-[10px] text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.tableChart.desc")}</span>
+              <span className="text-2xs text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.tableChart.desc")}</span>
             </div>
           </label>
           <label className={`cursor-pointer rounded-lg border-2 p-3 hover:bg-accent/50 transition-colors ${layout === "chart_only" ? "border-primary bg-primary/5" : "border-transparent bg-muted/30"}`}>
@@ -444,7 +448,7 @@ function OnScreenForm({
                 <rect x="32" y="14" width="8" height="14" rx="1" fill="currentColor" />
               </svg>
               <span className="text-xs font-medium">{t("dashboardsMgr.tpl.chartOnly")}</span>
-              <span className="text-[10px] text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.chartOnly.desc")}</span>
+              <span className="text-2xs text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.chartOnly.desc")}</span>
             </div>
           </label>
         </div>
@@ -465,7 +469,7 @@ function OnScreenForm({
                 <span className="w-6 text-center text-xs text-muted-foreground">{i + 1}.</span>
                 <span className="flex-1 text-sm">{r?.name ?? <span className="italic text-muted-foreground">{t("dashboardsMgr.missingReport").replace("{id}", id.slice(0, 8))}</span>}</span>
                 {r?.category && (
-                  <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.category}</span>
+                  <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-2xs text-muted-foreground">{r.category}</span>
                 )}
                 <Button size="icon" variant="ghost" onClick={() => move(id, -1)} disabled={i === 0} title={t("dashboardsMgr.moveUp")}>
                   <MoveUp className="h-3.5 w-3.5" />
@@ -500,7 +504,7 @@ function OnScreenForm({
               <Plus className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="flex-1 text-sm">{r.name}</span>
               {r.category && (
-                <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.category}</span>
+                <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-2xs text-muted-foreground">{r.category}</span>
               )}
             </button>
           ))}
@@ -571,7 +575,7 @@ function VisibilityPicker({
 
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("dashboardsMgr.vis.heading")}</p>
+      <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("dashboardsMgr.vis.heading")}</p>
       <div className="grid gap-1.5 text-sm">
         <label className="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted/40">
           <input type="radio" className="mt-1" checked={mode === "tenant"} onChange={() => onChange({ mode: "tenant" })} />

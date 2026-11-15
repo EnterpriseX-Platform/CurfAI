@@ -22,7 +22,8 @@ import { extractSqlParamNames } from "@/lib/reporting/params";
  * would throw "Missing parameter" for any topic outside that list.
  */
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

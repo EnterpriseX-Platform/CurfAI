@@ -28,7 +28,8 @@ const BodySchema = z.object({
   ttlDays: z.number().int().min(1).max(365).optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   // An embed token is a public link to report data — the same role as
   // sharing the report (POST /api/reports/[id]/share).
   const user = await requireAdminOrEditor(req);

@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin, getUserRoles, blockScopedApiKey } from "@/lib/auth";
+import { validSlotKeys } from "@/lib/dashboards/validSlotKeys";
 import { recordAudit } from "@/lib/audit";
 import { writeVisibility, canSeeDataSource, type Visibility } from "@/lib/datasourceAcl";
 
@@ -41,7 +42,8 @@ const PatchSchema = z.object({
   slotLayout: z.record(SlotLayoutEntrySchema).optional(),
 });
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = blockScopedApiKey(user);
@@ -112,7 +114,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   });
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
   const scopeBlock = blockScopedApiKey(user);
@@ -141,12 +144,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (parsed.data.reportIds !== undefined) {
     // Re-validate tenant ownership on every update — protects against
     // PATCH-after-id-leak from another tenant.
-    const reportRows = await prisma.report.findMany({
-      where: { id: { in: parsed.data.reportIds }, tenantId: user.tenantId },
-      select: { id: true },
-    });
-    const validIds = new Set(reportRows.map((r) => r.id));
-    const orderedIds = parsed.data.reportIds.filter((id) => validIds.has(id));
+    const orderedIds = await validSlotKeys(user.tenantId, parsed.data.reportIds);
     if (orderedIds.length === 0) {
       return NextResponse.json({ error: "None of the supplied report IDs belong to this tenant." }, { status: 400 });
     }
@@ -182,7 +180,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return NextResponse.json({ id: updated.id, name: updated.name, slug: updated.slug });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
   const scopeBlock = blockScopedApiKey(user);

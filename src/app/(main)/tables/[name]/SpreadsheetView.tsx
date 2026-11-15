@@ -308,7 +308,7 @@ function Sheet({ tableName, canEdit }: { tableName: string; canEdit: boolean }) 
         >
           {c.formula
             ? <SquareFunction className="h-3.5 w-3.5 shrink-0" aria-label={t("sheet.formulaColumn")} />
-            : <span className="shrink-0 text-[10px] text-faint">{TYPE_MARK[c.type] ?? "Aa"}</span>}
+            : <span className="shrink-0 text-2xs text-faint">{TYPE_MARK[c.type] ?? "Aa"}</span>}
           <span className="truncate">{c.name}</span>
           {c.masked && <Lock className="h-3 w-3 shrink-0 text-faint" aria-label={t("sheet.maskedColumn")} />}
           {sorted === "asc" && <ArrowUp className="h-3 w-3 shrink-0 text-primary-ink" />}
@@ -393,7 +393,7 @@ function Sheet({ tableName, canEdit }: { tableName: string; canEdit: boolean }) 
         <div className="relative" style={{ width: layout.total, minWidth: "100%" }}>
           {/* Header */}
           <div role="row" aria-rowindex={1} className="sticky top-0 z-30 flex border-b border-border bg-muted" style={{ height: HEAD_H, width: layout.total }}>
-            <div className="sticky left-0 z-30 flex h-full shrink-0 items-center justify-end border-r border-border bg-muted px-2.5 font-mono text-[11px] text-faint" style={{ width: NUM_W }}>#</div>
+            <div className="sticky left-0 z-30 flex h-full shrink-0 items-center justify-end border-r border-border bg-muted px-2.5 font-mono text-2xs text-faint" style={{ width: NUM_W }}>#</div>
             {columns.length > 0 && headCell(columns[0]!, 0, true)}
             {gap > 0 && <div className="shrink-0" style={{ width: gap }} />}
             {drawn.map(({ c, i }) => headCell(c, i, false))}
@@ -516,7 +516,7 @@ const SheetRowView = memo(function SheetRowView({ row, at, top, columns, layout,
       className="absolute left-0 flex border-b border-border bg-card hover:bg-muted"
       style={{ top, height: ROW_H, width: layout.total }}
     >
-      <div className="sticky left-0 z-10 flex h-full shrink-0 items-center justify-end border-r border-border bg-inherit px-2.5 font-mono text-[11px] tabular-nums text-faint" style={{ width: NUM_W }}>
+      <div className="sticky left-0 z-10 flex h-full shrink-0 items-center justify-end border-r border-border bg-inherit px-2.5 font-mono text-2xs tabular-nums text-faint" style={{ width: NUM_W }}>
         {(at + 1).toLocaleString(locale)}
       </div>
       {row && columns.length > 0 && cell(columns[0]!, 0, layout.w[0]!, row[columns[0]!.name], true, fmt)}

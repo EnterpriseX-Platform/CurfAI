@@ -17,7 +17,7 @@ export function SeriesLabelsEditor({
   onChange: (next: Record<string, string> | undefined) => void;
 }) {
   const { t } = useT();
-  if (yFields.length === 0) return <p className="text-[11px] text-muted-foreground">{t("propertyPanel.seriesLabels.none")}</p>;
+  if (yFields.length === 0) return <p className="text-2xs text-muted-foreground">{t("propertyPanel.seriesLabels.none")}</p>;
   const set = (field: string, text: string) => {
     const next = { ...value };
     if (text.trim()) next[field] = text;
@@ -28,11 +28,11 @@ export function SeriesLabelsEditor({
     <div className="grid gap-1.5">
       {yFields.map((f) => (
         <div key={f} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] items-center gap-2">
-          <span className="truncate font-mono text-[11px] text-muted-foreground" title={f}>{f}</span>
+          <span className="truncate font-mono text-2xs text-muted-foreground" title={f}>{f}</span>
           <Input value={value?.[f] ?? ""} placeholder={seriesName(f)} onChange={(e) => set(f, e.target.value)} aria-label={f} />
         </div>
       ))}
-      <p className="text-[11px] leading-snug text-muted-foreground">{t("propertyPanel.seriesLabels.hint")}</p>
+      <p className="text-2xs leading-snug text-muted-foreground">{t("propertyPanel.seriesLabels.hint")}</p>
     </div>
   );
 }

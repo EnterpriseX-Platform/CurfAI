@@ -4,8 +4,8 @@
  * not — a tenant who sets kimi-k3 for builds and kimi-k2.6 for Ask should
  * never see a build silently downgraded.
  */
-import { describe, it, expect } from "vitest";
-import { isFastKind } from "./index";
+import { afterEach, describe, it, expect } from "vitest";
+import { hostThinksOff, isFastKind } from "./index";
 
 describe("isFastKind", () => {
   it("routes the grounded, short-output kinds to the fast model", () => {
@@ -18,5 +18,22 @@ describe("isFastKind", () => {
     for (const k of ["master_builder_design", "master_builder_plan", "master_builder_iterate", "master_builder_personalise", "master_builder_suggest", "generate", "regenerate", "instant_view", "operate.author", "autoCurf", "agent"]) {
       expect(isFastKind(k), k).toBe(false);
     }
+  });
+});
+
+describe("hostThinksOff", () => {
+  const was = process.env.CURF_LLM_THINKING;
+  afterEach(() => { if (was === undefined) delete process.env.CURF_LLM_THINKING; else process.env.CURF_LLM_THINKING = was; });
+
+  it("is off unless the operator sets CURF_LLM_THINKING=off", () => {
+    delete process.env.CURF_LLM_THINKING;
+    expect(hostThinksOff("env")).toBe(false);
+    process.env.CURF_LLM_THINKING = "off";
+    expect(hostThinksOff("env")).toBe(true);
+  });
+
+  it("never applies to a workspace's own key", () => {
+    process.env.CURF_LLM_THINKING = "off";
+    expect(hostThinksOff("tenant")).toBe(false);
   });
 });

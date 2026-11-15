@@ -17,7 +17,8 @@ import { requireUser, requireAdmin } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET(req: NextRequest, { params }: { params: { jobId: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ jobId: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 

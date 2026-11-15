@@ -12,8 +12,8 @@ import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -25,8 +25,9 @@ function timeAgo(d: Date | string, locale: Locale): string {
   return t(locale, "time.daysAgo").replace("{n}", String(Math.floor(h / 24)));
 }
 
-export default async function HistoryPage({ params }: { params: { id: string } }) {
-  const locale = readLocale();
+export default async function HistoryPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const locale = await readLocale();
   const session = await getSession();
   const user = (session?.user as any) ?? null;
   if (!session) redirect(`/login?callbackUrl=/reports/${params.id}/history`);
@@ -72,7 +73,7 @@ export default async function HistoryPage({ params }: { params: { id: string } }
         </Button>
       }
     >
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader
           eyebrow={t(locale, "reportHistory.breadcrumb")}
           title={report.name}
@@ -193,7 +194,7 @@ export default async function HistoryPage({ params }: { params: { id: string } }
               </tbody>
             </table>
           </div>
-          <p className="mt-3 text-[11px] text-muted-foreground">
+          <p className="mt-3 text-2xs text-muted-foreground">
             <strong>{t(locale, "reportHistory.replay")}</strong> {t(locale, "reportHistory.replayDesc")}{" "}
             <strong>{t(locale, "reportHistory.redownloadLabel")}</strong> {t(locale, "reportHistory.redownloadDesc")}
           </p>
@@ -240,7 +241,7 @@ export default async function HistoryPage({ params }: { params: { id: string } }
               </tbody>
             </table>
           </div>
-          <p className="mt-3 text-[11px] text-muted-foreground">
+          <p className="mt-3 text-2xs text-muted-foreground">
             {t(locale, "reportHistory.auditNote")}
           </p>
         </section>

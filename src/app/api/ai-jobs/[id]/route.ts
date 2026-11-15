@@ -31,7 +31,8 @@ const STALE_AFTER_MS: Record<string, number> = {
   master_builder_plan: PLAN_JOB_STALE_MS,
 };
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

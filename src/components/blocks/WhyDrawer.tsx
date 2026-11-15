@@ -233,7 +233,7 @@ function WhyContent({ data, metric }: { data: WhyResponse; metric: string }) {
             {Array.from(byDim.entries()).map(([dim, items]) => (
               <div key={dim} className="rounded-md border border-border bg-background">
                 <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{dim}</span>
+                  <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{dim}</span>
                   <span className="text-[10px] text-muted-foreground/80">{items.length} segments</span>
                 </div>
                 <div className="divide-y divide-border">

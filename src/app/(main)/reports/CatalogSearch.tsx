@@ -3,7 +3,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Search } from "lucide-react";
 
-export function CatalogSearch({ initial }: { initial: string }) {
+export function CatalogSearch({ initial, placeholder }: { initial: string; placeholder: string }) {
   const router = useRouter();
   const [q, setQ] = useState(initial);
   return (
@@ -20,7 +20,7 @@ export function CatalogSearch({ initial }: { initial: string }) {
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search reports…"
+        placeholder={placeholder}
         className="h-9 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
       />
     </form>

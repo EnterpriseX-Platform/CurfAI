@@ -1,23 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { prisma } from "@/lib/db";
-import { cronMatches } from "@/lib/cron/cronMatches";
-import { dispatchDelivery, parseDeliveryConfig, type Rendered } from "@/lib/delivery/dispatch";
-import { renderPdf } from "@/lib/reporting/renderers/pdf";
-import { renderXlsx } from "@/lib/reporting/renderers/xlsx";
-import { renderDocx } from "@/lib/reporting/renderers/docx";
-import { renderCsv } from "@/lib/reporting/renderers/csv";
 import { ensureLimit } from "@/lib/rateLimit";
-import { ReportSchema } from "@/lib/reporting/schema";
-import { runReport } from "@/lib/reporting/runner";
-import { deliveryViewer } from "@/lib/reporting/exportCaller";
-import { visibleReport } from "@/lib/reporting/visibleReport";
-import { safeParseJson } from "@/lib/cron/types";
 import type { FiredItem } from "@/lib/cron/types";
-import { tickLakePulls, tickMaterializedViews, tickLakeBackups, tickBackupSnapshots } from "@/lib/cron/lakeTicks";
-import { tickAuditRetention, tickAiUsageThreshold, tickSecurityAlerts } from "@/lib/cron/opsTicks";
-import { ee } from "@/ee";
-import { appBase } from "@/lib/http/appBase";
+import { runPlatformTicks, runScheduleLoop } from "@/lib/cron/tickRunner";
+import { jobsEnabled } from "@/lib/redis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,135 +29,26 @@ async function handle(req: NextRequest) {
   if (!secretMatches(secret, expected)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const limited = ensureLimit("cron", "global", 4, 60_000);
+  const limited = await ensureLimit("cron", "global", 4, 60_000);
   if (limited) return limited;
   const force = url.searchParams.get("force") === "1";
   const now = new Date();
 
-  let schedules: any[] = [];
-  try {
-    schedules = await prisma.schedule.findMany({ where: { enabled: true } });
-  } catch {
-    return NextResponse.json({ ok: true, fired: 0, note: "Schedule table not initialised" });
+  // With a queue configured the workers own the schedule (lib/jobs); a tick request would only do the same work twice.
+  // `?force=1` still runs it here, as the operator's manual trigger.
+  if (jobsEnabled() && !force) {
+    return NextResponse.json({ ok: true, fired: 0, mode: "queue", note: "Scheduled work runs in the job workers; use ?force=1 to run a tick here." });
   }
 
-  const fired: Array<{ id: string; kind: string; status: string; narrative?: string }> = [];
-  for (const sched of schedules) {
-    if (!force && !cronMatches(sched.cron, now)) continue;
-    try {
-      if (sched.kind === "delivery" || !sched.kind) {
-        const result = await fireDelivery(sched, req);
-        fired.push({ id: sched.id, kind: "delivery", status: result.status, narrative: result.message });
-      } else {
-        // watcher / brief / digest live in the paid edition. In Community
-        // a stray row of one of those kinds is recorded, never crashed on.
-        const result = ee.cron ? await ee.cron.fireSchedule(sched, req) : null;
-        if (result) fired.push({ id: sched.id, kind: sched.kind, status: result.status, narrative: result.narrative });
-        else fired.push({ id: sched.id, kind: sched.kind, status: "skipped", narrative: "Not available in this edition" });
-      }
-    } catch (e: any) {
-      fired.push({ id: sched.id, kind: sched.kind ?? "delivery", status: "failed", narrative: e?.message });
-      await prisma.schedule.update({
-        where: { id: sched.id },
-        data: { lastRunAt: new Date(), lastStatus: "failed" },
-      }).catch(() => null);
-    }
+  const fired: FiredItem[] = [];
+  if (!(await runScheduleLoop(req, now, force, fired))) {
+    return NextResponse.json({ ok: true, fired: 0, note: "Schedule table not initialised" });
   }
   // Community ticks first, in the order they always ran; then the paid
   // edition's, through the registry. Same fired-array mutation, same
   // per-block error isolation.
-  await tickLakePulls(fired, now, force);
-  await tickMaterializedViews(fired, now, force);
-  await tickLakeBackups(fired, now, force);
-  await tickBackupSnapshots(fired, now, force);
-  await tickAuditRetention(fired, now, force);
-  await tickAiUsageThreshold(fired, now, force);
-  await tickSecurityAlerts(fired, now, force);
-  // CDC, streaming, Parquet, pipelines, activations, data quality, SLA,
-  // embeddings, sync, decisions, forecast accuracy, Master Builder, Ask
-  // suggestions and viewer sweeps are paid ticks — src/ee/cron/tick.ts.
-  const extra = ee.cron ? await ee.cron.tick({ req, fired, now, force }) : {};
+  const extra = await runPlatformTicks(req, now, force, fired);
 
   return NextResponse.json({ ok: true, fired: fired.length, items: fired, ...extra });
-}
-
-async function fireDelivery(sched: any, req: NextRequest) {
-  const reportRow = await prisma.report.findUnique({ where: { id: sched.reportId } });
-  if (!reportRow) throw new Error("Report missing");
-  // Blocks a report author gated by role stay out of a delivery whoever
-  // created it, as they always have: the scheduled PDF's page filters them
-  // as nobody (renderPdf below isn't passed blocksAsViewer), so every other
-  // format does too. The creator (below) decides only which data the
-  // remaining blocks carry.
-  const report = visibleReport(ReportSchema.parse(JSON.parse(reportRow.definition)), undefined);
-  const runParams: Record<string, unknown> = safeParseJson<Record<string, unknown>>(sched.params) ?? {};
-  // No one is asking for this file, and it goes to whoever is on the
-  // recipient list, so it renders as the schedule's creator. It used to
-  // render as the system, and a developer could have emailed out data from
-  // sources their own role can't see.
-  const viewer = await deliveryViewer(sched);
-
-  let body: Buffer;
-  let contentType: string;
-  let ext: string;
-  switch (sched.format) {
-    case "xlsx":
-      body = await renderXlsx(report, runParams, { reportId: sched.reportId, tenantId: sched.tenantId, viewer });
-      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-      ext = "xlsx";
-      break;
-    case "docx":
-      body = await renderDocx(report, runParams, { tenantId: sched.tenantId, viewer });
-      contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      ext = "docx";
-      break;
-    case "csv": {
-      const csv = await renderCsv(report, runParams, { tenantId: sched.tenantId, viewer });
-      body = Buffer.from(csv);
-      contentType = "text/csv; charset=utf-8";
-      ext = "csv";
-      break;
-    }
-    case "pdf":
-    default:
-      await runReport({ report, params: runParams, tenantId: sched.tenantId, viewer });
-      body = await renderPdf({
-        reportId: sched.reportId,
-        tenantId: sched.tenantId,
-        viewer,
-        params: runParams,
-        pageSize: report.pages[0]?.size,
-        landscape: report.pages[0]?.orientation === "landscape",
-      });
-      contentType = "application/pdf";
-      ext = "pdf";
-      break;
-  }
-
-  const slug = reportRow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
-  const rendered: Rendered = {
-    body,
-    filename: slug + "." + ext,
-    contentType,
-    reportName: reportRow.name,
-    reportId: reportRow.id,
-    origin: appBase(req),
-    tenantId: sched.tenantId,
-  };
-
-  const recipients = safeParseJson<string[]>(sched.recipients) ?? [];
-  const config = parseDeliveryConfig(sched.deliveryConfigJson, recipients);
-
-  const result = await dispatchDelivery(config, rendered);
-
-  await prisma.schedule.update({
-    where: { id: sched.id },
-    data: {
-      lastRunAt: new Date(),
-      lastStatus: result.status === "delivered" ? "ok" : result.status === "skipped" ? "skipped" : "failed",
-    },
-  });
-
-  return result;
 }
 

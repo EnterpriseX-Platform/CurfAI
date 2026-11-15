@@ -1,7 +1,7 @@
 "use client";
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,8 @@ import { CurfLogo } from "@/components/common/CurfLogo";
 import { useT } from "@/lib/i18n/LocaleContext";
 import { eeClient } from "@/ee/client";
 import { sameSitePath } from "@/lib/http/safePath";
+import { useSignInOptions, startSocialSignIn } from "@/lib/useSignInOptions";
+import { CompanySignIn } from "@/components/auth/CompanySignIn";
 
 const IS_COMMUNITY = eeClient.edition === "community";
 
@@ -20,7 +22,6 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 
 function LoginForm() {
   const { t } = useT();
-  const router = useRouter();
   const sp = useSearchParams();
   // "/" decides where a signed-in member lands (src/app/page.tsx) — one
   // place, instead of login sending people to /reports while "/" sent them to /brief.
@@ -29,24 +30,74 @@ function LoginForm() {
 
   const [email, setEmail] = useState(IS_DEV ? "admin@curf.local" : "");
   const [password, setPassword] = useState(IS_DEV ? "admin123" : "");
+  // A Google/GitHub sign-in that was refused comes back here with ?error=
+  // (lib/ssoSignIn.ts; NextAuth's own OAuth failures use the same param).
+  const ssoError = sp.get("error");
+  const ssoErrorKey = !ssoError ? null
+    : ssoError === "sso_no_account" ? "auth.login.ssoNoAccount"
+    : ssoError === "sso_email_unverified" ? "auth.login.ssoUnverified"
+    : ssoError === "sso_workspace_suspended" ? "auth.login.workspaceSuspended"
+    : ssoError === "sso_sso_required" ? "auth.login.ssoRequired"
+    : ssoError === "sso_mfa_required" ? "auth.login.ssoMfaRequired"
+    : ssoError === "sso_sso_domain_mismatch" ? "auth.login.ssoDomainMismatch"
+    : ssoError === "sso_sso_not_enabled" ? "auth.login.ssoNotEnabled"
+    : ssoError === "sso_identity_conflict" || ssoError === "sso_session_revoked" ? "auth.login.ssoConflict"
+    : "auth.login.ssoFailed";
+  const [ssoDismissed, setSsoDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const shownError = error ?? (ssoErrorKey && !ssoDismissed ? t(ssoErrorKey) : null);
   const [loading, setLoading] = useState(false);
-  const [ssoProviders, setSsoProviders] = useState<string[]>([]);
+  // The password was right but the email was never confirmed (lib/auth.ts
+  // EMAIL_NOT_VERIFIED): offer to send the link again.
+  const [unverified, setUnverified] = useState(false);
+  const [resent, setResent] = useState(false);
+  const options = useSignInOptions();
+  const ssoProviders = options.providers;
+  // Keycloak as the only sign-in: no password form, no separate Google/GitHub providers (they go through Keycloak).
+  const showForm = options.loaded && options.passwordLogin;
+  const socials = (["google", "github"] as const).filter((p) => ssoProviders.includes(p) || options.brokered.includes(p));
 
-  useEffect(() => {
-    fetch("/api/sso-providers").then((r) => r.ok ? r.json() : { providers: [] })
-      .then((j) => setSsoProviders(j.providers ?? []))
-      .catch(() => setSsoProviders([]));
-  }, []);
+  async function resendVerification() {
+    setResent(true);
+    // Same answer whether or not the address has an account — nothing to branch on.
+    await fetch("/api/verify-email/resend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }).catch(() => null);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setSsoDismissed(true);
+    setUnverified(false);
+    setResent(false);
     setLoading(true);
-    const res = await signIn("credentials", { email, password, redirect: false });
+    try {
+      const res = await signIn("credentials", { email, password, redirect: false });
+      if (res?.ok && !res.error) {
+        // A full navigation, not router.push: the next page must be requested
+        // with the session cookie this response just set.
+        window.location.assign(callbackUrl);
+        return;
+      }
+      // "CredentialsSignin" is a wrong email or password; the sign-in limiter
+      // and a server that cannot answer (database down) carry their own message.
+      const err = res?.error ?? "";
+      // Matches lib/auth.ts EMAIL_NOT_VERIFIED (a client component can't import it).
+      if (err === "Email not verified") setUnverified(true);
+      setError(t(err === "CredentialsSignin" ? "auth.login.invalidCredentials"
+        : err === "Email not verified" ? "auth.login.emailUnverified"
+        // Matches lib/auth.ts WORKSPACE_SUSPENDED.
+        : err === "Workspace suspended" ? "auth.login.workspaceSuspended"
+        // Matches lib/auth.ts USE_IDENTITY_PROVIDER.
+        : err === "Use single sign-on" ? "auth.login.useSso"
+        : err.startsWith("Too many") ? "auth.login.tooMany" : "auth.login.unreachable"));
+    } catch {
+      setError(t("auth.login.unreachable"));
+    }
     setLoading(false);
-    if (res?.error) setError(t("auth.login.invalidCredentials"));
-    else router.push(callbackUrl);
   }
 
   return (
@@ -61,7 +112,28 @@ function LoginForm() {
           <h1 className="text-2xl font-semibold tracking-tight">{t("auth.login.welcomeBack")}</h1>
           <p className="mt-1.5 text-sm text-muted-foreground">{t("auth.login.subtitle")}</p>
 
-          <form onSubmit={submit} className="mt-8 grid gap-4">
+          {ssoProviders.includes("keycloak") && (
+            <div className="mt-8 grid gap-2">
+              {/* After a refusal the person still has a Keycloak session; without prompt=login "Continue" would silently sign them in as the same refused identity again. */}
+              <Button className="w-full" onClick={() => signIn("keycloak", { callbackUrl }, ssoError ? { prompt: "login" } : undefined)}>
+                {t("auth.login.continueWithSso")}
+              </Button>
+              {ssoError === "sso_mfa_required" && (
+                // The organisation requires a second factor: send the person back to Keycloak asking for it.
+                <Button variant="outline" className="w-full" onClick={() => signIn("keycloak", { callbackUrl }, { acr_values: "2" })}>
+                  {t("auth.login.ssoMfaRetry")}
+                </Button>
+              )}
+            </div>
+          )}
+
+          {options.companySso && <CompanySignIn callbackUrl={callbackUrl} />}
+
+          {!options.loaded && <div className="mt-8 h-10" aria-hidden />}
+          {shownError && !showForm && (
+            <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{shownError}</div>
+          )}
+          {showForm && <form onSubmit={submit} className="mt-8 grid gap-4">
             <div className="grid gap-1.5">
               <Label htmlFor="email" className="text-xs font-medium text-foreground">{t("auth.login.email")}</Label>
               <Input
@@ -72,47 +144,55 @@ function LoginForm() {
             <div className="grid gap-1.5">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password" className="text-xs font-medium text-foreground">{t("auth.login.password")}</Label>
-                <a href="/forgot" className="text-[11px] text-muted-foreground hover:text-primary hover:underline">{t("auth.login.forgot")}</a>
+                <a href="/forgot" className="text-2xs text-muted-foreground hover:text-primary hover:underline">{t("auth.login.forgot")}</a>
               </div>
               <Input
                 id="password" type="password" value={password}
                 onChange={(e) => setPassword(e.target.value)} required
               />
             </div>
-            {error && (
+            {shownError && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                {error}
+                {shownError}
+                {unverified && (
+                  <div className="mt-2">
+                    {resent
+                      ? <span className="text-muted-foreground">{t("auth.login.verificationResent")}</span>
+                      : <button type="button" onClick={resendVerification} className="font-medium underline">{t("auth.login.resendVerification")}</button>}
+                  </div>
+                )}
               </div>
             )}
             <Button type="submit" disabled={loading} className="mt-2">
               {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("auth.login.signingIn")}</> : t("action.signIn")}
             </Button>
-          </form>
+          </form>}
 
-          {ssoProviders.length > 0 && (
+          {socials.length > 0 && (
             <>
-              <div className="my-6 flex items-center gap-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <div className="h-px flex-1 bg-border" />
-                {t("auth.login.orContinueWith")}
-                <div className="h-px flex-1 bg-border" />
-              </div>
-              <div className="grid gap-2">
-                {ssoProviders.includes("google") && (
-                  <Button variant="outline" className="w-full" onClick={() => signIn("google", { callbackUrl })}>
+              {showForm && (
+                <div className="my-6 flex items-center gap-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  <div className="h-px flex-1 bg-border" />
+                  {t("auth.login.orContinueWith")}
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+              )}
+              <div className={showForm ? "grid gap-2" : "mt-3 grid gap-2"}>
+                {socials.includes("google") && (
+                  <Button variant="outline" className="w-full" onClick={() => startSocialSignIn("google", options, callbackUrl)}>
                     {t("auth.login.continueWithGoogle")}
                   </Button>
                 )}
-                {ssoProviders.includes("github") && (
-                  <Button variant="outline" className="w-full" onClick={() => signIn("github", { callbackUrl })}>
+                {socials.includes("github") && (
+                  <Button variant="outline" className="w-full" onClick={() => startSocialSignIn("github", options, callbackUrl)}>
                     {t("auth.login.continueWithGithub")}
                   </Button>
                 )}
               </div>
             </>
           )}
-
-          {IS_DEV && (
-            <p className="mt-8 text-[11px] text-muted-foreground">
+          {IS_DEV && showForm && (
+            <p className="mt-8 text-2xs text-muted-foreground">
               Dev credentials: <span className="font-mono">admin@curf.local</span> / <span className="font-mono">admin123</span>
             </p>
           )}
@@ -128,16 +208,12 @@ function LoginForm() {
       </div>
 
       {/* Right — marketing/hero */}
-      <div className="relative hidden overflow-hidden bg-gradient-chrome lg:block">
-        <div className="absolute inset-0 opacity-60">
-          <div className="absolute -top-24 -right-24 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
-          <div className="absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
-        </div>
-        <div className="relative flex h-full flex-col justify-between p-12">
+      <div className="hidden border-l border-border bg-muted lg:block">
+        <div className="flex h-full flex-col justify-between p-12">
           <div className="max-w-md">
-            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
+            <p className="mb-6 text-xs font-medium uppercase tracking-[.04em] text-muted-foreground">
               {t("landing.heroEyebrow")}
-            </div>
+            </p>
             <h2 className="text-3xl font-semibold tracking-tight text-foreground">
               {t("brand.tagline")}
             </h2>
@@ -152,7 +228,7 @@ function LoginForm() {
               : [t("auth.login.bullet1"), t("auth.login.bullet2"), t("auth.login.bullet3")]
             ).map((bullet) => (
               <div key={bullet} className="flex items-center gap-2.5 text-foreground/80">
-                <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+                <div className="h-1.5 w-1.5 rounded-full bg-faint" />
                 {bullet}
               </div>
             ))}

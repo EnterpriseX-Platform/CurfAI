@@ -147,7 +147,7 @@ function QueriesTab() {
             }`}
           >
             <span className="truncate">{q.name}</span>
-            <span className="ml-2 font-mono text-[10px] text-muted-foreground">{q.id}</span>
+            <span className="ml-2 font-mono text-2xs text-muted-foreground">{q.id}</span>
           </button>
         ))}
       </aside>
@@ -510,10 +510,10 @@ function AttachesEditor({
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
       <div className="flex items-baseline justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("dataDrawer.attach.title")}
         </p>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {refPre}<span className="font-mono">{`<alias>.<table>`}</span>{refPost}
         </p>
       </div>
@@ -523,7 +523,7 @@ function AttachesEditor({
           {attaches.map((a, idx) => (
             <div key={idx} className="flex items-center justify-between rounded-md border bg-card px-2 py-1.5 text-xs">
               <div className="flex items-center gap-2">
-                <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px]">
+                <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-2xs">
                   {a.alias}
                 </span>
                 <span className="text-muted-foreground">→</span>
@@ -566,12 +566,12 @@ function AttachesEditor({
         </div>
       )}
       {draftAlias && !aliasOk && (
-        <p className="text-[11px] text-destructive">
+        <p className="text-2xs text-destructive">
           {t("dataDrawer.aliasInvalid")}
         </p>
       )}
       {draftAlias && aliasOk && !aliasFree && (
-        <p className="text-[11px] text-destructive">{t("dataDrawer.attach.aliasTaken")}</p>
+        <p className="text-2xs text-destructive">{t("dataDrawer.attach.aliasTaken")}</p>
       )}
     </div>
   );
@@ -646,10 +646,10 @@ function JoinsEditor({
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
       <div className="flex items-baseline justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("dataDrawer.joins.title")}
         </p>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {t("dataDrawer.joins.hint")}
         </p>
       </div>
@@ -659,16 +659,16 @@ function JoinsEditor({
           {joins.map((j, idx) => (
             <div key={idx} className="flex items-center justify-between rounded-md border bg-card px-2 py-1.5 text-xs">
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-2xs uppercase">
                   {j.type}
                 </span>
                 <span className="font-medium">{nameFor(j.queryId)}</span>
                 <span className="text-muted-foreground">on</span>
-                <span className="rounded border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-[10px]">
+                <span className="rounded border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-2xs">
                   primary.{j.on.left}
                 </span>
                 <span className="text-muted-foreground">=</span>
-                <span className="rounded border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-[10px]">
+                <span className="rounded border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-2xs">
                   {j.alias}.{j.on.right}
                 </span>
               </div>
@@ -711,7 +711,7 @@ function JoinsEditor({
           </div>
           <div className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2 text-xs">
             <div className="grid gap-1">
-              <span className="text-[10px] uppercase text-muted-foreground">{t("dataDrawer.joins.primaryColumn")}</span>
+              <span className="text-2xs uppercase text-muted-foreground">{t("dataDrawer.joins.primaryColumn")}</span>
               <Input
                 value={draftLeftKey}
                 onChange={(e) => setDraftLeftKey(e.target.value)}
@@ -721,7 +721,7 @@ function JoinsEditor({
             </div>
             <span className="pt-4 text-muted-foreground">=</span>
             <div className="grid gap-1">
-              <span className="text-[10px] uppercase text-muted-foreground">{t("dataDrawer.joins.joinedColumn")}</span>
+              <span className="text-2xs uppercase text-muted-foreground">{t("dataDrawer.joins.joinedColumn")}</span>
               <Input
                 value={draftRightKey}
                 onChange={(e) => setDraftRightKey(e.target.value)}
@@ -734,12 +734,12 @@ function JoinsEditor({
             </Button>
           </div>
           {draftAlias && !aliasOk && (
-            <p className="text-[11px] text-destructive">
+            <p className="text-2xs text-destructive">
               {t("dataDrawer.aliasInvalid")}
             </p>
           )}
           {draftAlias && aliasOk && !aliasFree && (
-            <p className="text-[11px] text-destructive">{t("dataDrawer.joins.aliasTaken")}</p>
+            <p className="text-2xs text-destructive">{t("dataDrawer.joins.aliasTaken")}</p>
           )}
         </div>
       )}
@@ -795,7 +795,7 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("dataDrawer.runQuery")}
         </p>
         <Button
@@ -816,7 +816,7 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
         result.error ? (
           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
             <div className="mb-1 font-medium">{t("metrics.queryFailed")}</div>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{result.error}</pre>
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-2xs text-foreground/80">{result.error}</pre>
           </div>
         ) : (
           <div className="rounded-md border border-success/40 bg-success/5 p-2 text-xs">
@@ -826,7 +826,7 @@ function QueryPreview({ query, reportParams }: { query: DataSourceDef; reportPar
                 {result.truncated ? " " + t("dataDrawer.showing").replace("{n}", String(result.rows?.length ?? 0)) : ""}
                 {" · "}{result.durationMs ?? 0}ms
               </span>
-              <span className="text-[10px] text-muted-foreground">{t("dataDrawer.columnCount").replace("{n}", String((result.columns ?? []).length))}</span>
+              <span className="text-2xs text-muted-foreground">{t("dataDrawer.columnCount").replace("{n}", String((result.columns ?? []).length))}</span>
             </div>
             {result.rows && result.rows.length > 0 ? (
               <div className="max-h-64 overflow-auto rounded border border-border bg-background">

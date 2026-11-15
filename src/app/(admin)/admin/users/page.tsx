@@ -6,6 +6,7 @@ import { isOrgPlatformAdminForActiveTenant } from "@/lib/orgAdmin";
 import { featureGate } from "@/lib/featureGate";
 import { AppShell } from "@/components/layout/AppShell";
 import { prisma } from "@/lib/db";
+import { isPendingInvite } from "@/lib/invites";
 import { UsersManager } from "./UsersManager";
 import { OrganizationPanel } from "./OrganizationPanel";
 import { BetaRequestsPanel } from "./BetaRequestsPanel";
@@ -14,8 +15,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -24,19 +25,19 @@ export default async function UsersAdminPage() {
   const user = (session?.user as any) ?? null;
   if (!session) redirect("/login?callbackUrl=/admin/users");
   if ((session.user as any)?.role !== "admin") redirect("/reports");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   const members = await prisma.membership.findMany({
     where: { tenantId: user.tenantId },
-    include: { user: { select: { id: true, email: true, name: true, passwordHash: true } } },
+    include: { user: { select: { id: true, email: true, name: true, passwordHash: true, emailVerifiedAt: true } } },
     orderBy: { user: { email: "asc" } },
   });
   const roles = await prisma.role.findMany({ where: { tenantId: user.tenantId }, orderBy: { slug: "asc" } });
   const items = members.map((m: any) => {
     let roleSlugs: string[] = [];
     try { roleSlugs = JSON.parse(m.rolesJson ?? "[]"); } catch { /* */ }
-    // Only whether a password is set leaves the server — never the hash.
-    return { id: m.user.id, email: m.user.email, name: m.user.name, authRole: m.role, roles: roleSlugs, pendingInvite: !m.user.passwordHash };
+    // Only whether the invite is still waiting leaves the server — never the hash.
+    return { id: m.user.id, email: m.user.email, name: m.user.name, authRole: m.role, roles: roleSlugs, pendingInvite: isPendingInvite(m.user) };
   });
 
   // The waitlist is the GLOBAL signup queue (prospects' emails + free-text
@@ -69,7 +70,7 @@ export default async function UsersAdminPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.section.admin") }, { label: t(locale, "nav.usersRoles") }]}>
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "nav.usersRoles")} description={t(locale, "adminUsers.pageSubtitle")} />
 
         <UsersManager initialUsers={items} allRoles={roles} currentUserId={user.id} />

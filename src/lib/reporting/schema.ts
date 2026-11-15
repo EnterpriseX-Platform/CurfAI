@@ -469,6 +469,18 @@ export const KpiConfigSchema = z.object({
   forecast: ForecastConfigSchema.optional(),
   /** Click the number to see the rows behind it — see DrillThroughSchema. */
   drilldown: DrillThroughSchema.optional(),
+  /**
+   * Governed metric (lib/metrics/apply.ts): this KPI's query IS the workspace's
+   * defined metric, not a figure a model re-derived. `metricKey` is the Metric
+   * slug, `metricScope` its short scope ("investment · FY2569") shown in the
+   * card's footer, `metricDefinition` the prose behind the tooltip.
+   * `metricReplaced` keeps the figure the report designer had computed before
+   * the defined one took its place, when the two differed by more than 10%.
+   */
+  metricKey: z.string().max(64).optional(),
+  metricScope: z.string().max(200).optional(),
+  metricDefinition: z.string().max(1000).optional(),
+  metricReplaced: z.object({ before: z.number().nullable(), after: z.number() }).optional(),
 });
 
 
@@ -664,6 +676,11 @@ export const ChartConfigSchema = z.object({
   emphasisLast: z.boolean().optional(),
   /** Number format hint for axis ticks + tooltips + data labels. */
   valueFormat: z.enum(["number", "currency", "percent", "compact"]).optional(),
+  /**
+   * A gauge or bullet chart that shows one defined metric (metrics/apply.ts wireGaugeToMetric): the Metric's slug, as on a KPI card.
+   * Set by code, never by the model; its presence says the figure is the governed one, not a number a model re-derived.
+   */
+  metricKey: z.string().max(64).optional(),
   /** Optional reference lines (target, threshold, etc). */
   referenceLines: z.array(ReferenceLineSchema).optional(),
   /** Optional event markers (campaign launches, holidays, outages…). */

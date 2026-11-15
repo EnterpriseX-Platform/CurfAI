@@ -10,6 +10,7 @@ import { currencySymbol, DEFAULT_CURRENCY } from "@/lib/reporting/currency";
 import { CHART_STYLE_PRESETS, type ResolvedChartStyle } from "@/lib/reporting/chartStyles";
 import type { ForecastConfig } from "@/lib/reporting/schema";
 import { dateValueLabel, isMonthStartSeries, readsThaiMoney, thaiMoney, type DateStyle } from "@/lib/reporting/format";
+import { weekStartLabel } from "@/lib/reporting/periodLabel";
 
 /**
  * The full set of values a per-chart-type renderer might need. Every
@@ -73,6 +74,12 @@ export type ChartRenderCtx = {
   emptyText?: string;
   /** A renderer's other words, already translated (the sunburst's "Total", "Click to step out"). */
   text?: Record<string, string>;
+  /**
+   * The last x bucket is a period still running (lib/reporting/partialPeriod.ts):
+   * its row index, drawn dashed/lighter by bar/line/area/combo, and the words
+   * its tooltip header carries ("Incomplete period").
+   */
+  partial?: { index: number; note: string };
 };
 
 /**
@@ -107,8 +114,13 @@ export function dateLabel(ctx: ChartRenderCtx): (v: any) => string {
 }
 
 function dateFormatter(ctx: ChartRenderCtx, form: "full" | "axis"): (v: any) => string {
-  const monthly = isMonthStartSeries((ctx.data as Array<Record<string, unknown>>).map((r) => r?.[ctx.xField]));
-  return (v) => {
+  const rows = ctx.data as Array<Record<string, unknown>>;
+  const monthly = isMonthStartSeries(rows.map((r) => r?.[ctx.xField]));
+  const partialX = ctx.partial ? rows[ctx.partial.index]?.[ctx.xField] : undefined;
+  const label = (v: any): string => {
+    // "2026-W29" reads as the date its week starts ("20 Jul", "20 ก.ค.").
+    const week = weekStartLabel(v, ctx.dateStyle, form);
+    if (week != null) return week;
     const date = dateValueLabel(v, ctx.dateStyle, form, monthly);
     if (date != null) return date;
     const s = String(v);
@@ -117,6 +129,9 @@ function dateFormatter(ctx: ChartRenderCtx, form: "full" | "axis"): (v: any) => 
     // header (form "full") keeps the whole name.
     return form === "axis" && s.length > 20 ? s.slice(0, 19) + "…" : s;
   };
+  if (form === "axis" || partialX === undefined) return label;
+  // The tooltip over a still-running period says so, beside its date.
+  return (v) => (v === partialX ? `${label(v)} · ${ctx.partial!.note}` : label(v));
 }
 
 /**
@@ -267,6 +282,16 @@ export const AXIS_PROPS = {
  */
 export function categoryAxisProps(count: number) {
   return count > 6 ? { interval: 0, angle: -35, textAnchor: "end" as const, height: 58 } : {};
+}
+
+/** The tilted labels of a crowded category axis are cut to this many characters (58px of axis height holds about this many at 35 degrees). */
+export const TILTED_LABEL_MAX = 14;
+
+/** `text` cut to `max` characters with an ellipsis, by grapheme so a Thai vowel stays on its consonant; the full name stays in the tooltip. */
+export function clipLabel(text: string, max: number = TILTED_LABEL_MAX): string {
+  const Seg = (Intl as any).Segmenter;
+  const parts: string[] = Seg ? Array.from(new Seg(undefined, { granularity: "grapheme" }).segment(text), (g: any) => g.segment as string) : Array.from(text);
+  return parts.length > max ? `${parts.slice(0, max - 1).join("")}…` : text;
 }
 
 /**

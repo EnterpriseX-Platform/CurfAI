@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatValue, seriesName, categoryAxisProps } from "./shared";
+import { formatValue, seriesName, categoryAxisProps, clipLabel } from "./shared";
 
 describe("formatValue percent", () => {
   it("scales a typical 0-1 fraction to a percent string", () => {
@@ -52,6 +52,14 @@ describe("seriesName", () => {
     // The chart's own name for a series wins over its column's.
     expect(seriesName("new_mrr", { seriesLabels: { new_mrr: "ลูกค้าใหม่" } })).toBe("ลูกค้าใหม่");
     expect(seriesName("churn", { seriesLabels: { new_mrr: "ลูกค้าใหม่" } })).toBe("Churn");
+  });
+});
+
+describe("clipLabel", () => {
+  it("leaves a short name and cuts a long one to the room a tilted label has, by grapheme", () => {
+    expect(clipLabel("North")).toBe("North");
+    expect(clipLabel("Department of Public Works and Town Planning")).toBe("Department of…");
+    expect([...clipLabel("กรมโยธาธิการและผังเมืองส่วนภูมิภาค")].length).toBeLessThanOrEqual(15);
   });
 });
 

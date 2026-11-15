@@ -13,12 +13,16 @@ import { LlmProviderPanel } from "./LlmProviderPanel";
 import { LakeEnginePanel } from "./LakeEnginePanel";
 import { SmtpPanel } from "./SmtpPanel";
 import { DeleteWorkspacePanel } from "./DeleteWorkspacePanel";
+import { PendingDeletionPanel, type PendingWorkspace } from "./PendingDeletionPanel";
+import { withSystemDbContext } from "@/lib/dbContext";
+import { tenantOpen } from "@/lib/tenantStatus";
+import { daysUntil } from "@/lib/lifecycle/deletion";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { EDITION } from "@/lib/ee/edition";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -39,13 +43,23 @@ export default async function TenantSettingsPage() {
     include: { _count: { select: { memberships: true, reports: true, dataSources: true } } },
   });
   if (!tenant) redirect("/reports");
-  const locale = readLocale();
+  const locale = await readLocale();
   let pdpaRecord: PdpaRecord | null = null;
   try {
     const parsed = JSON.parse(tenant.pdpaRecordJson ?? "{}");
     if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) pdpaRecord = parsed;
   } catch { /* corrupt — treat as unset */ }
-  const otherMemberships = (user.memberships ?? []).filter((m) => !m.isVirtual && m.tenantId !== tenant.id);
+  // Other workspaces this admin can fall back to: real memberships that are open. Ones awaiting deletion are listed below instead.
+  const otherMemberships = (user.memberships ?? []).filter((m) => !m.isVirtual && m.tenantId !== tenant.id && tenantOpen(m.tenantStatus));
+  const pendingIds = (user.memberships ?? []).filter((m) => !m.isVirtual && m.role === "admin" && m.tenantStatus === "pending_deletion").map((m) => m.tenantId);
+  const pending: PendingWorkspace[] = pendingIds.length === 0 ? [] : await withSystemDbContext(async () => {
+    // The closed workspaces are not the one this request is bound to: read in system scope, authorized by the real admin membership above.
+    const rows = await prisma.tenant.findMany({
+      where: { id: { in: pendingIds }, status: "pending_deletion" },
+      select: { id: true, name: true, deletionPurgeAt: true, exports: { where: { status: "ready" }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true } } },
+    });
+    return rows.map((r) => ({ id: r.id, name: r.name, purgeAt: (r.deletionPurgeAt ?? new Date()).toISOString(), daysLeft: daysUntil(r.deletionPurgeAt) ?? 0, exportId: r.exports[0]?.id ?? null }));
+  });
 
   const stats = [
     { label: t(locale, "adminTenant.members"),    value: tenant._count.memberships, Icon: Users },
@@ -55,12 +69,12 @@ export default async function TenantSettingsPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.section.admin") }, { label: t(locale, "nav.tenant") }]}>
-      <div className="mx-auto max-w-3xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-4xl px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "adminTenant.pageTitle")} description={t(locale, "adminTenant.pageSubtitle")} />
 
 
         <section className="mb-8 rounded-lg border bg-card p-5 shadow-xs">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
             {t(locale, "adminTenant.identity")}
           </p>
           <TenantRenameForm initial={{ id: tenant.id, name: tenant.name, slug: tenant.slug }} />
@@ -83,6 +97,8 @@ export default async function TenantSettingsPage() {
 
         {/* DuckDB engine flip is Growth — its API is absent in Community. */}
         {EDITION !== "community" && <LakeEnginePanel />}
+
+        <PendingDeletionPanel items={pending} />
 
         <DeleteWorkspacePanel
           tenant={{ id: tenant.id, name: tenant.name, slug: tenant.slug }}

@@ -147,7 +147,7 @@ export function EngineQueryEditor({
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{view.name}</p>
                 {view.description && <p className="text-xs text-muted-foreground">{view.description}</p>}
-                <p className="mt-1 text-[11px] text-muted-foreground">
+                <p className="mt-1 text-2xs text-muted-foreground">
                   {fill(t("engineQuery.data.columnCount"), { n: view.columns.length })}
                 </p>
               </div>
@@ -266,7 +266,7 @@ function Section({
           {open ? <ChevronDown className="h-4 w-4" aria-hidden /> : <ChevronRight className="h-4 w-4" aria-hidden />}
           <span>{title}</span>
           {!!count && (
-            <span className="rounded-full bg-primary-soft px-1.5 text-[10px] font-semibold text-primary-ink">{count}</span>
+            <span className="rounded-full bg-primary-soft px-1.5 text-2xs font-semibold text-primary-ink">{count}</span>
           )}
         </button>
       </h4>
@@ -304,7 +304,7 @@ function TypeBadge({ type }: { type: string }) {
   const family = columnFamily(type);
   return (
     <span
-      className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+      className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground"
       title={type}
     >
       {t(`engineQuery.type.${family}`)}
@@ -388,7 +388,7 @@ function ViewPicker({
                   <span className="block truncate text-sm font-medium">{v.name}</span>
                   {v.description && <span className="block text-xs text-muted-foreground">{v.description}</span>}
                 </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">
+                <span className="shrink-0 text-2xs text-muted-foreground">
                   {fill(t("engineQuery.data.columnCount"), { n: v.columns.length })}
                 </span>
               </button>
@@ -441,7 +441,7 @@ function ColumnChecklist({
               <label htmlFor={id} className="min-w-0 flex-1 cursor-pointer">
                 <span className="flex items-center gap-1.5 text-sm">
                   <span className="truncate">{columnLabel(c)}</span>
-                  {c.label && c.label !== c.name && <span className="truncate font-mono text-[10px] text-muted-foreground">{c.name}</span>}
+                  {c.label && c.label !== c.name && <span className="truncate font-mono text-2xs text-muted-foreground">{c.name}</span>}
                   {c.masked && <MaskedMark />}
                 </span>
                 {c.description && <span className="block text-xs text-muted-foreground">{c.description}</span>}
@@ -487,7 +487,7 @@ function FilterRow({
     <div className="grid gap-2 rounded-md border bg-card p-2">
       <div className="grid grid-cols-[1fr_9rem_auto] items-end gap-2">
         <div className="grid gap-1">
-          <Label htmlFor={`${uid}-col`} className="text-[11px]">{fill(t("engineQuery.filters.column"), { n })}</Label>
+          <Label htmlFor={`${uid}-col`} className="text-2xs">{fill(t("engineQuery.filters.column"), { n })}</Label>
           <Select value={filter.column} onValueChange={onColumn}>
             <SelectTrigger id={`${uid}-col`}><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -496,7 +496,7 @@ function FilterRow({
           </Select>
         </div>
         <div className="grid gap-1">
-          <Label htmlFor={`${uid}-op`} className="text-[11px]">{fill(t("engineQuery.filters.operator"), { n })}</Label>
+          <Label htmlFor={`${uid}-op`} className="text-2xs">{fill(t("engineQuery.filters.operator"), { n })}</Label>
           <Select value={filter.op} onValueChange={(v) => onOp(v as FilterOp)}>
             <SelectTrigger id={`${uid}-op`}><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -578,7 +578,7 @@ function ValueField({
   const bound = isParamRef(value);
   return (
     <div className="grid gap-1">
-      <Label htmlFor={`${uid}-v`} className="text-[11px]">{label}</Label>
+      <Label htmlFor={`${uid}-v`} className="text-2xs">{label}</Label>
       <div className="flex gap-1.5">
         {parameters.length > 0 && (
           <Select
@@ -668,7 +668,7 @@ function ListField({
   }, [values, family]);
   return (
     <div className="grid gap-1">
-      <Label htmlFor={`${uid}-l`} className="text-[11px]">{label}</Label>
+      <Label htmlFor={`${uid}-l`} className="text-2xs">{label}</Label>
       <div className="flex gap-1.5">
         {parameters.length > 0 && (
           <Select value={bound ? "param" : "value"} onValueChange={(m) => onParam(m === "param" ? parameters[0].name : null)}>
@@ -761,7 +761,7 @@ function GroupAndTotals({
             <div key={i} className="grid gap-1 rounded-md border bg-card p-2">
               <div className="grid grid-cols-[8rem_1fr_1fr_auto] items-end gap-2">
                 <div className="grid gap-1">
-                  <Label htmlFor={`${uid}-f${i}`} className="text-[11px]">{fill(t("engineQuery.group.function"), { n })}</Label>
+                  <Label htmlFor={`${uid}-f${i}`} className="text-2xs">{fill(t("engineQuery.group.function"), { n })}</Label>
                   <Select value={a.fn} onValueChange={(fn) => onUpdate(i, { fn: fn as AggregateFn })}>
                     <SelectTrigger id={`${uid}-f${i}`}><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -770,7 +770,7 @@ function GroupAndTotals({
                   </Select>
                 </div>
                 <div className="grid gap-1">
-                  <Label htmlFor={`${uid}-c${i}`} className="text-[11px]">{fill(t("engineQuery.group.of"), { n })}</Label>
+                  <Label htmlFor={`${uid}-c${i}`} className="text-2xs">{fill(t("engineQuery.group.of"), { n })}</Label>
                   <Select
                     value={a.column ?? NONE}
                     onValueChange={(c) => onUpdate(i, { column: c === NONE ? undefined : c })}
@@ -783,7 +783,7 @@ function GroupAndTotals({
                   </Select>
                 </div>
                 <div className="grid gap-1">
-                  <Label htmlFor={`${uid}-a${i}`} className="text-[11px]">{fill(t("engineQuery.group.name"), { n })}</Label>
+                  <Label htmlFor={`${uid}-a${i}`} className="text-2xs">{fill(t("engineQuery.group.name"), { n })}</Label>
                   <Input
                     id={`${uid}-a${i}`}
                     value={a.as ?? ""}
@@ -850,7 +850,7 @@ function SortAndLimit({
           <div key={i} className="grid gap-1">
             <div className="grid grid-cols-[1fr_10rem_auto] items-end gap-2">
               <div className="grid gap-1">
-                <Label htmlFor={`${uid}-sc${i}`} className="text-[11px]">{fill(t("engineQuery.sort.by"), { n })}</Label>
+                <Label htmlFor={`${uid}-sc${i}`} className="text-2xs">{fill(t("engineQuery.sort.by"), { n })}</Label>
                 <Select value={o.column} onValueChange={(column) => onUpdate(i, { column })}>
                   <SelectTrigger id={`${uid}-sc${i}`}><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -860,7 +860,7 @@ function SortAndLimit({
                 </Select>
               </div>
               <div className="grid gap-1">
-                <Label htmlFor={`${uid}-sd${i}`} className="text-[11px]">{fill(t("engineQuery.sort.direction"), { n })}</Label>
+                <Label htmlFor={`${uid}-sd${i}`} className="text-2xs">{fill(t("engineQuery.sort.direction"), { n })}</Label>
                 <Select value={o.descending ? "desc" : "asc"} onValueChange={(d) => onUpdate(i, { descending: d === "desc" })}>
                   <SelectTrigger id={`${uid}-sd${i}`}><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -893,7 +893,7 @@ function SortAndLimit({
           placeholder={t("engineQuery.sort.limitPlaceholder")}
           onChange={(e) => { setLimitText(e.target.value); onLimit(e.target.value === "" ? null : Number(e.target.value)); }}
         />
-        <p className="text-[11px] text-muted-foreground">{t("engineQuery.sort.limitHint")}</p>
+        <p className="text-2xs text-muted-foreground">{t("engineQuery.sort.limitHint")}</p>
         <ProblemList problems={problems.filter((p) => p.field === "limit")} />
       </div>
     </div>
@@ -995,7 +995,7 @@ function Preview({
         {applied && <span className="text-xs text-success" role="status">{t("engineQuery.preview.columnsApplied")}</span>}
       </div>
       {tables.length === 0 && !blocked && (
-        <p className="text-[11px] text-muted-foreground">{t("engineQuery.preview.noTable")}</p>
+        <p className="text-2xs text-muted-foreground">{t("engineQuery.preview.noTable")}</p>
       )}
 
       <div aria-live="polite">
@@ -1015,7 +1015,7 @@ function Preview({
                 {(result.totalRows ?? 0) > rows.length ? " " + fill(t("dataDrawer.showing"), { n: rows.length }) : ""}
                 {" · "}{result.durationMs ?? 0}ms
               </span>
-              <span className="text-[10px] text-muted-foreground">{fill(t("dataDrawer.columnCount"), { n: columns.length })}</span>
+              <span className="text-2xs text-muted-foreground">{fill(t("dataDrawer.columnCount"), { n: columns.length })}</span>
             </div>
             {rows.length > 0 ? (
               <div className="max-h-64 overflow-auto rounded border border-border bg-background">

@@ -54,7 +54,8 @@ export const MAX_WAIT_MS = 120_000;
 export const IDLE_CLOSE_MS = 30_000;
 const RETRY_AFTER_SEC = 30;
 
-export type BrowserJobKind = "pdf" | "xlsx";
+/** "verify" is Master Builder's layout check of a finished build (master-builder/verify/browserVerify.ts): it holds a page for minutes, so it runs one at a time per process (that file) and leaves the other slot to exports. */
+export type BrowserJobKind = "pdf" | "xlsx" | "verify";
 
 type Waiter = { kind: BrowserJobKind; grant: () => void };
 type State = {

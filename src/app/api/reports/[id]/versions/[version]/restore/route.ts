@@ -5,7 +5,11 @@ import { recordAudit } from "@/lib/audit";
 import { ReportSchema } from "@/lib/reporting/schema";
 import { foreignSourcesBlock } from "@/lib/reporting/sourceOwnership";
 
-export async function POST(req: NextRequest, { params }: { params: { id: string; version: string } }) {
+export async function POST(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; version: string }> }
+) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
   const scopeBlock = requireReportInScope(user, params.id);

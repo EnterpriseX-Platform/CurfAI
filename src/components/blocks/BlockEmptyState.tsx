@@ -76,7 +76,7 @@ export function BlockEmptyState({
             data-block-not-run={notRun.kind}
             // The block may be a short fixed-height slot: clamp to two lines, full text on hover.
             title={notRun.reason}
-            className={`mx-auto line-clamp-2 max-w-sm break-words rounded-md border px-2 py-1 font-mono text-[11px] leading-snug ${
+            className={`mx-auto line-clamp-2 max-w-sm break-words rounded-md border px-2 py-1 font-mono text-2xs leading-snug ${
               notRun.kind === "failed" ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-warning/30 bg-warning/5 text-warning"
             }`}
           >

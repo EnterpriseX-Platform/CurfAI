@@ -31,6 +31,8 @@ type State = {
   configModalOpen: boolean;
   setConfigModalOpen: (open: boolean) => void;
   setReport: (r: Report) => void;
+  /** A whole-report change made in one step (a check's Fix): one Undo, and the page and selection stay. */
+  replaceReport: (r: Report) => void;
   selectBlock: (id: string | null) => void;
   addBlock: (type: BlockType, x?: number, y?: number) => void;
   addBlockTemplate: (entries: BlockTemplateEntry[], yOffset?: number) => void;
@@ -43,6 +45,8 @@ type State = {
   addPage: () => void;
   removePage: (pageId: string) => void;
   setActivePage: (pageId: string) => void;
+  /** Page size / orientation for the page being edited (not always page 1). */
+  updateActivePage: (patch: Partial<Pick<Report["pages"][number], "size" | "orientation">>) => void;
 };
 
 function defaultConfig(type: BlockType): any {
@@ -77,6 +81,7 @@ export const useDesignerStore = create<State>()(
     setConfigModalOpen: (open) => set({ configModalOpen: open }),
 
     setReport: (r) => set({ report: r, activePageId: r.pages[0]?.id ?? "p1", selectedBlockId: null }),
+    replaceReport: (r) => set({ report: r }),
     selectBlock: (id) => set({ selectedBlockId: id }),
 
     addBlock: (type, x, y) => {
@@ -214,6 +219,10 @@ export const useDesignerStore = create<State>()(
     }),
 
     setActivePage: (pageId) => set({ activePageId: pageId, selectedBlockId: null }),
+
+    updateActivePage: (patch) => set((s) => ({
+      report: { ...s.report, pages: s.report.pages.map((p) => (p.id === s.activePageId ? { ...p, ...patch } : p)) },
+    })),
   }), { limit: 100 })
 );
 

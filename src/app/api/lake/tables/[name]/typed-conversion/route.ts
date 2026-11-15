@@ -56,7 +56,8 @@ async function authorize(req: NextRequest, rawName: string) {
   return { user, row: access.row };
 }
 
-export async function GET(req: NextRequest, { params }: { params: { name: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const auth = await authorize(req, params.name);
   if (auth.error) return auth.error;
   const { user, row } = auth;
@@ -69,7 +70,8 @@ export async function GET(req: NextRequest, { params }: { params: { name: string
   }
 }
 
-export async function POST(req: NextRequest, { params }: { params: { name: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const auth = await authorize(req, params.name);
   if (auth.error) return auth.error;
   const { user, row } = auth;

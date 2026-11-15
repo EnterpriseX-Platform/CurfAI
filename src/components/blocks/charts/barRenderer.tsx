@@ -19,10 +19,11 @@ import type { ReactElement } from "react";
 import {
   BarChart, Bar, Cell, CartesianGrid, Legend, Tooltip, XAxis, YAxis, LabelList, Rectangle,
 } from "recharts";
-import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, LABEL_FILL, CURSOR_FILL, LEGEND_STYLE, formatValue, styleOf, gridPropsFor, DEEMPHASIS_FILL, type ChartRenderCtx, dateTick, dateLabel, seriesName, categoryAxisProps, seriesTooltip } from "./shared";
+import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, LABEL_FILL, CURSOR_FILL, LEGEND_STYLE, formatValue, styleOf, gridPropsFor, DEEMPHASIS_FILL, type ChartRenderCtx, dateTick, dateLabel, seriesName, categoryAxisProps, clipLabel, seriesTooltip } from "./shared";
 import { SeriesGradients, seriesFill } from "./gradients";
 import { directLabelsFit } from "@/lib/reporting/chartStyles";
 import { FORECAST_COLOR } from "./PredictionOverlay";
+import { barsHorizontal } from "./barOrientation";
 
 export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
   const {
@@ -40,8 +41,10 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
 
   // Horizontal bars: Recharts spells this `layout="vertical"` (it describes
   // the axis stack, not the bars), the axes swap roles, and the corner
-  // radius runs left-to-right instead of top-down.
-  const horizontal = cfg?.orientation === "horizontal";
+  // radius runs left-to-right instead of top-down. Unset orientation over
+  // more than eight named categories lies down too (barsHorizontal) instead
+  // of slanting labels nobody can read; a time axis stays upright.
+  const horizontal = barsHorizontal(cfg?.orientation, rows.map((r) => r?.[xField]));
   const isSingleSeries = yFields.length === 1 && !stacked;
   // A short horizontal single-series chart is a ranked list: label every bar
   // by default (the author can still switch labels off) and let the labels
@@ -107,7 +110,7 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
         </>
       ) : (
         <>
-          <XAxis dataKey={xField} {...AXIS_PROPS} {...categoryAxisProps(rows.length)} tickFormatter={dateTick(ctx)} />
+          <XAxis dataKey={xField} {...AXIS_PROPS} {...categoryAxisProps(rows.length)} tickFormatter={rows.length > 6 ? (v: any) => clipLabel(String(dateTick(ctx)(v) ?? v)) : dateTick(ctx)} />
           <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} hide={hideValueAxis} />
         </>
       )}
@@ -139,6 +142,9 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
         const useEmphasis = isSingleSeries && typeof emphasisTop === "number" && emphasisTop > 0;
         const useLast = isSingleSeries && !useEmphasis && emphasisLast;
         const hasForecastRows = !!forecast && rows.some((r) => r.__forecast);
+        // The still-running last period (ctx.partial): same bar, lighter, dashed outline.
+        const partialIdx = ctx.partial?.index;
+        const seriesColor = palette[i % palette.length];
         const barFill = seriesFill("bar", gid, i, palette, style);
         // The sunk track behind each bar. An element, not a props object:
         // Recharts strips non-SVG keys (radius) from a plain object before
@@ -154,8 +160,9 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
             background={track}
             isAnimationActive={!print} animationDuration={600}
           >
-            {(useCategorical || hasForecastRows || useEmphasis || useLast) && rows.map((row, ri) => {
+            {(useCategorical || hasForecastRows || useEmphasis || useLast || partialIdx != null) && rows.map((row, ri) => {
               const isForecastRow = !!row.__forecast;
+              const isPartialRow = ri === partialIdx && !isForecastRow;
               // Priority order, and the reason for it: a projected bar is a
               // different KIND of bar so the forecast accent outranks
               // everything; then de-emphasis, which is the whole point of the
@@ -171,9 +178,9 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
                 <Cell
                   key={ri}
                   fill={fill}
-                  fillOpacity={isForecastRow ? 0.3 : 1}
-                  stroke={isForecastRow ? FORECAST_COLOR : undefined}
-                  strokeDasharray={isForecastRow ? "3 3" : undefined}
+                  fillOpacity={isForecastRow ? 0.3 : isPartialRow ? 0.4 : 1}
+                  stroke={isForecastRow ? FORECAST_COLOR : isPartialRow ? seriesColor : undefined}
+                  strokeDasharray={isForecastRow || isPartialRow ? "3 3" : undefined}
                 />
               );
             })}

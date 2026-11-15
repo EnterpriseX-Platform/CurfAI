@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { ShieldCheck, MousePointerClick, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { TOUR_DONE_EVENT, TOUR_STORAGE_KEY } from "./OnboardingTour";
 
 /**
  * Floating bottom-right "What is this?" badge for the report viewer.
@@ -50,13 +51,21 @@ export function WhatIsThisBadge() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    let dismissed = false;
+    let tourPending = false;
     try {
-      const dismissed = window.localStorage.getItem(STORAGE_KEY) === "1";
-      setState(dismissed ? "dismissed" : "available");
+      dismissed = window.localStorage.getItem(STORAGE_KEY) === "1";
+      // The viewer's tour invite sits in the same corner; wait until the
+      // visitor has taken or dismissed it, so one helper floats at a time.
+      tourPending = window.localStorage.getItem(TOUR_STORAGE_KEY) !== "1";
     } catch {
       // Browser blocking storage (Safari private mode, etc.) — show the pill anyway.
-      setState("available");
     }
+    if (dismissed) { setState("dismissed"); return; }
+    if (!tourPending) { setState("available"); return; }
+    const onTourDone = () => setState("available");
+    window.addEventListener(TOUR_DONE_EVENT, onTourDone);
+    return () => window.removeEventListener(TOUR_DONE_EVENT, onTourDone);
   }, []);
 
   function dismissForever() {
@@ -78,7 +87,7 @@ export function WhatIsThisBadge() {
         type="button"
         data-explainer-pill
         onClick={() => setOpen((o) => !o)}
-        className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl"
+        className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] right-4 z-40 flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-md transition-colors hover:bg-primary-ink md:bottom-4"
         aria-expanded={open}
         aria-controls="curf-explainer-panel"
         title={t("explainer.pillTitle")}
@@ -101,11 +110,11 @@ export function WhatIsThisBadge() {
             id="curf-explainer-panel"
             role="dialog"
             aria-labelledby="curf-explainer-title"
-            className="fixed bottom-20 right-4 z-50 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-border bg-card p-4 shadow-2xl"
+            className="fixed bottom-36 right-4 z-50 md:bottom-20 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-border bg-card p-4 shadow-2xl"
           >
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+                <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-primary">
                   <Sparkles className="h-3 w-3" />
                   <span>{t("explainer.welcome")}</span>
                 </div>
@@ -132,10 +141,10 @@ export function WhatIsThisBadge() {
                       <Icon className="h-3.5 w-3.5" />
                     </span>
                     <div className="min-w-0">
-                      <div className="text-[12px] font-medium text-foreground">
+                      <div className="text-xs font-medium text-foreground">
                         <span className="text-muted-foreground/70">{i + 1}.</span> {t(`explainer.${tip.key}.title`)}
                       </div>
-                      <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                      <div className="mt-0.5 text-2xs leading-snug text-muted-foreground">
                         {t(`explainer.${tip.key}.body`)}
                       </div>
                     </div>
@@ -145,13 +154,13 @@ export function WhatIsThisBadge() {
             </ol>
 
             <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
-              <span className="text-[10px] text-muted-foreground/80">
+              <span className="text-2xs text-muted-foreground/80">
                 {t("explainer.findAgain")}
               </span>
               <button
                 type="button"
                 onClick={dismissForever}
-                className="rounded-md bg-foreground px-3 py-1.5 text-[11px] font-medium text-background transition-opacity hover:opacity-90"
+                className="rounded-md bg-foreground px-3 py-1.5 text-2xs font-medium text-background transition-opacity hover:opacity-90"
               >
                 {t("explainer.hide")}
               </button>

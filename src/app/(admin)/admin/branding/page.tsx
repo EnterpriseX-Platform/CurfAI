@@ -11,6 +11,9 @@ import { getSession } from "@/lib/auth";
 import { tierAtLeast } from "@/lib/billing";
 import { BrandingForm } from "./BrandingForm";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { serverLocale } from "@/lib/i18n/serverLocale";
+import { t } from "@/lib/i18n/dict";
+
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +31,10 @@ export default async function BrandingPage() {
   try { brand = tenant ? JSON.parse((tenant as any).brandJson || "{}") : {}; } catch {}
   const isBusiness = tierAtLeast((tenant as any)?.tier, "business");
 
+  const locale = await serverLocale();
   return (
-    <div className="mx-auto max-w-3xl px-8 pb-12 pt-7">
-      <PageHeader title={<>Workspace branding</>} description={<>Logo, accent color, the default theme and chart style, and an optional custom palette that overrides the chart colors for everyone in the workspace.</>} />
+    <div className="mx-auto max-w-4xl px-8 pb-12 pt-7">
+      <PageHeader title={t(locale, "adminPages.branding.title")} description={t(locale, "adminPages.branding.subtitle")} />
 
       {!isBusiness ? (
         <div className="rounded-2xl border border-border bg-muted/30 p-8 text-center">

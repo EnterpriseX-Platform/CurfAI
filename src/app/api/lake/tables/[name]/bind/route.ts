@@ -51,7 +51,8 @@ const BodySchema = z.object({
   allowNewColumns: z.boolean().default(true),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { name: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 

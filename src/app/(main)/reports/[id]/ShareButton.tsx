@@ -89,32 +89,32 @@ export function ShareButton({ reportId }: { reportId: string }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="text-2xs uppercase tracking-wider text-muted-foreground">
           {t("shareButton.publicLinks")}
         </DropdownMenuLabel>
         <DropdownMenuItem onSelect={(e) => { e.preventDefault(); mintAndCopy("share"); }}>
           <LinkIcon className="mr-2 h-4 w-4" />
           <div className="flex flex-col">
             <span className="text-xs font-medium">{t("shareButton.copyShareLink")}</span>
-            <span className="text-[10px] text-muted-foreground">{t("shareButton.copyShareLinkDesc")}</span>
+            <span className="text-2xs text-muted-foreground">{t("shareButton.copyShareLinkDesc")}</span>
           </div>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="text-2xs uppercase tracking-wider text-muted-foreground">
           {t("shareButton.embedSection")}
         </DropdownMenuLabel>
         <DropdownMenuItem onSelect={(e) => { e.preventDefault(); mintAndCopy("embed-iframe"); }}>
           <Code className="mr-2 h-4 w-4" />
           <div className="flex flex-col">
             <span className="text-xs font-medium">{t("shareButton.copyIframeSnippet")}</span>
-            <span className="text-[10px] text-muted-foreground">{t("shareButton.copyIframeSnippetDesc")}</span>
+            <span className="text-2xs text-muted-foreground">{t("shareButton.copyIframeSnippetDesc")}</span>
           </div>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={(e) => { e.preventDefault(); mintAndCopy("embed-url"); }}>
           <Globe className="mr-2 h-4 w-4" />
           <div className="flex flex-col">
             <span className="text-xs font-medium">{t("shareButton.copyEmbedUrl")}</span>
-            <span className="text-[10px] text-muted-foreground">{t("shareButton.copyEmbedUrlDesc")}</span>
+            <span className="text-2xs text-muted-foreground">{t("shareButton.copyEmbedUrlDesc")}</span>
           </div>
         </DropdownMenuItem>
       </DropdownMenuContent>

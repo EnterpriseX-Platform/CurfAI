@@ -14,6 +14,8 @@ const prisma = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma }));
 vi.mock("@/lib/audit", () => ({ recordAudit: vi.fn(), persistAudit: vi.fn() }));
 vi.mock("bcryptjs", () => ({ default: { hash: vi.fn(async () => "hashed") } }));
+const markEmailVerified = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("@/lib/emailVerification", () => ({ markEmailVerified }));
 
 import { POST } from "./route";
 
@@ -36,10 +38,17 @@ describe("POST /api/reset — one password per link", () => {
     expect(res.status).toBeLessThan(300);
   });
 
+  it("the link was mailed to the address, so using it also verifies the address", async () => {
+    prisma.passwordResetToken.updateMany.mockResolvedValue({ count: 1 });
+    await reset();
+    expect(markEmailVerified).toHaveBeenCalledWith("u1");
+  });
+
   it("refuses without touching the password when a concurrent request claimed it first", async () => {
     prisma.passwordResetToken.updateMany.mockResolvedValue({ count: 0 });
     const res = await reset();
     expect(res.status).toBe(400);
     expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(markEmailVerified).not.toHaveBeenCalled();
   });
 });

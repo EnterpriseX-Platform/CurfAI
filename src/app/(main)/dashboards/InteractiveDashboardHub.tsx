@@ -13,6 +13,7 @@ import { ScoreRing } from "@/components/common/ScoreRing";
 import { useToast } from "@/lib/toast";
 import { refreshNavCounts } from "@/lib/navCounts";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { EmptyState } from "@/components/common/EmptyState";
 
 type HubDashboard = {
   id: string;
@@ -91,9 +92,9 @@ export function InteractiveDashboardHub({ isAdmin }: { isAdmin: boolean }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:flex lg:items-stretch lg:gap-6">
           <Kpi label={t("dashboardsHub.kpi.total")} value={kpis.total} />
-          <Kpi label={t("dashboardsHub.kpi.mine")} value={kpis.mine} tone="text-primary" />
+          <Kpi label={t("dashboardsHub.kpi.mine")} value={kpis.mine} />
           <Kpi label={t("dashboardsHub.kpi.needsReview")} value={kpis.needsReview} tone={kpis.needsReview > 0 ? "text-destructive" : undefined} />
-          <Kpi label={t("dashboardsHub.kpi.updatedToday")} value={kpis.updatedToday} tone="text-success" />
+          <Kpi label={t("dashboardsHub.kpi.updatedToday")} value={kpis.updatedToday} />
           <Kpi label={t("dashboardsHub.kpi.avgHealth")} value={`${kpis.avgHealth}%`} />
         </div>
         <div className="flex items-center gap-2">
@@ -115,11 +116,16 @@ export function InteractiveDashboardHub({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border py-16 text-center">
-          <LayoutGrid className="h-8 w-8 text-muted-foreground/60" />
-          <p className="font-medium">{t("dashboardsHub.empty.title")}</p>
-          <p className="text-sm text-muted-foreground">{t("dashboardsHub.empty.subtitle")}</p>
-        </div>
+        <EmptyState
+          icon={<LayoutGrid className="h-5 w-5" />}
+          title={t("dashboardsHub.empty.title")}
+          description={t(isAdmin ? "dashboardsHub.empty.subtitle" : "dashboardsHub.empty.viewerBody")}
+          action={isAdmin ? (
+            <Link href="/dashboards/manage?new=1">
+              <Button size="sm"><Plus className="mr-1.5 h-4 w-4" /> {t("dashboardsMgr.newDashboard")}</Button>
+            </Link>
+          ) : undefined}
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {items.map((d) => (

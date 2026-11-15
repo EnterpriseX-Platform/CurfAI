@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CurfLogo } from "@/components/common/CurfLogo";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * Finish a password reset OR accept a workspace invite. The URL carries the
@@ -15,6 +16,7 @@ import { CurfLogo } from "@/components/common/CurfLogo";
  * "Welcome - set your password to join" so the invitee sees the right framing.
  */
 export default function ResetPage() {
+  const { t } = useT();
   const router = useRouter();
   const params = useParams<{ token: string }>();
   const search = useSearchParams();
@@ -29,8 +31,8 @@ export default function ResetPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (password.length < 8) { setError("Password must be at least 8 characters"); return; }
-    if (password !== confirm) { setError("Passwords don't match"); return; }
+    if (password.length < 8) { setError(t("auth.reset.tooShort")); return; }
+    if (password !== confirm) { setError(t("auth.reset.mismatch")); return; }
     setLoading(true);
     try {
       const r = await fetch("/api/reset", {
@@ -39,7 +41,7 @@ export default function ResetPage() {
         body: JSON.stringify({ token, password }),
       });
       if (!r.ok) {
-        let msg = "Reset failed";
+        let msg = t("auth.reset.failed");
         try { msg = (await r.json()).error ?? msg; } catch { /* keep default */ }
         setError(msg);
         return;
@@ -58,29 +60,29 @@ export default function ResetPage() {
           <CurfLogo variant="lockup" size={32} />
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          {isInvite ? "Welcome - set your password" : "Choose a new password"}
+          {isInvite ? t("auth.reset.inviteTitle") : t("auth.reset.title")}
         </h1>
         {isInvite && (
           <p className="mt-2 text-sm text-muted-foreground">
-            Pick a password to accept the invite and sign in.
+            {t("auth.reset.inviteSubtitle")}
           </p>
         )}
 
         {done ? (
           <p className="mt-6 rounded-md border border-success/40 bg-success/5 px-3 py-4 text-sm">
-            {isInvite ? "Welcome aboard. " : "Password updated. "}Redirecting you to sign in&hellip;
+            {isInvite ? t("auth.reset.doneInvite") : t("auth.reset.done")}
           </p>
         ) : (
           <form onSubmit={submit} className="mt-8 grid gap-4">
             <div className="grid gap-1.5">
-              <Label htmlFor="password" className="text-xs font-medium">New password</Label>
+              <Label htmlFor="password" className="text-xs font-medium">{t("auth.reset.newPassword")}</Label>
               <Input
                 id="password" type="password" required minLength={8} autoFocus
                 value={password} onChange={(e) => setPassword(e.target.value)}
               />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="confirm" className="text-xs font-medium">Confirm</Label>
+              <Label htmlFor="confirm" className="text-xs font-medium">{t("auth.reset.confirm")}</Label>
               <Input
                 id="confirm" type="password" required minLength={8}
                 value={confirm} onChange={(e) => setConfirm(e.target.value)}
@@ -90,13 +92,13 @@ export default function ResetPage() {
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>
             )}
             <Button type="submit" disabled={loading}>
-              {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Updating&hellip;</> : "Update password"}
+              {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("auth.reset.updating")}</> : t("auth.reset.submit")}
             </Button>
           </form>
         )}
 
         <p className="mt-8 text-center text-xs text-muted-foreground">
-          <Link href="/login" className="text-primary underline">Back to sign in</Link>
+          <Link href="/login" className="text-primary underline">{t("auth.forgot.backToSignIn")}</Link>
         </p>
       </div>
     </div>

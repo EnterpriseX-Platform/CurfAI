@@ -37,10 +37,10 @@ export function VisibilitySection({
       <header className="flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-xs font-semibold">
           <Icon className="h-3.5 w-3.5 text-muted-foreground" /> {t("tableManage.vis.heading")}
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">{label}</span>
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs font-normal text-muted-foreground">{label}</span>
         </h3>
         {!canEdit && (
-          <span className="text-[10px] italic text-muted-foreground">{t("tableManage.vis.readOnlyHint")}</span>
+          <span className="text-2xs italic text-muted-foreground">{t("tableManage.vis.readOnlyHint")}</span>
         )}
       </header>
 
@@ -71,7 +71,7 @@ export function VisibilitySection({
           </div>
           {editingRoles && (
             <div className="rounded-md border border-dashed border-border bg-muted/20 p-2.5">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("tableManage.vis.allowedRoles")}</p>
+              <p className="text-2xs uppercase tracking-wider text-muted-foreground">{t("tableManage.vis.allowedRoles")}</p>
               <div className="mt-1.5">
                 <InlineTagManager
                   options={roleOptions}
@@ -84,7 +84,7 @@ export function VisibilitySection({
                 <button
                   type="button"
                   onClick={() => { setEditingRoles(mode === "roles"); setRolesDraft(currentRoles); }}
-                  className="rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
+                  className="rounded-md px-2 py-1 text-2xs text-muted-foreground hover:bg-muted"
                 >
                   {t("action.cancel")}
                 </button>
@@ -92,7 +92,7 @@ export function VisibilitySection({
                   type="button"
                   disabled={busy || rolesDraft.length === 0}
                   onClick={() => onChange("roles", rolesDraft)}
-                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   {t("action.apply")}
@@ -113,7 +113,7 @@ function ModeChip({ icon, label, active, busy, onClick }: { icon: React.ReactNod
       onClick={onClick}
       disabled={busy}
       className={
-        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors " +
+        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-2xs font-medium transition-colors " +
         (active
           ? "border-primary bg-primary/10 text-primary"
           : "border-border bg-background text-muted-foreground hover:bg-muted")

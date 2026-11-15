@@ -23,7 +23,8 @@ export const dynamic = "force-dynamic";
  * and nowhere else, and it renders as the caller, so it carries only what
  * that caller could already export from the report itself.
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

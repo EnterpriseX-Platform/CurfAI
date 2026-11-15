@@ -27,6 +27,10 @@ describe("reasoningFieldsFor", () => {
     expect(reasoningFieldsFor("openai", "https://api.openai.com/v1", "o3-mini")).toEqual({ reasoning_effort: "low" });
   });
 
+  it("turns Qwen thinking off through the chat template, on any host", () => {
+    expect(reasoningFieldsFor("openai-compatible", "https://athena.oneweb.tech/qwen/v1", "qwen-3.8-27b")).toEqual({ chat_template_kwargs: { enable_thinking: false } });
+  });
+
   it("sends no reasoning field for hosts/models without a switch", () => {
     expect(reasoningFieldsFor("openai", "https://api.openai.com/v1", "gpt-4o-mini")).toEqual({});
     expect(reasoningFieldsFor("openai-compatible", "https://api.deepseek.com/v1", "deepseek-chat")).toEqual({});

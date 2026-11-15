@@ -3,12 +3,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Trash2 } from "lucide-react";
 
-export function DeleteTableButton({ name }: { name: string }) {
+export function DeleteTableButton({ name, confirmText }: { name: string; confirmText: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
   async function go() {
-    if (!confirm(`Delete table "${name}"? This cannot be undone.`)) return;
+    if (!confirm(confirmText)) return;
     setBusy(true);
     try {
       const r = await fetch(`/api/lake/tables/${encodeURIComponent(name)}`, {

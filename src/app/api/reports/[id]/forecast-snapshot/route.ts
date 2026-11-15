@@ -40,7 +40,8 @@ const BodySchema = z.object({
   candidates: z.array(CandidateSchema).max(24), // ForecastConfigSchema.periods caps at 24 — no report legitimately produces more
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // Charts re-render (and re-POST the same forecast) on every view — this
   // caps accidental hot-loops, not legitimate usage (one call per chart
   // mount, upserted).
-  const limited = ensureLimit("forecast-snapshot", `t:${user.tenantId}`, 120, 60_000);
+  const limited = await ensureLimit("forecast-snapshot", `t:${user.tenantId}`, 120, 60_000);
   if (limited) return limited;
 
   const body = await req.json().catch(() => null);

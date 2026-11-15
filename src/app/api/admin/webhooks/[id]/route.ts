@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { generateSigningSecret, getEvent, knownEventIds, testDeliver } from "@/lib/webhooks";
+import { readWebhookSecret, storeWebhookSecret } from "@/lib/webhooks/secret";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,7 +21,8 @@ const ActionSchema = z.object({
   payloadFormat: z.enum(["auto", "raw", "slack", "teams", "discord"]).optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (parsed.data.action === "rotate") {
     const next = generateSigningSecret();
-    await prisma.webhook.update({ where: { id: wh.id }, data: { signingSecret: next } });
+    await prisma.webhook.update({ where: { id: wh.id }, data: { signingSecret: storeWebhookSecret(next) } });
     recordAudit({ user, kind: "webhook.rotate", target: wh.id, req });
     // ONE-time secret reveal — same pattern as create.
     return NextResponse.json({ ok: true, signingSecretOnce: next });
@@ -76,11 +78,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!eventId) return NextResponse.json({ error: "Webhook has no events configured." }, { status: 400 });
   const ev = getEvent(eventId);
   if (!ev) return NextResponse.json({ error: `Unknown event: ${eventId}` }, { status: 400 });
+  const signingSecret = readWebhookSecret(wh.signingSecret);
+  if (!signingSecret) {
+    return NextResponse.json({ error: "This webhook's signing secret can't be read (the encryption key changed). Rotate it, then test again." }, { status: 409 });
+  }
   const result = await testDeliver({
     tenantId: user.tenantId,
     webhookId: wh.id,
     url: wh.url,
-    signingSecret: wh.signingSecret,
+    signingSecret,
     event: eventId,
     data: ev.samplePayload,
     payloadFormat: wh.payloadFormat,
@@ -89,7 +95,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ result });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 

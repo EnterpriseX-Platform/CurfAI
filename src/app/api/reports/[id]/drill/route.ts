@@ -34,13 +34,14 @@ const Schema = z.object({
   params: z.record(z.unknown()).optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);
   if (scopeBlock) return scopeBlock;
 
-  const limited = ensureLimit("drill", `t:${user.tenantId}`, 60, 60_000);
+  const limited = await ensureLimit("drill", `t:${user.tenantId}`, 60, 60_000);
   if (limited) return limited;
 
   const body = await req.json().catch(() => null);

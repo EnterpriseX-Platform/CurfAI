@@ -74,10 +74,10 @@ export function VariantChips({
             type="button"
             onClick={() => onChange(v.slug)}
             className={cn(
-              "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 transition-colors",
+              "inline-flex items-center rounded-full px-2.5 py-0.5 text-2xs font-medium ring-1 transition-colors",
               v.chip,
               active ? "ring-2 " + v.ring : "ring-transparent opacity-60 hover:opacity-100",
-              size === "sm" && "px-2 py-px text-[10px]",
+              size === "sm" && "px-2 py-px text-2xs",
             )}
             title={t(`variant.${v.slug}`)}
           >

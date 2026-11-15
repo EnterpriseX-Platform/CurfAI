@@ -199,11 +199,11 @@ export function ApiExplorerClient() {
             placeholder="curf_..."
             className="mt-1 font-mono text-xs"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-2xs text-muted-foreground">
             {apiKey.trim() ? t("apiExplorer.authorizeHintKey") : t("apiExplorer.authorizeHintSession")}
           </p>
         </div>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${apiKey.trim() ? "border-success/40 bg-success/10 text-success " : "border-border bg-background text-muted-foreground"}`}>
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-2xs font-medium ${apiKey.trim() ? "border-success/40 bg-success/10 text-success " : "border-border bg-background text-muted-foreground"}`}>
           {apiKey.trim() ? <LockOpen className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
           {apiKey.trim() ? t("apiExplorer.usingKey") : t("apiExplorer.usingSession")}
         </span>
@@ -211,7 +211,7 @@ export function ApiExplorerClient() {
 
       {groups.map((group) => (
         <div key={group.name}>
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{group.name}</h2>
+          <h2 className="mb-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{group.name}</h2>
           <div className="overflow-hidden rounded-md border border-border">
             {group.endpoints.map((ep, i) => {
               const key = rowKey(ep);
@@ -227,7 +227,7 @@ export function ApiExplorerClient() {
                     className="flex w-full items-center gap-3 bg-card px-4 py-3 text-left hover:bg-accent/30"
                   >
                     {row.open ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
-                    <span className={`inline-flex w-16 shrink-0 items-center justify-center rounded border px-2 py-0.5 font-mono text-[11px] font-bold ${METHOD_STYLE[ep.method] ?? "bg-muted text-muted-foreground border-border"}`}>
+                    <span className={`inline-flex w-16 shrink-0 items-center justify-center rounded border px-2 py-0.5 font-mono text-2xs font-bold ${METHOD_STYLE[ep.method] ?? "bg-muted text-muted-foreground border-border"}`}>
                       {ep.method}
                     </span>
                     <span className="shrink-0 font-mono text-xs text-foreground">{ep.path}</span>
@@ -238,14 +238,14 @@ export function ApiExplorerClient() {
                     <div className="space-y-3 border-t border-border/60 bg-muted/10 p-4">
                       <p className="text-xs text-muted-foreground">{ep.description}</p>
                       {ep.roleRequired && (
-                        <p className="text-[11px] text-muted-foreground">{t("apiExplorer.roleRequired")}: <span className="font-mono">{ep.roleRequired}</span></p>
+                        <p className="text-2xs text-muted-foreground">{t("apiExplorer.roleRequired")}: <span className="font-mono">{ep.roleRequired}</span></p>
                       )}
 
                       {pp.length > 0 && (
                         <div className="grid gap-2 sm:grid-cols-2">
                           {pp.map((name) => (
                             <div key={name}>
-                              <Label className="text-[11px]">{`{${name}}`} <span className="text-muted-foreground">({t("apiExplorer.pathParam")})</span></Label>
+                              <Label className="text-2xs">{`{${name}}`} <span className="text-muted-foreground">({t("apiExplorer.pathParam")})</span></Label>
                               <Input
                                 className="mt-1 h-8 font-mono text-xs"
                                 value={row.pathValues[name] ?? ""}
@@ -260,7 +260,7 @@ export function ApiExplorerClient() {
                         <div className="grid gap-2 sm:grid-cols-2">
                           {qp.map((name) => (
                             <div key={name}>
-                              <Label className="text-[11px]">{name} <span className="text-muted-foreground">({t("apiExplorer.queryParam")})</span></Label>
+                              <Label className="text-2xs">{name} <span className="text-muted-foreground">({t("apiExplorer.queryParam")})</span></Label>
                               <Input
                                 className="mt-1 h-8 font-mono text-xs"
                                 placeholder={ep.params?.[name]}
@@ -274,7 +274,7 @@ export function ApiExplorerClient() {
 
                       {ep.method !== "GET" && (
                         <div>
-                          <Label className="text-[11px]">{t("apiExplorer.requestBody")}</Label>
+                          <Label className="text-2xs">{t("apiExplorer.requestBody")}</Label>
                           <textarea
                             className="mt-1 h-28 w-full rounded-md border border-input bg-background p-2 font-mono text-xs"
                             value={row.bodyText}
@@ -296,12 +296,12 @@ export function ApiExplorerClient() {
                       {row.result && (
                         <div className="rounded-md border border-border bg-background">
                           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${row.result.status < 300 ? "bg-success/10 text-success " : row.result.status < 500 ? "bg-warning/10 text-warning " : "bg-destructive/10 text-destructive "}`}>
+                            <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${row.result.status < 300 ? "bg-success/10 text-success " : row.result.status < 500 ? "bg-warning/10 text-warning " : "bg-destructive/10 text-destructive "}`}>
                               {row.result.status} {row.result.statusText}
                             </span>
-                            <span className="text-[11px] text-muted-foreground">{row.result.durationMs} ms</span>
+                            <span className="text-2xs text-muted-foreground">{row.result.durationMs} ms</span>
                           </div>
-                          <pre className="max-h-80 overflow-auto p-3 font-mono text-[11px] leading-relaxed">{row.result.body}</pre>
+                          <pre className="max-h-80 overflow-auto p-3 font-mono text-2xs leading-relaxed">{row.result.body}</pre>
                         </div>
                       )}
                     </div>

@@ -4,7 +4,8 @@
  * Lookup order:
  *   1. Tenant.llmProvider + llmKeyEnc + llmModel + llmBaseUrl (new shape)
  *   2. Legacy Tenant.anthropicKeyEnc (anthropic-only fallback)
- *   3. Environment variables — CURF_LLM_PROVIDER + CURF_LLM_KEY +
+ *   3. The platform model a platform admin picked for the workspace's tier (lib/llm/platformModels.ts)
+ *   4. Environment variables — CURF_LLM_PROVIDER + CURF_LLM_KEY +
  *      CURF_LLM_MODEL (+ CURF_LLM_FAST_MODEL) + CURF_LLM_BASE_URL, OR provider-specific envs
  *      (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY).
  *
@@ -14,6 +15,8 @@
 import { prisma } from "@/lib/db";
 import { decryptSecret } from "@/lib/secrets";
 import type { ProviderId } from "./types";
+import type { ModelRate } from "./pricing";
+import { platformModelForTier } from "./platformModels";
 
 export type ResolvedCredentials = {
   provider: ProviderId;
@@ -24,6 +27,14 @@ export type ResolvedCredentials = {
   baseUrl: string | null;
   /** Where the credentials came from — useful for error messages and logs. */
   source: "tenant" | "tenant-legacy" | "env";
+  /** Set when the call runs on a platform model (source "env"): which one, its metering rate and whether it thinks. */
+  platformModelId?: string;
+  rate?: ModelRate | null;
+  thinkingOff?: boolean;
+  /** Platform models only: labelled as a trial model, and the queue limits on its host. */
+  trial?: boolean;
+  maxQueue?: number | null;
+  maxWaitSec?: number | null;
 };
 
 const VALID_PROVIDERS: ProviderId[] = ["anthropic", "openai", "gemini", "openai-compatible"];
@@ -47,6 +58,7 @@ export async function getLlmCredentials(
           llmFastModel: true,
           llmBaseUrl: true,
           anthropicKeyEnc: true,
+          tier: true,
         },
       });
       if (t) {
@@ -78,13 +90,22 @@ export async function getLlmCredentials(
             };
           }
         }
+        // 3. Curf's own AI, on the model the platform admin picked for this tier.
+        const pm = await platformModelForTier(t.tier);
+        if (pm) {
+          return {
+            provider: pm.provider, apiKey: pm.apiKey, model: pm.model, fastModel: pm.fastModel, baseUrl: pm.baseUrl, source: "env",
+            platformModelId: pm.platformModelId, rate: pm.rate, thinkingOff: pm.thinkingOff,
+            trial: pm.trial, maxQueue: pm.maxQueue, maxWaitSec: pm.maxWaitSec,
+          };
+        }
       }
     } catch {
       // Pre-db-push tolerance — fall through to env.
     }
   }
 
-  // 3. Environment fallback. CURF_LLM_PROVIDER is the modern way; the
+  // 4. Environment fallback. CURF_LLM_PROVIDER is the modern way; the
   // provider-specific envs (ANTHROPIC_API_KEY, OPENAI_API_KEY,
   // GEMINI_API_KEY) keep us back-compatible with single-provider deployments.
   const envProvider = process.env.CURF_LLM_PROVIDER;

@@ -1,65 +1,22 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { FileText, Plus, Database, Upload } from "lucide-react";
+import { FileText, Plus, Database, Upload, Shapes } from "lucide-react";
 import { cookies } from "next/headers";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth";
+import { getSession, getUserRoles, reportWhere, tenantWhere } from "@/lib/auth";
+import { canSeeDataSource, readVisibility } from "@/lib/datasourceAcl";
 import { AppShell } from "@/components/layout/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Button } from "@/components/ui/button";
 import { CatalogSearch } from "./CatalogSearch";
-import { ReportCard, type ReportCardData, type ReportThumb } from "./ReportCard";
+import { CategoryMenu } from "./CategoryMenu";
+import type { ReportCardData } from "./ReportCard";
+import { ReportsCatalogView } from "./ReportsCatalogView";
 import { GenerateReportButton } from "./GenerateReportButton";
+import { NewMenu } from "./NewMenu";
 import { SuggestedTemplates } from "./SuggestedTemplates";
-import { computeKpiValue, kpiDelta, pickKpiCompare } from "@/lib/reporting/kpi";
-import { formatMetricCompact } from "@/lib/reporting/format";
+import { reportThumbnail, dashboardThumbnail } from "@/components/lists/thumbnailModel";
 import { canBuild } from "@/lib/roles";
-import { DEFAULT_CURRENCY } from "@/lib/reporting/currency";
-
-/**
- * A card's thumbnail is the report's own last verified run, not a picture of
- * it: the first two KPI blocks' values (and deltas) plus a short series
- * from the first sparkline or chart, read from the ReportRun snapshot the
- * viewer already records. Nothing is executed on the list page.
- */
-function buildThumb(definition: string, datasetJson: string | null | undefined, currency: string): { thumb: ReportThumb; blocks: number } {
-  let def: any = null;
-  try { def = JSON.parse(definition); } catch { return { thumb: { kpis: [], bars: [] }, blocks: 0 }; }
-  const blocks: any[] = (def?.pages ?? []).flatMap((p: any) => p?.blocks ?? []);
-  let dataset: Record<string, Array<Record<string, unknown>>> = {};
-  if (datasetJson && datasetJson.length < 1_500_000) {
-    try { dataset = JSON.parse(datasetJson); } catch { dataset = {}; }
-  }
-  const kpis: ReportThumb["kpis"] = [];
-  let bars: number[] = [];
-  for (const b of blocks) {
-    if (b?.type !== "kpi" || kpis.length >= 2) continue;
-    const cfg = b.config ?? {};
-    const rows = Array.isArray(dataset[cfg.queryId]) ? dataset[cfg.queryId] : [];
-    const value = computeKpiValue({ valueField: cfg.valueField, aggregate: cfg.aggregate }, rows);
-    if (!Number.isFinite(value)) continue;
-    const delta = kpiDelta(value, pickKpiCompare(rows, cfg.compareField));
-    const fmt = cfg.format === "currency" ? "currency" : cfg.format === "percent" ? "percent" : "number";
-    const good = delta == null ? null : (delta >= 0) === ((cfg.sparkPositive ?? "up") === "up");
-    kpis.push({
-      label: String(cfg.label ?? "Metric"),
-      value: (cfg.format === "percent" ? formatMetricCompact(value, "percent", currency) : formatMetricCompact(value, fmt, currency)) + (cfg.suffix ? ` ${cfg.suffix}` : ""),
-      delta: delta == null ? null : `${delta >= 0 ? "▲" : "▼"} ${(Math.abs(delta) * 100).toFixed(1)}%`,
-      good,
-    });
-    if (bars.length === 0 && cfg.sparkQueryId && cfg.sparkValueField) {
-      bars = (dataset[cfg.sparkQueryId] ?? []).map((r) => Number(r[cfg.sparkValueField])).filter((n) => Number.isFinite(n)).slice(-7);
-    }
-  }
-  if (bars.length === 0) {
-    const chart = blocks.find((b) => b?.type === "chart" && b.config?.queryId && Array.isArray(b.config?.yFields) && b.config.yFields[0]);
-    if (chart) {
-      bars = (dataset[chart.config.queryId] ?? []).map((r) => Number(r[chart.config.yFields[0]])).filter((n) => Number.isFinite(n)).slice(0, 7);
-    }
-  }
-  return { thumb: { kpis, bars }, blocks: blocks.length };
-}
 
 function initialsOf(name: string | null | undefined, email: string | null | undefined): string {
   const src = (name ?? email ?? "?").trim();
@@ -68,7 +25,7 @@ function initialsOf(name: string | null | undefined, email: string | null | unde
 
 export const dynamic = "force-dynamic";
 
-function readLocale(c: ReturnType<typeof cookies>): Locale {
+function readLocale(c: Awaited<Awaited<ReturnType<typeof cookies>>>): Locale {
   const v = c.get("rd_locale")?.value;
   return v && (LOCALES as readonly string[]).includes(v) ? (v as Locale) : "en";
 }
@@ -84,7 +41,21 @@ function timeAgo(d: Date, locale: Locale): string {
   return t(locale, "time.monthsAgo").replace("{n}", String(months));
 }
 
-export default async function ReportsCatalog({ searchParams }: { searchParams: { q?: string; category?: string; filter?: string } }) {
+type SearchParams = { q?: string; category?: string; filter?: string; type?: string };
+
+/** One row of the catalog before filtering: a report or a dashboard, with what the tabs and search need. */
+type CatalogItem = {
+  kind: "report" | "dashboard";
+  at: Date;
+  createdById: string;
+  published: boolean;
+  category: string | null;
+  text: string;
+  card: ReportCardData;
+};
+
+export default async function ReportsCatalog(props: { searchParams: Promise<SearchParams> }) {
+  const searchParams = await props.searchParams;
   const session = await getSession();
   const user = (session?.user as any) ?? null;
   if (!session) redirect("/login?callbackUrl=/reports");
@@ -92,80 +63,113 @@ export default async function ReportsCatalog({ searchParams }: { searchParams: {
   const isAdmin = role === "admin";
   // Viewers consume reports; only editors and admins see create affordances.
   const canCreate = canBuild(role);
-  
-  const c = cookies();
+
+  const c = await cookies();
   const locale = readLocale(c);
 
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const category = searchParams.category ?? null;
-  const filter = searchParams.filter === "mine" || searchParams.filter === "scheduled" ? searchParams.filter : null;
+  const filter = searchParams.filter === "mine" || searchParams.filter === "published" ? searchParams.filter : null;
+  const type = searchParams.type === "report" || searchParams.type === "dashboard" ? searchParams.type : null;
 
-  const [reports, tenantRow] = await Promise.all([
+  const [reports, dashboardRows, userRoles] = await Promise.all([
     prisma.report.findMany({
-      where: { tenantId: user.tenantId }, orderBy: { updatedAt: "desc" },
+      where: reportWhere(user), orderBy: { updatedAt: "desc" },
       include: {
         createdBy: { select: { name: true, email: true } },
-        // A handful of recent runs, not just the latest one — export
-        // routes (CSV/XLSX/PDF/DOCX) intentionally create a ReportRun with
-        // no `dataset` snapshot, and a failed run's `dataset` can be
-        // present but empty — either one being the newest row would blank
-        // the thumbnail ("No run yet") on a report that's genuinely been
-        // run before with real data. Freshness still reads the true
-        // latest run regardless of format/status; the thumbnail
-        // separately looks back for the latest COMPLETED one that
-        // actually has a dataset (same format/status/dataset gate
-        // watcherRun.ts's own prior-run query and the report history page
-        // already use for the identical reason). Only the columns each
-        // needs — provenance JSON is left out on purpose.
-        runs: { orderBy: { createdAt: "desc" }, take: 5, select: { createdAt: true, status: true, dataset: true } },
+        // Only the latest run: its time and status give the freshness dot.
+        // Export routes create runs too, and that is fine here — the card
+        // reports when the report last ran, not what it produced.
+        runs: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true, status: true } },
         _count: { select: { schedules: true } },
       },
     }),
-    prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { currency: true } as any }),
+    prisma.dashboard.findMany({ where: tenantWhere(user), orderBy: { updatedAt: "desc" } }),
+    getUserRoles(),
   ]);
-  const currency = ((tenantRow as any)?.currency as string | null) ?? DEFAULT_CURRENCY;
+  // Same visibility gate as GET /api/dashboards and the dashboard viewer.
+  const dashboards = dashboardRows.filter((d) => canSeeDataSource(d, { id: user.id, isAdmin, roles: userRoles }));
+  const dashboardOwners = new Map(
+    (await prisma.user.findMany({
+      where: { id: { in: Array.from(new Set(dashboards.map((d) => d.createdById))) } },
+      select: { id: true, name: true, email: true },
+    })).map((u) => [u.id, u]),
+  );
 
-  const filtered = reports.filter((r) => {
-    if (category && r.category !== category) return false;
-    if (filter === "mine" && r.createdById !== user.id) return false;
-    if (filter === "scheduled" && (r._count?.schedules ?? 0) === 0) return false;
-    const hay = (r.name + " " + (r.description ?? "") + " " + (r.category ?? "")).toLowerCase();
-    if (q && !hay.includes(q)) return false;
-    return true;
-  });
+  const labels: ReportCardData["labels"] = {
+    lastRun: t(locale, "reports.lastRun"),
+    neverRun: t(locale, "reports.neverRun"),
+    blocks: t(locale, "reports.blocks"),
+    scheduled: t(locale, "reports.schedules"),
+    by: t(locale, "reports.by"),
+    published: t(locale, "reports.filter.published"),
+    draft: t(locale, "reports.status.draft"),
+    report: t(locale, "reports.type.report"),
+    dashboard: t(locale, "reports.type.dashboard"),
+  };
 
-  const cards: ReportCardData[] = filtered.map((r) => {
+  const reportItems: CatalogItem[] = reports.map((r) => {
     const run = r.runs[0];
-    const thumbRun = r.runs.find((x) => x.status === "completed" && x.dataset != null);
-    const { thumb, blocks } = buildThumb(r.definition, thumbRun?.dataset, currency);
     const ageMs = run ? Date.now() - new Date(run.createdAt).getTime() : Infinity;
     const freshness: ReportCardData["freshness"] = !run ? "none" : run.status === "failed" ? "crit" : ageMs > 24 * 3600 * 1000 ? "warn" : "ok";
+    const shape = reportThumbnail(r.definition);
     return {
-      id: r.id,
-      name: r.name,
-      description: r.description,
+      kind: "report", at: r.updatedAt, createdById: r.createdById, published: r.published,
       category: r.category,
-      updatedAgo: timeAgo(r.updatedAt, locale),
-      version: r.version,
-      ownerInitials: initialsOf(r.createdBy?.name, r.createdBy?.email),
-      ownerName: r.createdBy?.name ?? r.createdBy?.email ?? "",
-      lastRun: run ? timeAgo(run.createdAt, locale) : null,
-      freshness,
-      schedules: r._count?.schedules ?? 0,
-      blocks,
-      thumb,
-      labels: {
-        lastRun: t(locale, "reports.lastRun"),
-        neverRun: t(locale, "reports.neverRun"),
-        blocks: t(locale, "reports.blocks"),
-        scheduled: t(locale, "reports.schedules"),
-        empty: t(locale, "reports.thumbEmpty"),
-        noSummary: t(locale, "reports.thumbNoSummary"),
+      text: (r.name + " " + (r.description ?? "") + " " + (r.category ?? "")).toLowerCase(),
+      card: {
+        id: r.id, kind: "report", href: `/reports/${r.id}`, editHref: `/reports/${r.id}/edit`,
+        name: r.name, category: r.category, updatedAgo: timeAgo(r.updatedAt, locale), updatedAt: r.updatedAt.toISOString(), version: r.version,
+        ownerInitials: initialsOf(r.createdBy?.name, r.createdBy?.email),
+        ownerName: r.createdBy?.name ?? r.createdBy?.email ?? "",
+        lastRun: run ? timeAgo(run.createdAt, locale) : null, freshness,
+        schedules: r._count?.schedules ?? 0, blocks: shape.blocks, published: r.published, audience: null, shape, labels,
       },
     };
   });
 
+  const dashboardItems: CatalogItem[] = dashboards.map((d) => {
+    const owner = dashboardOwners.get(d.createdById);
+    const count = (json: string) => { try { const v = JSON.parse(json); return Array.isArray(v) ? v.length : 0; } catch { return 0; } };
+    const vis = readVisibility(d);
+    const audience = vis.mode === "roles" ? t(locale, "reports.audience.roles").replace("{roles}", vis.roles.join(", "))
+      : vis.mode === "owner_only" ? t(locale, "reports.audience.onlyMe") : null;
+    const reportCount = count(d.reportIdsJson);
+    return {
+      kind: "dashboard", at: d.updatedAt, createdById: d.createdById, published: false, category: null,
+      text: d.name.toLowerCase(),
+      card: {
+        id: d.id, kind: "dashboard", href: `/dashboards/${encodeURIComponent(d.slug)}`, editHref: "/dashboards/manage",
+        name: d.name, category: null, updatedAgo: timeAgo(d.updatedAt, locale), updatedAt: d.updatedAt.toISOString(), version: null,
+        ownerInitials: initialsOf(owner?.name, owner?.email), ownerName: owner?.name ?? owner?.email ?? "",
+        lastRun: null, freshness: "none", schedules: 0, blocks: reportCount, published: null, audience,
+        shape: dashboardThumbnail(count(d.topKpisJson), reportCount), labels,
+      },
+    };
+  });
+
+  const items = [...reportItems, ...dashboardItems].sort((a, b) => b.at.getTime() - a.at.getTime());
+  // Tab counts follow the type switch but not the search, so the catalog's shape stays readable.
+  const inType = items.filter((i) => !type || i.kind === type);
+  const filtered = inType.filter((i) => {
+    if (category && i.category !== category) return false;
+    if (filter === "mine" && i.createdById !== user.id) return false;
+    if (filter === "published" && !(i.kind === "report" && i.published)) return false;
+    if (q && !i.text.includes(q)) return false;
+    return true;
+  });
+
   const categories = Array.from(new Set(reports.map((r) => r.category).filter(Boolean) as string[]));
+  const href = (over: Partial<{ filter: string | null; type: string | null; category: string | null }>) => {
+    const next = { filter, type, category: null as string | null, ...over };
+    const usp = new URLSearchParams();
+    if (next.filter) usp.set("filter", next.filter);
+    if (next.type) usp.set("type", next.type);
+    if (next.category) usp.set("category", next.category);
+    if (q) usp.set("q", q);
+    const qs = usp.toString();
+    return qs ? `/reports?${qs}` : "/reports";
+  };
 
   return (
     <AppShell
@@ -174,18 +178,20 @@ export default async function ReportsCatalog({ searchParams }: { searchParams: {
         canCreate ? (
           <div className="flex items-center gap-2">
             <GenerateReportButton />
-            {/* Hidden on the true first-run empty state (0 reports) — the
-                "Blank canvas" card below already offers this exact action
-                (same POST /api/reports), and having both on screen at once
-                left a brand-new user staring at 4 near-identical "start"
-                buttons with no idea which to pick. Reappears once a report
-                exists, where it's the normal "add another" affordance. */}
-            {reports.length > 0 && (
-              <form action="/api/reports" method="POST">
-                <Button type="submit" size="sm" variant="outline">
-                  <Plus className="mr-1.5 h-4 w-4" /> {t(locale, "action.newReport")}
-                </Button>
-              </form>
+            {/* Hidden on the true first-run empty state (nothing yet) — the
+                "Blank canvas" card below already offers the same action, and
+                having both on screen at once left a brand-new user staring
+                at several near-identical "start" buttons with no idea which
+                to pick. Reappears once something exists. */}
+            {items.length > 0 && (
+              <NewMenu
+                labels={{
+                  create: t(locale, "reports.new"),
+                  blank: t(locale, "reports.new.blank"), blankDesc: t(locale, "reports.new.blankDesc"),
+                  dashboard: t(locale, "reports.new.dashboard"), dashboardDesc: t(locale, "reports.new.dashboardDesc"),
+                  importFile: t(locale, "reports.new.import"), importDesc: t(locale, "reports.new.importDesc"),
+                }}
+              />
             )}
           </div>
         ) : null
@@ -193,61 +199,75 @@ export default async function ReportsCatalog({ searchParams }: { searchParams: {
     >
       <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader
-          title={t(locale, "nav.reports")}
-          description={t(locale, "reports.count")
+          title={t(locale, "reports.title")}
+          description={t(locale, "reports.subtitle") + " · " + t(locale, "reports.count.items")
             .replace("{filtered}", String(filtered.length))
-            .replace("{total}", String(reports.length))
-            .replace("{plural}", reports.length === 1 ? "" : "s")}
+            .replace("{total}", String(inType.length))}
         />
 
-        <div className="mb-5 flex flex-wrap items-center gap-3">
-          <CatalogSearch initial={q} />
-          <div className="flex flex-wrap items-center gap-1.5">
-            <CategoryChip label={t(locale, "reports.category.all")} href="/reports" active={category == null && filter == null} />
-            <CategoryChip label={t(locale, "reports.filter.mine")} href="/reports?filter=mine" active={filter === "mine"} />
-            <CategoryChip label={t(locale, "reports.filter.scheduled")} href="/reports?filter=scheduled" active={filter === "scheduled"} />
-            {categories.map((cat) => (
-              <CategoryChip key={cat} label={cat} href={"/reports?category=" + encodeURIComponent(cat)} active={category === cat} />
-            ))}
-          </div>
-        </div>
-
-        {filtered.length === 0 ? (
-          <>
-            <EmptyState hasReports={reports.length > 0} canCreate={canCreate} locale={locale} />
-            {/* Marketplace nudge — only when the user truly has zero
-                reports (i.e., this is the empty-state path, not a
-                "filter returned 0" path). canCreate too — viewers
-                can't import. */}
-            {reports.length === 0 && canCreate && (
-              <SuggestedTemplates tenantId={user.tenantId} />
-            )}
-          </>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {cards.map((r) => (
-              <ReportCard key={r.id} isAdmin={isAdmin} r={r} />
-            ))}
-          </div>
-        )}
+        <ReportsCatalogView
+          items={filtered.map((i) => i.card)}
+          isAdmin={isAdmin}
+          toolbar={
+            <>
+              {/* One row: whose, search, then the two narrowing menus. Schedules
+                  have their own page in this console's sections. */}
+              <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                <TypeOption label={t(locale, "reports.category.all")} href={href({ filter: null })} active={filter == null} />
+                <TypeOption label={t(locale, "reports.filter.mine")} href={href({ filter: "mine" })} active={filter === "mine"} />
+                <TypeOption label={t(locale, "reports.filter.published")} href={href({ filter: "published" })} active={filter === "published"} />
+              </div>
+              <CatalogSearch initial={q} placeholder={t(locale, "reports.search.placeholder")} />
+              <CategoryMenu
+                label={t(locale, "lists.col.type")}
+                icon={<Shapes className="mr-1.5 h-4 w-4" />}
+                allLabel={t(locale, "reports.category.all")}
+                categories={["report", "dashboard"]}
+                labels={{ report: t(locale, "reports.type.report"), dashboard: t(locale, "reports.type.dashboard") }}
+                active={type}
+                hrefFor={{ "": href({ type: null }), report: href({ type: "report" }), dashboard: href({ type: "dashboard" }) }}
+              />
+              {categories.length > 0 && type !== "dashboard" && (
+                <CategoryMenu
+                  label={t(locale, "reports.filter.category")}
+                  allLabel={t(locale, "reports.category.all")}
+                  categories={categories}
+                  active={category}
+                  hrefFor={{ "": href({ category: null }), ...Object.fromEntries(categories.map((cat) => [cat, href({ category: cat })])) }}
+                />
+              )}
+            </>
+          }
+          empty={
+            <>
+              <EmptyState hasReports={items.length > 0} canCreate={canCreate} locale={locale} />
+              {/* Marketplace nudge — only when the workspace truly has nothing
+                  (the empty-state path, not a "filter returned 0" path).
+                  canCreate too — viewers can't import. */}
+              {items.length === 0 && canCreate && (
+                <SuggestedTemplates tenantId={user.tenantId} />
+              )}
+            </>
+          }
+        />
       </div>
     </AppShell>
   );
 }
 
-// Filter chip: the active one is drawn in ink (border + text), not tinted —
-// the accent is reserved for things you can act on.
-function CategoryChip({ label, href, active }: { label: string; href: string; active: boolean }) {
+function TypeOption({ label, href, active }: { label: string; href: string; active: boolean }) {
   return (
     <Link
       href={href}
-      className={"inline-flex h-7 items-center rounded-full border px-3 text-xs font-medium transition-colors " + (active ? "border-foreground text-foreground" : "border-border bg-card text-muted-foreground hover:border-input hover:text-foreground")}
+      className={"rounded-md px-3 py-1 text-[13px] font-medium transition-colors " + (active ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
     >
       {label}
     </Link>
   );
 }
 
+// Top-level tab: an underline in the accent marks the active one, with its
+// count beside it in mono so the catalog's shape reads at a glance.
 function EmptyState({ hasReports, canCreate, locale }: { hasReports: boolean; canCreate: boolean; locale: Locale }) {
   // "No matches" path stays the same — user is filtering an existing
   // catalog and we just need to tell them to broaden the search.
@@ -299,9 +319,9 @@ function EmptyState({ hasReports, canCreate, locale }: { hasReports: boolean; ca
       <div className="mx-auto grid max-w-2xl gap-3 sm:grid-cols-2">
         <Link
           href="/tables"
-          className="group flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-4 transition-colors hover:bg-primary/10"
+          className="group flex flex-col gap-2 rounded-lg border border-border bg-background p-4 transition-colors hover:border-foreground/30 hover:bg-muted"
         >
-          <span className="flex items-center gap-2 text-sm font-semibold text-primary">
+          <span className="flex items-center gap-2 text-sm font-semibold">
             <Upload className="h-4 w-4" /> {t(locale, "reports.empty.dropCsv.title")}
           </span>
           <span className="text-xs text-muted-foreground">
@@ -323,7 +343,7 @@ function EmptyState({ hasReports, canCreate, locale }: { hasReports: boolean; ca
         </form>
       </div>
 
-      <div className="mx-auto mt-6 max-w-2xl text-center text-[11px] text-muted-foreground">
+      <div className="mx-auto mt-6 max-w-2xl text-center text-2xs text-muted-foreground">
         {t(locale, "reports.empty.haveDb")} <Link href="/data-sources" className="text-primary hover:underline"><Database className="inline h-3 w-3" /> {t(locale, "nav.connections")}</Link> {t(locale, "reports.empty.haveDb.suffix")}
       </div>
     </div>

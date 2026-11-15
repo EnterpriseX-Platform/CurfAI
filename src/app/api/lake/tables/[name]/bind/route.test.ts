@@ -52,7 +52,7 @@ function bind(rows: unknown[]) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ rows }),
     }),
-    { params: { name: "people" } },
+    { params: Promise.resolve({ name: "people" }) },
   );
 }
 

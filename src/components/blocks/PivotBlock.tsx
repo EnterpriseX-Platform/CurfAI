@@ -106,7 +106,7 @@ function PivotBlockInner({ block, dataset, provenance, print, report, params, re
       {!bare && cfg.title && (
         <header className="mb-2">
           <h3 className="text-sm font-semibold text-foreground">{cfg.title}</h3>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Rows: {cfg.rowField} · Cols: {cfg.colField} · {cfg.aggregation.toUpperCase()}({cfg.valueField})
           </p>
         </header>

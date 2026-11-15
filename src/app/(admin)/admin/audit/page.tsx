@@ -23,18 +23,20 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { requireUser } from "@/lib/auth";
+import { requireUser, tenantWhere } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { AppShell } from "@/components/layout/AppShell";
 import { ObservabilityTabs } from "@/components/layout/ObservabilityTabs";
-import { ChevronLeft, ChevronRight, Search, X, User as UserIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Search, X, User as UserIcon } from "lucide-react";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { auditInWords } from "@/lib/audit/inWords";
+import { readAuditFilter, auditFilterWhere, auditFilterQuery } from "@/lib/audit/filter";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -50,31 +52,19 @@ type SearchParams = {
   page?: string;
 };
 
-export default async function AuditPage({ searchParams }: { searchParams: SearchParams }) {
-  const locale = readLocale();
+export default async function AuditPage(props: { searchParams: Promise<SearchParams> }) {
+  const searchParams = await props.searchParams;
+  const locale = await readLocale();
   const user = await requireUser();
   if (!user) redirect("/login?next=/admin/audit");
   if (user.role !== "admin") redirect("/");
 
-  const params: Required<SearchParams> = {
-    kind: searchParams.kind ?? "",
-    family: searchParams.family ?? "",
-    user: searchParams.user ?? "",
-    target: searchParams.target ?? "",
-    window: (searchParams.window ?? "7d") as any,
-    page: searchParams.page ?? "1",
-  };
+  const filter = readAuditFilter((k) => searchParams[k as keyof SearchParams]);
+  const params: Required<SearchParams> = { ...filter, page: searchParams.page ?? "1" };
   const page = Math.max(1, Number(params.page) || 1);
 
-  const where: any = { tenantId: user.tenantId };
-  if (params.kind) where.kind = params.kind;
-  else if (params.family) where.kind = { startsWith: params.family + "." };
-  if (params.user) where.userEmail = { contains: params.user };
-  if (params.target) where.target = { contains: params.target };
-  if (params.window !== "all") {
-    const days = params.window === "24h" ? 1 : params.window === "30d" ? 30 : 7;
-    where.createdAt = { gte: new Date(Date.now() - days * DAY_MS) };
-  }
+  // The CSV export (/api/admin/audit/export) reads the same filters.
+  const where = { ...tenantWhere(user), ...auditFilterWhere(filter) };
 
   let events: any[] = [];
   let total = 0;
@@ -92,7 +82,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
     // "Kind family" sidebar — group recent rows by the namespace before
     // the dot so the user sees what's worth filtering by.
     const recent = await prisma.auditEvent.findMany({
-      where: { tenantId: user.tenantId, createdAt: { gte: new Date(Date.now() - 30 * DAY_MS) } },
+      where: { ...tenantWhere(user), createdAt: { gte: new Date(Date.now() - 30 * DAY_MS) } },
       select: { kind: true },
       take: 5000,
     });
@@ -113,7 +103,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.section.admin"), href: "/admin/tenant" }, { label: t(locale, "admin.audit.title") }]}>
-      <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "admin.audit.title")} description={t(locale, "admin.audit.description")} />
 
 
@@ -124,7 +114,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
           <input type="hidden" name="page" value="1" />
 
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterTimeWindow")}</span>
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterTimeWindow")}</span>
             <select name="window" defaultValue={params.window} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs">
               <option value="24h">{t(locale, "admin.audit.timeLast24h")}</option>
               <option value="7d">{t(locale, "admin.audit.timeLast7d")}</option>
@@ -134,7 +124,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
           </label>
 
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterKind")}</span>
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterKind")}</span>
             <input
               name="kind"
               defaultValue={params.kind}
@@ -144,7 +134,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
           </label>
 
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterUserEmail")}</span>
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterUserEmail")}</span>
             <input
               name="user"
               defaultValue={params.user}
@@ -154,7 +144,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
           </label>
 
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterTargetId")}</span>
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.filterTargetId")}</span>
             <input
               name="target"
               defaultValue={params.target}
@@ -172,7 +162,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                   key={k.kind}
                   href={qs({ ...params, family: k.kind, kind: "", page: "1" })}
                   className={
-                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium " +
+                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium " +
                     (params.family === k.kind
                       ? "border-primary/40 bg-primary/10 text-primary"
                       : "border-border bg-muted/40 text-muted-foreground hover:bg-muted")
@@ -184,18 +174,27 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
               {(params.family || params.kind || params.user || params.target) && (
                 <Link
                   href={qs({ window: params.window } as any)}
-                  className="inline-flex items-center gap-1 rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive hover:bg-destructive/20"
+                  className="inline-flex items-center gap-1 rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-2xs font-medium text-destructive hover:bg-destructive/20"
                 >
                   <X className="h-3 w-3" /> {t(locale, "action.clear")}
                 </Link>
               )}
             </div>
-            <button
-              type="submit"
-              className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90"
-            >
-              <Search className="h-3 w-3" /> {t(locale, "action.apply")}
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {/* The rows matching the filters as they are applied now (not unsaved edits in the fields). */}
+              <a
+                href={`/api/admin/audit/export?${auditFilterQuery(filter)}`}
+                className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-card px-3 text-2xs font-medium text-foreground hover:bg-muted"
+              >
+                <Download className="h-3 w-3" /> {t(locale, "admin.audit.exportCsv")}
+              </a>
+              <button
+                type="submit"
+                className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-2xs font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                <Search className="h-3 w-3" /> {t(locale, "action.apply")}
+              </button>
+            </div>
           </div>
         </form>
 
@@ -216,7 +215,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
             </p>
           ) : (
             <table className="w-full text-xs" style={{ tableLayout: "fixed" }}>
-              <thead className="bg-muted/40 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <thead className="bg-muted/40 text-2xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="w-[150px] px-3 py-2 text-left">{t(locale, "admin.audit.colWhen")}</th>
                   <th className="w-[160px] px-3 py-2 text-left">{t(locale, "admin.audit.colKind")}</th>
@@ -232,9 +231,17 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                       <span title={new Date(e.createdAt).toISOString()}>{relativeTime(e.createdAt)}</span>
                     </td>
                     <td className="px-3 py-1.5">
+                      {(() => {
+                        const w = auditInWords(e.kind);
+                        return w ? (
+                          <div className="mb-0.5 truncate text-xs text-foreground" data-testid="audit-words">
+                            {t(locale, "auditWords.line").replace("{verb}", t(locale, w.verb)).replace("{noun}", t(locale, w.family))}
+                          </div>
+                        ) : null;
+                      })()}
                       <Link
                         href={qs({ ...params, kind: e.kind, family: "", page: "1" })}
-                        className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold hover:bg-muted/70"
+                        className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs font-semibold hover:bg-muted/70"
                       >
                         {e.kind}
                       </Link>
@@ -252,18 +259,18 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                     <td className="truncate px-3 py-1.5">
                       {e.target ? (
                         <details className="group">
-                          <summary className="cursor-pointer truncate font-mono text-[11px] text-muted-foreground hover:text-foreground">
+                          <summary className="cursor-pointer truncate font-mono text-2xs text-muted-foreground hover:text-foreground">
                             {e.target.slice(0, 24)}{e.target.length > 24 ? "…" : ""}
                           </summary>
                           <div className="mt-1 space-y-1 rounded border border-border bg-background p-2">
                             <div>
-                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.targetIdInline")}</span>
-                              <div className="break-all font-mono text-[11px]">{e.target}</div>
+                              <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.targetIdInline")}</span>
+                              <div className="break-all font-mono text-2xs">{e.target}</div>
                             </div>
                             {e.metaJson && e.metaJson !== "{}" && (
                               <div>
-                                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.meta")}</span>
-                                <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">{prettyJson(e.metaJson)}</pre>
+                                <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t(locale, "admin.audit.meta")}</span>
+                                <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-2xs">{prettyJson(e.metaJson)}</pre>
                               </div>
                             )}
                           </div>
@@ -272,7 +279,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>
-                    <td className="truncate px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
+                    <td className="truncate px-3 py-1.5 font-mono text-2xs text-muted-foreground">
                       {e.ip ?? "—"}
                     </td>
                   </tr>
@@ -328,13 +335,13 @@ function prettyJson(s: string): string {
 function PageLink({ params, page, disabled, children }: { params: Required<SearchParams>; page: number; disabled?: boolean; children: React.ReactNode }) {
   if (disabled) {
     return (
-      <span className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-muted/30 px-2 text-[11px] text-muted-foreground opacity-50">
+      <span className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-muted/30 px-2 text-2xs text-muted-foreground opacity-50">
         {children}
       </span>
     );
   }
   return (
-    <Link href={qs({ ...params, page: String(page) })} className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-[11px] hover:bg-muted">
+    <Link href={qs({ ...params, page: String(page) })} className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-2xs hover:bg-muted">
       {children}
     </Link>
   );

@@ -200,7 +200,7 @@ export function BulletChart({
           />
         )}
       </div>
-      <div className="flex items-baseline justify-between text-[11px] tabular-nums text-muted-foreground">
+      <div className="flex items-baseline justify-between text-2xs tabular-nums text-muted-foreground">
         <span>{format(min)}</span>
         <span className="text-xl font-semibold tabular-nums text-foreground">{format(value)}</span>
         <span>{format(max)}</span>

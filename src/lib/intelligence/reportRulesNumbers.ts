@@ -15,6 +15,8 @@ import type { Report } from "@/lib/reporting/schema";
 import { computeKpiValue } from "@/lib/reporting/kpi";
 import { aggregateOf, itemFor, type Dataset, type RuleId } from "./reportRules";
 import { caseConditions, deriveDetailSql, findTop, splitWith } from "./drillQuery";
+import { askFor, kpiVariants, parseTargetText, type KpiAsk } from "./kpiMatch";
+import { neededQueries } from "@/lib/reporting/queryRefs";
 
 type Row = Record<string, unknown>;
 type Block = Report["pages"][number]["blocks"][number];
@@ -26,12 +28,27 @@ export type NumberRuleFix =
   | { kind: "rename-field"; queryId: string; blockId: string; from: string; to: string }
   | { kind: "drill"; blockId: string; queryId: string }
   /** A drill-down with a query of its own: the KPI's rows, written from the KPI's SQL (drillQuery.ts). */
-  | { kind: "drill-new"; blockId: string; queryId: string; dataSourceId: string; name: string; sql: string };
+  | { kind: "drill-new"; blockId: string; queryId: string; dataSourceId: string; name: string; sql: string }
+  /** R24: the card repeats `keepId`'s expression. It goes; what it had that the kept card lacks moves over. */
+  | { kind: "drop-duplicate"; blockId: string; keepId: string }
+  /** R25: the unit phrase in the label names a scale the number does not have. */
+  | { kind: "strip-unit"; blockId: string }
+  /** R26: the KPI averaged a rate column; its query now divides the summed parts (`sql` is the whole new query). */
+  | { kind: "weighted-ratio"; blockId: string; queryId: string; sql: string }
+  /** R19: a share the query already multiplied by 100 (21.56) printed as a percent (2,156%): shown as a number with a % sign. */
+  | { kind: "percent-points"; blockId: string }
+  /** R27: the card's own column filters to a year next to the one its label names, and has no value there: that column filters to the label's year. */
+  | { kind: "year-literal"; blockId: string; queryId: string; valueField: string; from: number; to: number; relabel?: { from: string; to: string } };
+
+/** The numerator and denominator columns a rate column is made of, found by probing the table's rows (rateParts.ts). `numeratorPlus`: the numerator is two columns added (arrears past two years = the 2-3 year and the over-3 year bands). `points`: the rate is stored 0-100, not 0-1. */
+export type RateParts = { numerator: string; numeratorPlus?: string; denominator: string; points: boolean };
 
 export type NumberViolation = {
   rule: RuleId; target: string; detail: string; fix?: NumberRuleFix;
   /** A note for the verifier and the repair brief, not for the report's reader: the gate does not flag it. */
   info?: boolean;
+  /** R26 with no fix yet: the table and rate column whose numerator and denominator the gate should look for (rateParts.ts). */
+  probe?: { table: string; column: string };
 };
 
 const queryOf = (b: { config?: unknown }): string | null => {
@@ -157,13 +174,333 @@ const SCOPE_WORDS: Array<{ name: string; label: RegExp; sql: RegExp }> = [
 ];
 const fmtPercent = (fraction: number): string => `${Number((fraction * 100).toPrecision(6)).toLocaleString("en-US")}%`;
 
+// ── R24 / R25: what a KPI card's number is, and what its label says it is ─────
+
+type KpiExpression = { id: string; key: string; label: string; cfg: any; block: Block };
+
+const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** What makes two KPI cards the same number: the select item of the value (alias aside), its aggregate and format, and the rest of the query. */
+function kpiExpressions(b: Block, label: string, vf: string, cfg: any, sql: string, out: KpiExpression[]): void {
+  const item = vf ? itemFor(sql, vf) : null;
+  if (!item) return;
+  const expr = squash(item.replace(/\s+as\s+"?[^"]+"?\s*$/i, ""));
+  const rest = squash(sql.replace(item, ""));
+  out.push({ id: b.id, label, cfg, block: b, key: `${expr}|${cfg.aggregate ?? ""}|${cfg.format ?? ""}|${rest}` });
+}
+
+/** The brief's KPI a card's own words name. Words only: two cards on one governed metric share its key and column, which would name both. */
+const askedAs = (k: KpiExpression, asks: KpiAsk[]): KpiAsk | null =>
+  askFor(kpiVariants({ config: { label: k.cfg.label }, i18n: (k.block as any).i18n }), asks);
+
+/** Which of two cards that repeat each other stays: a governed one, one with more behind it, one the brief named, the first on the page. */
+function keepOf(group: KpiExpression[], order: Map<string, number>, asks: KpiAsk[] | undefined): KpiExpression {
+  const weight = (k: KpiExpression) =>
+    (k.cfg.metricKey ? 8 : 0) + (k.cfg.plan != null || k.cfg.planField ? 4 : 0) + (k.cfg.drilldown ? 2 : 0) + (k.cfg.sparkQueryId ? 1 : 0)
+    + (asks?.length && askedAs(k, asks) ? 16 : 0);
+  return [...group].sort((a, b) => weight(b) - weight(a) || (order.get(a.id)! - order.get(b.id)!))[0]!;
+}
+
+/** R24 over the KPIs the loop collected: groups of two or more cards with one expression. */
+function duplicateKpis(report: Report, kpis: KpiExpression[], asks: KpiAsk[] | undefined): NumberViolation[] {
+  const groups = new Map<string, KpiExpression[]>();
+  for (const k of kpis) groups.set(k.key, [...(groups.get(k.key) ?? []), k]);
+  const order = new Map(report.pages.flatMap((p) => p.blocks).sort((a, b) => a.y - b.y || a.x - b.x).map((b, i) => [b.id, i] as const));
+  const json = JSON.stringify(report);
+  const out: NumberViolation[] = [];
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const keep = keepOf(group, order, asks);
+    for (const dup of group) {
+      if (dup === keep) continue;
+      // Two cards the brief named separately are two asks, not one repeated: flagged, never dropped (briefCompletion's rule).
+      const dupAsk = asks?.length ? askedAs(dup, asks) : null;
+      const keepAsk = asks?.length ? askedAs(keep, asks) : null;
+      const bothAsked = !!dupAsk && !!keepAsk && dupAsk !== keepAsk;
+      // A What-if input or a reading elsewhere that names the card by id: it stays.
+      const referenced = json.split(`"${dup.id}"`).length - 1 > 1;
+      out.push({
+        rule: "R24", target: dup.id,
+        detail: `"${dup.label || dup.id}" shows the same number as "${keep.label || keep.id}" (one expression, one format)`,
+        ...(bothAsked || referenced ? {} : { fix: { kind: "drop-duplicate" as const, blockId: dup.id, keepId: keep.id } }),
+      });
+    }
+  }
+  return out;
+}
+
+/** The scale a unit phrase in a label names, and the phrase. Thai, English and Chinese forms of "in hundreds / thousands / millions of baht". */
+const UNIT_PHRASES: Array<{ re: RegExp; scale: number }> = [
+  { re: /\(?\s*(?:หน่วย\s*[:：]?\s*)?ร้อยบาท\s*\)?/, scale: 100 },
+  { re: /\(?\s*(?:หน่วย\s*[:：]?\s*)?พันบาท\s*\)?/, scale: 1e3 },
+  { re: /\(?\s*(?:หน่วย\s*[:：]?\s*)?หมื่นบาท\s*\)?/, scale: 1e4 },
+  { re: /\(?\s*(?:หน่วย\s*[:：]?\s*)?แสนบาท\s*\)?/, scale: 1e5 },
+  { re: /\(?\s*(?:หน่วย\s*[:：]?\s*)?ล้านบาท\s*\)?/, scale: 1e6 },
+  { re: /\(\s*(?:in\s+)?hundreds?(?:\s+of)?(?:\s+(?:baht|thb))?\s*\)/i, scale: 100 },
+  { re: /\(\s*(?:in\s+)?thousands?(?:\s+of)?(?:\s+(?:baht|thb))?\s*\)/i, scale: 1e3 },
+  { re: /\(\s*(?:in\s+)?millions?(?:\s+of)?(?:\s+(?:baht|thb))?\s*\)/i, scale: 1e6 },
+  { re: /\(\s*(?:in\s+)?billions?(?:\s+of)?(?:\s+(?:baht|thb))?\s*\)/i, scale: 1e9 },
+  { re: /[（(]\s*(?:单位[:：]?\s*)?(?:百万|万|千)元\s*[）)]/, scale: 0 },
+];
+
+function unitOfLabel(label: string): { phrase: string; scale: number } | null {
+  for (const u of UNIT_PHRASES) {
+    const m = u.re.exec(label);
+    if (!m) continue;
+    const zh = /百万|万|千/.exec(m[0]);
+    const scale = u.scale || (zh ? (zh[0] === "百万" ? 1e6 : zh[0] === "万" ? 1e4 : 1e3) : 0);
+    return { phrase: m[0], scale };
+  }
+  return null;
+}
+
+/** What the value's select item divides by (`/ 100.0`, `/1000000`): 1 when it is the figure as stored. */
+function divisorOf(item: string | null): number {
+  if (!item) return 1;
+  const all = [...item.matchAll(/\/\s*(\d+(?:\.\d+)?|1e\d)\b/gi)].map((m) => Number(m[1]));
+  const scale = all.find((n) => [10, 100, 1e3, 1e4, 1e5, 1e6, 1e9].includes(n));
+  return scale ?? 1;
+}
+
+const AMOUNT_WORDS = /ยอดเงิน|จำนวนเงิน|วงเงิน|งบประมาณ|บาท|\bbaht\b|\bamount\b|\bbudget\b|\bspend(?:ing)?\b|\brevenue\b|金额|预算|元/i;
+const COUNT_WORDS = /จำนวน(?!เงิน)|โครงการ|\bราย\b|แห่ง|รายการ|\bcounts?\b|number of|\bprojects?\b|\brows?\b|\bitems?\b|\bcases?\b|ไม่ซ้ำ|个|项目数|数量|笔/i;
+
+/** R25: a label that names a unit the number does not have, or an amount over a count. */
+function unitViolations(b: Block, label: string, vf: string, cfg: any, sql: string): NumberViolation[] {
+  if (!label || !vf || cfg.format === "percent") return [];
+  const item = itemFor(sql, vf);
+  const out: NumberViolation[] = [];
+  const unit = unitOfLabel(label);
+  // A governed metric is in baht by definition, whatever the card the model drew.
+  const divisor = cfg.metricKey ? 1 : divisorOf(item);
+  const aggregate = item ? aggregateOf(item) : (cfg.aggregate ? String(cfg.aggregate).toUpperCase() : null);
+  if (unit && unit.scale !== divisor) {
+    out.push({
+      rule: "R25", target: b.id,
+      detail: `"${label}" says ${unit.phrase.replace(/[()（）]/g, "").trim()}, but the number is ${divisor === 1 ? "in baht, not scaled" : `divided by ${divisor}`}`,
+      // The number is what it is; a unit it does not have comes off the label. A different scale in the query is for the repair brief.
+      // (Not over a count: there the column is the mistake, and a label with its unit gone would still name an amount.)
+      ...(divisor === 1 && aggregate !== "COUNT" ? { fix: { kind: "strip-unit" as const, blockId: b.id } } : {}),
+    });
+  }
+  if (aggregate === "COUNT" && AMOUNT_WORDS.test(label) && !COUNT_WORDS.test(label)) {
+    out.push({ rule: "R25", target: b.id, detail: `"${label}" names an amount, but the number is a count of rows (${vf})` });
+  }
+  return out;
+}
+
+// ── R26: an average of rates is not the rate ──────────────────────────────────
+
+/** A column that holds a rate, share or percent per row (collection_rate_pct, vacancy_share). */
+const RATE_COLUMN = /(?:^|_)(?:pct|percent|percentage|rate|ratio|share)(?:_|$)|^(?:สัดส่วน|อัตรา|ร้อยละ)/i;
+const RATE_SQL_WORDS = new Set(["case", "when", "then", "else", "end", "cast", "as", "double", "and", "or", "is", "not", "null", "in", "between", "like", "decimal", "float", "real", "numeric", "integer", "int", "varchar", "text", "coalesce", "nullif", "abs"]);
+
+/** Every `AVG( ... )` call of a select item: where it sits and what it averages. */
+export function avgCalls(item: string): Array<{ start: number; end: number; inner: string }> {
+  const out: Array<{ start: number; end: number; inner: string }> = [];
+  const re = /\bAVG\s*\(/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(item))) {
+    let depth = 1, quote: string | null = null, i = m.index + m[0].length;
+    for (; i < item.length; i++) {
+      const ch = item[i]!;
+      if (quote) { if (ch === quote) quote = null; continue; }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (ch === "(") depth++;
+      else if (ch === ")" && --depth === 0) break;
+    }
+    if (depth === 0) out.push({ start: m.index, end: i + 1, inner: item.slice(m.index + m[0].length, i) });
+  }
+  return out;
+}
+
+/** The rate column an AVG averages, if its inner expression reads one (among `known` columns when they are known). */
+export function averagedRateColumn(inner: string, known?: string[]): string | null {
+  const names = [...inner.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+  const bare = inner.replace(/"[^"]*"|'[^']*'/g, " ");
+  names.push(...[...bare.matchAll(/\b([A-Za-z_]\w*)\b/g)].map((m) => m[1]!).filter((w) => !RATE_SQL_WORDS.has(w.toLowerCase())));
+  return names.find((n) => RATE_COLUMN.test(n) && (!known || known.includes(n))) ?? null;
+}
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const swapColumn = (expr: string, from: string, to: string) =>
+  expr.replace(new RegExp(`"${escRe(from)}"|(?<![\\w"])${escRe(from)}(?![\\w"])`, "g"), () => to);
+const quoted = (c: string) => `"${c}"`;
+
+/**
+ * The query with `AVG(expr over the rate)` replaced by `SUM(expr over the numerator) / NULLIF(SUM(expr over the
+ * denominator), 0)`: the overall rate, each row counted by its size. A rate stored in points was divided by 100 right
+ * after the AVG to make a fraction; the division goes (the ratio is the fraction), and a rate kept in points stays in points.
+ */
+export function weightedRatioSql(sql: string, item: string, rate: string, parts: RateParts): string | null {
+  const calls = avgCalls(item).filter((c) => averagedRateColumn(c.inner) === rate);
+  if (calls.length !== 1) return null;
+  const c = calls[0]!;
+  const top = parts.numeratorPlus ? `(COALESCE(${quoted(parts.numerator)}, 0) + COALESCE(${quoted(parts.numeratorPlus)}, 0))` : quoted(parts.numerator);
+  const ratio = `(SUM(${swapColumn(c.inner, rate, top)}) * 1.0 / NULLIF(SUM(${swapColumn(c.inner, rate, quoted(parts.denominator))}), 0))`;
+  const after = item.slice(c.end);
+  const div = /^\s*\/\s*100(?:\.0+)?(?![\d.])/.exec(after);
+  let next: string;
+  if (parts.points) next = div ? item.slice(0, c.start) + ratio + after.slice(div[0].length) : item.slice(0, c.start) + `(${ratio} * 100.0)` + after;
+  else if (div) return null;
+  else next = item.slice(0, c.start) + ratio + after;
+  return sql.includes(item) ? sql.replace(item, () => next) : null;
+}
+
+/** The query that tells which two columns of `table` a rate column is the ratio of (rateParts.ts reads its one row). */
+export function rateProbeSql(table: string, rate: string, numeric: string[], plus = false): { sql: string; pairs: Array<[string, string, string?]> } {
+  const q = (c: string) => `"${c.replace(/"/g, '""')}"`;
+  // The columns that share words with the rate's name come first (arrears_over_2y_pct: the arrears_* columns), so the
+  // cap cuts the least likely ones, not whatever sits last in the table (the age bands were column 15+ of 22).
+  const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w && !/^(pct|percent|percentage|rate|ratio|share|of|to|vs|baht|total)$/.test(w));
+  const wanted = new Set(words(rate));
+  const overlap = (c: string) => words(c).filter((w) => wanted.has(w)).length;
+  const cols = numeric
+    .filter((c) => c !== rate && !RATE_COLUMN.test(c) && !/(^|_)(id|no|code|year|fy|month|quarter|rank|seq)(_|$)/i.test(c))
+    .map((c, i) => ({ c, i, o: overlap(c) }))
+    .sort((a, b) => b.o - a.o || a.i - b.i)
+    .map((x) => x.c)
+    .slice(0, plus ? 12 : 40);
+  const pairs: Array<[string, string, string?]> = [];
+  const items: string[] = [];
+  const add = (top: string, n: string, d: string, n2?: string) => {
+    const i = pairs.length;
+    pairs.push(n2 ? [n, d, n2] : [n, d]);
+    const ratio = `${top} / NULLIF(CAST(${q(d)} AS DOUBLE), 0)`;
+    items.push(`MAX(ABS(${ratio} - CAST(${q(rate)} AS DOUBLE))) AS e1_${i}`, `MAX(ABS(${ratio} * 100.0 - CAST(${q(rate)} AS DOUBLE))) AS e100_${i}`);
+  };
+  // `plus`: a numerator of two columns added (the second probe, run only when no single column reproduced the rate).
+  if (plus) {
+    for (let a = 0; a < cols.length; a++) for (let b = a + 1; b < cols.length; b++) for (const d of cols) {
+      if (d === cols[a] || d === cols[b]) continue;
+      add(`(COALESCE(CAST(${q(cols[a]!)} AS DOUBLE), 0) + COALESCE(CAST(${q(cols[b]!)} AS DOUBLE), 0))`, cols[a]!, d, cols[b]!);
+    }
+  } else {
+    for (const n of cols) for (const d of cols) if (n !== d) add(`CAST(${q(n)} AS DOUBLE)`, n, d);
+  }
+  return { sql: `SELECT COUNT(*) AS n, MAX(CAST(${q(rate)} AS DOUBLE)) AS rate_max${items.length ? ", " + items.join(", ") : ""} FROM ${q(table)} WHERE ${q(rate)} IS NOT NULL`, pairs };
+}
+
+/** The pair the probe's row names: the smallest worst-case error, within the rate's own rounding. */
+export function pickRateParts(row: Record<string, unknown>, pairs: Array<[string, string, string?]>): RateParts | null {
+  const n = Number(row.n), max = Number(row.rate_max);
+  if (!(n >= 5) || !Number.isFinite(max)) return null;
+  const points = max > 1.5;
+  let best: { i: number; err: number } | null = null;
+  pairs.forEach((_, i) => {
+    const err = Number(row[`${points ? "e100" : "e1"}_${i}`]);
+    if (Number.isFinite(err) && (!best || err < best.err)) best = { i, err };
+  });
+  const b = best as { i: number; err: number } | null;
+  // Rates are stored rounded: half a point (half a hundredth of a fraction) is the tolerance.
+  if (!b || b.err > (points ? 0.5 : 0.005)) return null;
+  const [numerator, denominator, numeratorPlus] = pairs[b.i]!;
+  return { numerator, denominator, ...(numeratorPlus ? { numeratorPlus } : {}), points };
+}
+
+/** R26 for one KPI: its value is an average of a rate column. */
+function avgRateViolations(b: Block, label: string, vf: string, cfg: any, sql: string, qid: string, opts: { tableColumns?: Record<string, string[]>; rateParts?: Record<string, RateParts> }): NumberViolation[] {
+  if (!vf || cfg.metricKey) return [];
+  if (!(cfg.format === "percent" || SHARE_LABEL.test(label) || /pct|percent|rate|share/i.test(vf))) return [];
+  const item = itemFor(sql, vf);
+  if (!item) return [];
+  const tables = tablesRead(sql);
+  const known = tables.flatMap((t) => opts.tableColumns?.[t] ?? []);
+  const rate = avgCalls(item).map((c) => averagedRateColumn(c.inner, known.length ? known : undefined)).find((r): r is string => !!r);
+  if (!rate) return [];
+  const table = tables.length === 1 ? tables[0]! : tables.find((t) => opts.tableColumns?.[t]?.includes(rate));
+  const detail = `"${label || b.id}" averages ${rate}, a rate per row: the overall rate counts each row by its size (the sum of its parts over the sum of the whole)`;
+  const parts = table ? opts.rateParts?.[`${table}.${rate}`] : undefined;
+  // Only this select item changes, under its own alias: the other cards of a shared query read other items.
+  const fixed = parts ? weightedRatioSql(sql, item, rate, parts) : null;
+  if (fixed) return [{ rule: "R26", target: b.id, detail, fix: { kind: "weighted-ratio", blockId: b.id, queryId: qid, sql: fixed } }];
+  return [{ rule: "R26", target: b.id, detail, ...(table && !parts ? { probe: { table, column: rate } } : {}) }];
+}
+
+// ── R28: a card that says rate shows an amount ────────────────────────────────
+
+/** A label that promises a rate or a share (not a change: "growth rate" is another thing). */
+const RATE_LABEL = /\b(?:rate|share|ratio)\b|อัตรา|สัดส่วน|ร้อยละ|占比|比例|比率|完成率/i;
+
+/** The query's text with its quoted names and strings blanked, so a `/` left in it is a division. */
+const sqlDivides = (sql: string) => /\//.test(sql.replace(/'[^']*'|"[^"]*"/g, " ").replace(/\/\*[\s\S]*?\*\//g, " "));
+
+/**
+ * R28 for one KPI: the label says rate/share but the card prints an amount: money, or a count above 100, from a query that never divides
+ * (a planner that wrote "current collection rate" as two SUM columns and read the numerator: 167M under a rate label).
+ */
+function rateLabelViolations(b: Block, label: string, cfg: any, sql: string, shown: number): NumberViolation[] {
+  if (cfg.metricKey || cfg.format === "percent" || !Number.isFinite(shown)) return [];
+  if (!RATE_LABEL.test(label) || CHANGE_LABEL.test(label) || sqlDivides(sql)) return [];
+  if (!(cfg.format === "currency" || Math.abs(shown) > 100)) return [];
+  return [{ rule: "R28", target: b.id, detail: `"${label}" is labelled a rate or share, but it shows ${Number(shown.toPrecision(6))} and its query never divides one amount by another` }];
+}
+
+// ── R34: a percent card beyond any percent a reader can believe ───────────────
+
+/** A percent card holds a ratio (0.18 prints 18%); past 10 it prints more than 1000%, the bound R30 sets for prose. */
+export const PERCENT_CARD_MAX_RATIO = 10;
+
+/** R34 for one KPI: formatted as a percent, but the value is a ratio no one can believe (SUM(paid_baht) / 100 printed 18,504,032%). */
+function percentCardViolations(b: Block, label: string, cfg: any, shown: number): NumberViolation[] {
+  if (cfg.format !== "percent" || !Number.isFinite(shown) || Math.abs(shown) <= PERCENT_CARD_MAX_RATIO) return [];
+  return [{ rule: "R34", target: b.id, detail: `"${label || b.id}" is a percent but would print ${Math.round(shown * 100).toLocaleString("en-US")}%, past any share or rate a reader can believe` }];
+}
+
 // ── The detection ───────────────────────────────────────────────────────
+
+/** A year as it is written, in the Buddhist era. */
+const asBuddhist = (y: number) => (y < 2400 ? y + 543 : y);
+
+/**
+ * R27: the select item that makes the card's value filters to a year (`CASE WHEN fiscal_year = 2570 ...`) and the label names the year
+ * next to it (FY2569). The year it filters to, and the one to filter to instead, in the era the query writes; null when the item
+ * names no year, names more than one, or names a year that is not next to the label's.
+ */
+export function yearLiteralSwap(label: string, valueField: string, sql: string): { from: number; to: number } | null {
+  const year = STATED_YEAR.exec(label)?.[1];
+  const item = valueField ? itemFor(sql, valueField) : null;
+  if (!year || !item) return null;
+  const from = onlyYearLiteral(item), want = Number(year);
+  if (from === null) return null;
+  if (Math.abs(asBuddhist(from) - asBuddhist(want)) !== 1) return null;
+  const to = from >= 2400 === want >= 2400 ? want : from >= 2400 ? want + 543 : want - 543;
+  return { from, to };
+}
+
+/** The one year a select item filters to (`... fiscal_year = 2570 ...`), or null when it names none or several. */
+function onlyYearLiteral(item: string): number | null {
+  const literals = [...new Set([...item.matchAll(/=\s*((?:25|20)\d\d)(?!\d)/g)].map((m) => Number(m[1])))];
+  return literals.length === 1 ? literals[0]! : null;
+}
+
+/**
+ * R27: the label names a year (FY2570) and the card's own column filters to that same year, and the card has no value: the year has no
+ * data yet (an estimate being drafted, a month not closed). The card moves to the year before it, in the query AND in its words, so what it
+ * says is what it shows; the gate keeps it only if the card then shows a number (reportGate.ts), and otherwise puts it back. Found on the
+ * municipality demo (bench-14, 2026-10-18): a Spending report built on FY2570 had every card empty, and the build lost the tab.
+ */
+export function yearFallbackSwap(label: string, valueField: string, sql: string): { from: number; to: number; relabel: { from: string; to: string } } | null {
+  const year = STATED_YEAR.exec(label)?.[1];
+  const item = valueField ? itemFor(sql, valueField) : null;
+  if (!year || !item) return null;
+  const from = onlyYearLiteral(item);
+  if (from === null || from !== Number(year)) return null; // the query names the year the label names
+  return { from, to: from - 1, relabel: { from: year, to: String(Number(year) - 1) } };
+}
 
 const SHARE_LABEL = /share|ratio|rate|สัดส่วน|อัตรา|ร้อยละ|เปอร์เซ็นต์|% of|percent of|completion|achievement|progress|ความคืบหน้า|占比|比例|比率|完成率/i;
 const CHANGE_LABEL = /growth|change|yoy|mom|increase|decrease|เติบโต|เปลี่ยนแปลง|เพิ่มขึ้น|ลดลง|增长|变化|同比|环比/i;
 
 export function detectNumberRules(
-  report: Report, dataset: Dataset, opts: { tableColumns?: Record<string, string[]> } = {},
+  report: Report, dataset: Dataset,
+  opts: {
+    tableColumns?: Record<string, string[]>;
+    /** The KPIs the brief named, with the target it gave each: a KPI that is one of them and holds no plan gets that target (R12). */
+    kpiAsks?: KpiAsk[];
+    /** R26: the numerator and denominator of the rate columns the gate probed, by "table.column". */
+    rateParts?: Record<string, RateParts>;
+  } = {},
 ): NumberViolation[] {
   const out: NumberViolation[] = [];
   const blocks = report.pages.flatMap((p) => p.blocks);
@@ -172,6 +509,7 @@ export function detectNumberRules(
   const usersOf = new Map<string, number>();
   for (const b of blocks) { const q = queryOf(b); if (q) usersOf.set(q, (usersOf.get(q) ?? 0) + 1); }
   const named = new Map<string, Set<string>>();
+  const kpis: KpiExpression[] = [];
 
   for (const b of blocks) {
     const cfg = (b as any).config ?? {};
@@ -184,14 +522,25 @@ export function detectNumberRules(
       const label = typeof cfg.label === "string" ? cfg.label : "";
 
       // R12 — a target in the words, no plan on the card.
-      if (label && cfg.plan == null && !cfg.planField) {
-        const t = targetFromLabel(label);
-        if (t) {
-          // A rate or a plain number takes the target as it is written; money with a target "of the base" needs a plan column, which code cannot invent.
-          const fixable = cfg.format === "percent" || (cfg.format === "number" && !/\s(?:ของ|of)\s/i.test(label.slice(label.search(TARGET_RE))));
+      const labelTarget = label && cfg.plan == null && !cfg.planField ? targetFromLabel(label) : null;
+      if (labelTarget) {
+        const t = labelTarget;
+        // A rate or a plain number takes the target as it is written; money with a target "of the base" needs a plan column, which code cannot invent.
+        const fixable = cfg.format === "percent" || (cfg.format === "number" && !/\s(?:ของ|of)\s/i.test(label.slice(label.search(TARGET_RE))));
+        out.push({
+          rule: "R12", target: b.id, detail: `"${label}" states a target of ${t.value}${t.percent ? "%" : ""} but the KPI has no plan`,
+          ...(fixable ? { fix: { kind: "plan" as const, blockId: b.id, plan: cfg.format === "percent" ? t.value / 100 : t.value, lowerIsBetter: t.lowerIsBetter } } : {}),
+        });
+      } else if (cfg.plan == null && !cfg.planField && opts.kpiAsks?.length) {
+        // The brief's target for this KPI, when the label states none: matched by name (kpiMatch.ts), applied only
+        // where the unit agrees (a rate target on a percent KPI, a plain target on a number: never "5%" on a baht total).
+        // The best match among ALL the asks, then its target if it has one: a KPI whose ask has none keeps none.
+        const ask = askFor(kpiVariants(b), opts.kpiAsks);
+        const t = ask?.target ? parseTargetText(ask.target) : null;
+        if (ask && t && ((t.percent && cfg.format === "percent") || (!t.percent && cfg.format === "number"))) {
           out.push({
-            rule: "R12", target: b.id, detail: `"${label}" states a target of ${t.value}${t.percent ? "%" : ""} but the KPI has no plan`,
-            ...(fixable ? { fix: { kind: "plan" as const, blockId: b.id, plan: cfg.format === "percent" ? t.value / 100 : t.value, lowerIsBetter: t.lowerIsBetter } } : {}),
+            rule: "R12", target: b.id, detail: `"${label || b.id}" is the brief's KPI "${ask.name}" (target ${ask.target}) but the KPI has no plan`,
+            fix: { kind: "plan", blockId: b.id, plan: t.percent ? t.value / 100 : t.value, lowerIsBetter: t.lowerIsBetter },
           });
         }
       }
@@ -225,10 +574,31 @@ export function detectNumberRules(
       // R19 — an amount read as a percent, or a calculation left in the words.
       const shown = computeKpiValue({ valueField: vf, aggregate: cfg.aggregate }, rows);
       if (cfg.format === "percent" && Number.isFinite(shown) && Math.abs(shown) > 10) {
-        out.push({ rule: "R19", target: b.id, detail: `"${label}" shows ${fmtPercent(shown)}: a raw amount (${Number(shown.toPrecision(6))}) printed as a percent` });
+        // A share-labelled card whose value reads 11-100 is percent points (the query multiplied by 100), not an amount: shown as is, with a % sign.
+        const points = SHARE_LABEL.test(label) && !CHANGE_LABEL.test(label) && Math.abs(shown) <= 100 && rows.length === 1;
+        out.push({
+          rule: "R19", target: b.id, detail: `"${label}" shows ${fmtPercent(shown)}: a raw amount (${Number(shown.toPrecision(6))}) printed as a percent`,
+          ...(points ? { fix: { kind: "percent-points" as const, blockId: b.id } } : {}),
+        });
       }
       const leaked = LEAKED_CALC.exec(label);
       if (leaked) out.push({ rule: "R19", target: b.id, detail: `"${label}" has a calculation in its words ("${leaked[0]}")` });
+
+      // R27 — a card that shows "–": the query ran and returned rows, and the value field is empty in them.
+      // (No rows at all is R5's: the block has no data.)
+      if (rows.length > 0 && !Number.isFinite(shown)) {
+        const swap = yearLiteralSwap(label, vf, sql) ?? yearFallbackSwap(label, vf, sql);
+        out.push({
+          rule: "R27", target: b.id, detail: `"${label || b.id}" has no value: ${vf || "its value field"} is empty in what its query returns`,
+          ...(swap ? { fix: { kind: "year-literal" as const, blockId: b.id, queryId: qid, valueField: vf, ...swap } } : {}),
+        });
+      }
+
+      kpiExpressions(b, label, vf, cfg, sql, kpis);
+      out.push(...unitViolations(b, label, vf, cfg, sql));
+      out.push(...avgRateViolations(b, label, vf, cfg, sql, qid, opts));
+      out.push(...rateLabelViolations(b, label, cfg, sql, shown));
+      out.push(...percentCardViolations(b, label, cfg, shown));
 
       // R20 — a ratio over the scope its label names (a percent KPI, with or without a division in its query).
       if (cfg.format === "percent") {
@@ -281,6 +651,18 @@ export function detectNumberRules(
           rule: "R14", target: b.id, detail: `"${titleOf(b)}": ${why}`,
           ...(keyed && usersOf.get(qid) === 1 && !alreadyKeyed ? { fix: { kind: "order" as const, queryId: qid, sql: withOrder(sql, keyed) } } : {}),
         });
+      }
+    }
+
+    // R35 — a time axis with one point per date. A line, area or bar chart draws one value per x; rows that
+    // repeat a date (one per branch) make it jump between them instead of showing the date's total
+    // ("Daily sales in July", Make a report, 2026-11-01). Several series go in yFields, never as repeated rows.
+    if (b.type === "chart" && ["line", "area", "bar"].includes(cfg.chartType) && typeof cfg.xField === "string" && !cfg.colorField && TIME_NAME.test(cfg.xField) && rows.length >= 4) {
+      const seen = new Map<string, number>();
+      for (const r of rows) { const k = String(r[cfg.xField] ?? ""); seen.set(k, (seen.get(k) ?? 0) + 1); }
+      const repeated = [...seen.values()].filter((n) => n > 1).length;
+      if (repeated >= 2) {
+        out.push({ rule: "R35", target: b.id, detail: `"${titleOf(b)}" plots ${rows.length} rows over ${seen.size} values of ${cfg.xField}: several rows share a ${cfg.xField}, so the chart jumps between them instead of showing one figure each` });
       }
     }
 
@@ -352,6 +734,7 @@ export function detectNumberRules(
   }
 
   out.push(...gapConsistency(blocks, sqlById, dataset), ...blankAndOutliers(blocks, dataset));
+  out.push(...duplicateKpis(report, kpis, opts.kpiAsks));
   return out;
 }
 
@@ -562,5 +945,92 @@ export function applyRuleFix(report: Report, fix: NumberRuleFix, dataset: Datase
       cfg.drilldown = { queryId: id, ...(typeof cfg.label === "string" ? { title: cfg.label } : {}) };
       return { title: titleOf(block) };
     }
+    case "drop-duplicate": {
+      const keep = blocks.find((b) => b.id === fix.keepId);
+      if (!block || !keep || block.id === keep.id) return null;
+      const kept: any = (keep as any).config;
+      // What the dropped card had and the kept one lacks (a plan, a drill-down, a sparkline) is not lost with it.
+      for (const k of ["plan", "planField", "drilldown", "sparkQueryId", "sparkValueField", "sparkLabelField", "compareField"]) {
+        if (kept[k] == null && cfg[k] != null) kept[k] = cfg[k];
+      }
+      const title = titleOf(block);
+      dropBlock(report, block.id);
+      return { title };
+    }
+    case "weighted-ratio": {
+      const ds = report.dataSources.find((d) => d.id === fix.queryId);
+      if (!ds?.sql || !block || ds.sql === fix.sql) return null;
+      ds.sql = fix.sql;
+      return { title: titleOf(block) };
+    }
+    case "percent-points": {
+      if (!block || cfg.format !== "percent") return null;
+      cfg.format = "number";
+      cfg.suffix = "%";
+      return { title: titleOf(block) };
+    }
+    case "year-literal": {
+      const ds = report.dataSources.find((d) => d.id === fix.queryId);
+      const item = ds?.sql ? itemFor(ds.sql, fix.valueField) : null;
+      if (!ds?.sql || !item || !block) return null;
+      const next = item.replace(new RegExp(`=\\s*${fix.from}(?!\\d)`, "g"), `= ${fix.to}`);
+      // The column is named for the year it reads (fy2570): it takes the new year's name, once, in its own query.
+      let alias = fix.valueField.includes(String(fix.from)) ? fix.valueField.replace(String(fix.from), String(fix.to)) : fix.valueField;
+      for (let i = 2; alias !== fix.valueField && ds.sql.includes(`"${alias}"`); i++) alias = `${fix.valueField.replace(String(fix.from), String(fix.to))}_${i}`;
+      const renamed = next.replace(new RegExp(`(\\bas\\s+)"?${esc(fix.valueField)}"?(\\s*)$`, "i"), `$1"${alias}"$2`);
+      if (renamed === item) return null;
+      ds.sql = ds.sql.replace(item, renamed);
+      cfg.valueField = alias;
+      // Its own drill-down opens the rows of the year the card now shows.
+      const dq = report.dataSources.find((d) => d.id === cfg.drilldown?.queryId && d.id.startsWith("q_drill_"));
+      if (dq?.sql && !blocks.some((o) => o.id !== block.id && (o as any).config?.drilldown?.queryId === dq.id)) {
+        dq.sql = dq.sql.replace(new RegExp(`=\\s*${fix.from}(?!\\d)`, "g"), `= ${fix.to}`);
+        if (typeof cfg.drilldown.title === "string") cfg.drilldown.title = cfg.drilldown.title.replace(String(fix.from), String(fix.to));
+      }
+      for (const words of Object.values((block as any).i18n ?? {}) as Array<Record<string, string>>) {
+        if (typeof words["drilldown.title"] === "string") words["drilldown.title"] = words["drilldown.title"].replace(String(fix.from), String(fix.to));
+      }
+      // The year had no data: the card's words say the year it now shows, in every language it has words in.
+      if (fix.relabel) {
+        const move = (s: string) => s.split(fix.relabel!.from).join(fix.relabel!.to);
+        if (typeof cfg.label === "string") cfg.label = move(cfg.label);
+        for (const words of Object.values((block as any).i18n ?? {}) as Array<Record<string, string>>) {
+          if (typeof words.label === "string") words.label = move(words.label);
+          if (typeof words.title === "string") words.title = move(words.title);
+        }
+      }
+      for (const r of dataset[fix.queryId] ?? []) if (fix.valueField in r) { r[alias] = r[fix.valueField]; delete r[fix.valueField]; }
+      return { title: titleOf(block) };
+    }
+    case "strip-unit": {
+      if (!block || typeof cfg.label !== "string") return null;
+      const strip = (s: string) => s.replace(unitOfLabel(s)?.phrase ?? "\u0000", "").replace(/\s{2,}/g, " ").trim();
+      const next = strip(cfg.label);
+      if (!next || next === cfg.label) return null;
+      cfg.label = next;
+      // Each language's own label carries the phrase in its own words.
+      for (const words of Object.values((block as any).i18n ?? {}) as Array<Record<string, string>>) {
+        if (typeof words.label === "string") words.label = strip(words.label) || words.label;
+      }
+      return { title: next };
+    }
   }
+}
+
+/** Close any grid row no block covers any more. */
+export function compactRows<T extends { y: number; h: number }>(blocks: T[]): T[] {
+  let out = blocks.map((b) => ({ ...b }));
+  const bottom = out.reduce((m, b) => Math.max(m, b.y + b.h), 0);
+  for (let row = bottom - 1; row >= 0; row--) {
+    if (out.some((b) => b.y <= row && row < b.y + b.h)) continue;
+    out = out.map((b) => (b.y > row ? { ...b, y: b.y - 1 } : b));
+  }
+  return out;
+}
+
+/** Take a block off a report (mutating it), with the queries only it read and the rows it leaves empty. */
+function dropBlock(report: Report, id: string): void {
+  report.pages = report.pages.map((p) => ({ ...p, blocks: compactRows(p.blocks.filter((b) => b.id !== id)) }));
+  const used = neededQueries(report.dataSources, report.pages);
+  report.dataSources = report.dataSources.filter((d) => used.has(d.id));
 }

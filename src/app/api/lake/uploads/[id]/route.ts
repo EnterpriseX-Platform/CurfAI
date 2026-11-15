@@ -39,7 +39,8 @@ async function readAtMost(req: NextRequest, cap: number): Promise<Buffer | null>
   return Buffer.concat(parts);
 }
 
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 
@@ -71,7 +72,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
   try {

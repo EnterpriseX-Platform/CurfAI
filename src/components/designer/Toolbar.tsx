@@ -1,86 +1,87 @@
 "use client";
+/**
+ * Toolbar — the designer's document bar: back to Reports, the report's
+ * name, undo/redo, then what you do with the whole document (Data, Preview,
+ * Run, page setup, Export, Publish, Save). The settings that change rarely
+ * (display, year style, theme, schedule, history, story) live in the
+ * inspector's Report settings, shown when no block is selected
+ * (ReportSettingsPanel); Suggest charts sits with the block palette.
+ * Every icon here has a name for screen readers and a tooltip.
+ */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Undo2, Redo2, Save, Eye, ChevronRight, ArrowLeft,
-  Loader2, Check, FileText, History, Clock, Palette, Sparkles,
-  LayoutDashboard, CalendarDays,
+  Loader2, Check, Play, PanelTop,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDesignerStore } from "@/lib/reporting/store";
+import { useSaveReport, useUnsaved, type SaveState } from "@/lib/reporting/useSaveReport";
+import type { CheckItem } from "@/lib/reporting/designerCheck";
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DataDrawer } from "./DataDrawer";
-import { ScheduleDrawer } from "./ScheduleDrawer";
 import { ReportExportMenu } from "@/components/reports/ReportExportMenu";
-import { useToast } from "@/lib/toast";
 import { useT } from "@/lib/i18n/LocaleContext";
 import { CurfLogo } from "@/components/common/CurfLogo";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { THEME_PRESETS } from "@/lib/reporting/themes";
-import { reportDisplay, type Theme, type ReportDisplay } from "@/lib/reporting/schema";
 import { eeClient } from "@/ee/client";
 
 const PublishButton = eeClient.designer?.PublishButton ?? null;
-const SuggestChartButton = eeClient.designer?.SuggestChartButton ?? null;
-const STORY_MODE = !!eeClient.designer?.storyMode;
 
-type SaveState = "idle" | "saving" | "saved" | "error";
+export type LastRun = { at: number; durationMs: number; summary?: Record<string, { rows: number }> };
 
-export function Toolbar({ reportId }: { reportId: string }) {
+export function Toolbar({
+  reportId, onRun, running, lastRun, pageSetupOpen, onTogglePageSetup, checkItems,
+}: {
+  reportId: string;
+  /** What the report check says now: the Publish review lists it. */
+  checkItems: CheckItem[];
+  onRun: () => void;
+  running: boolean;
+  lastRun: LastRun | null;
+  pageSetupOpen: boolean;
+  onTogglePageSetup: () => void;
+}) {
   const router = useRouter();
   const name = useDesignerStore((s) => s.report.name);
   const setMeta = useDesignerStore((s) => s.updateReportMeta);
   const report = useDesignerStore((s) => s.report);
-  const { push } = useToast();
   const { t } = useT();
-  const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const { state: saveState, save } = useSaveReport(reportId);
+  const unsaved = useUnsaved();
+  // Leaving with edits that are not saved asks first (the back link and the logo; a closed tab asks through the browser).
+  const [leaveTo, setLeaveTo] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+  const guard = (href: string) => (e: React.MouseEvent) => {
+    if (!unsaved) return;
+    e.preventDefault();
+    setLeaveTo(href);
+  };
 
   const undo = () => useDesignerStore.temporal.getState().undo();
   const redo = () => useDesignerStore.temporal.getState().redo();
 
-  async function save() {
-    setSaveState("saving");
-    const res = await fetch("/api/reports/" + reportId, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ definition: report }),
-    });
-    if (!res.ok) {
-      setSaveState("error");
-      // A tier-gated field (e.g. a non-default theme — see ThemePicker's
-      // "click→save→toast is the upgrade nudge" design) fails here with a
-      // structured 402 body, not plain text. The raw response text used to
-      // get dumped straight into the toast; read it once, try to parse it
-      // as the {error, upgradeUrl} shape the rest of the app uses, and fall
-      // back to the raw text only when it genuinely isn't JSON.
-      const raw = await res.text();
-      let description = raw || t("common.requestFailed");
-      try {
-        const json = JSON.parse(raw);
-        description = json?.upgradeUrl
-          ? t("designerToolbar.upgradeAt")
-              .replace("{error}", json.error ?? t("common.requestFailed"))
-              .replace("{url}", json.upgradeUrl)
-          : json?.error ?? description;
-      } catch { /* not JSON — keep the raw text */ }
-      push({ variant: "destructive", title: t("common.saveFailed"), description });
-      return;
-    }
-    setSaveState("saved");
-    push({ variant: "success", title: t("common.saved"), description: t("designerToolbar.reportUpdated") });
-    router.refresh();
-    setTimeout(() => setSaveState("idle"), 1500);
-  }
+  // The last run's query count and time ride on Run's tooltip, so they are
+  // there even while the page-setup row is hidden.
+  const runTitle = lastRun
+    ? `${t("designer.runTooltip")} · ${t("designerShell.queriesSummary")
+        .replace("{n}", String(Object.keys(lastRun.summary ?? {}).length))
+        .replace("{ms}", String(lastRun.durationMs))}`
+    : t("designer.runTooltip");
+  const pageSetupLabel = t(pageSetupOpen ? "designer.pageSetup.hide" : "designer.pageSetup.show");
 
-  // The actions wrap onto a second row before they squeeze the report's
-  // name to nothing (they need ~1460px; a laptop has 1280–1440).
+  // The actions wrap onto a second line before they squeeze the report's
+  // name to nothing on a narrow window.
   return (
-    <header className="flex flex-wrap items-center justify-between gap-y-1.5 border-b border-border bg-background/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-      <div className="flex shrink-0 items-center gap-2">
+    <header className="flex flex-wrap items-center justify-between gap-y-1.5 border-b border-border bg-background px-4 py-2">
+      <div className="flex min-w-0 shrink items-center gap-2">
         <Button
           asChild
           size="sm"
@@ -88,71 +89,64 @@ export function Toolbar({ reportId }: { reportId: string }) {
           className="h-8 -ml-1 text-muted-foreground hover:text-foreground"
           title={t("designerToolbar.backToReports")}
         >
-          <Link href="/reports">
+          <Link href="/reports" onClick={guard("/reports")}>
             <ArrowLeft className="mr-1.5 h-4 w-4" /> {t("nav.reports")}
           </Link>
         </Button>
         <div className="hidden items-center gap-2 sm:flex">
-          <span className="text-muted-foreground/50">/</span>
-          <Link
-            href="/"
-            className="flex items-center"
-            title="Curf"
-          >
+          <span className="text-muted-foreground/50" aria-hidden>/</span>
+          <Link href="/" onClick={guard("/")} className="flex items-center" title="Curf" aria-label="Curf">
             <CurfLogo variant="icon" size={22} />
           </Link>
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" aria-hidden />
         </div>
         <Input
           value={name}
           onChange={(e) => setMeta({ name: e.target.value })}
-          className="h-8 w-64 border-transparent bg-transparent text-sm font-medium shadow-none focus-visible:border-input focus-visible:bg-background"
+          aria-label={t("designer.nameLabel")}
+          title={t("designer.nameLabel")}
+          className="h-8 w-56 min-w-0 border-transparent bg-transparent text-sm font-medium shadow-none focus-visible:border-input focus-visible:bg-background xl:w-72"
         />
         <SaveIndicator state={saveState} />
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-1">
+      {/* On a phone the actions are one scrolling row (Save stays reachable) instead of three wrapped rows. */}
+      <div className="flex w-full flex-nowrap items-center justify-start gap-1 overflow-x-auto pb-0.5 [&>*]:shrink-0 sm:w-auto sm:flex-wrap sm:justify-end sm:overflow-visible sm:pb-0">
         <div className="mr-1 flex items-center gap-0.5">
-          <Button size="icon" variant="ghost" onClick={undo} title={t("designerToolbar.undo")}>
+          <Button size="icon" variant="ghost" onClick={undo} title={t("designer.undoTooltip")} aria-label={t("designerToolbar.undo")}>
             <Undo2 className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={redo} title={t("designerToolbar.redo")}>
+          <Button size="icon" variant="ghost" onClick={redo} title={t("designer.redoTooltip")} aria-label={t("designerToolbar.redo")}>
             <Redo2 className="h-4 w-4" />
           </Button>
         </div>
         <DataDrawer />
-        {SuggestChartButton && <SuggestChartButton reportId={reportId} />}
-        <DisplayPicker />
-        <YearsPicker />
-        <ThemePicker />
-        {/* Secondary actions show their label on wide screens only — the icon
-            and tooltip carry them on a laptop, so the bar fits beside the name. */}
-        <Button size="sm" variant="ghost" onClick={() => setScheduleOpen(true)} title={t("designerToolbar.scheduleTooltip")} aria-label={t("designerToolbar.schedule")}>
-          <Clock className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designerToolbar.schedule")}</span>
-        </Button>
-        <Button size="sm" variant="ghost" asChild title={t("reportHistory.breadcrumb")}>
-          <Link href={"/reports/" + reportId + "/history"} aria-label={t("reportHistory.breadcrumb")}>
-            <History className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("reportHistory.breadcrumb")}</span>
+        <Button size="sm" variant="ghost" asChild title={t("designer.previewTooltip")}>
+          <Link href={"/reports/" + reportId} target="_blank">
+            <Eye className="mr-1.5 h-4 w-4" />{t("designerToolbar.preview")}
           </Link>
         </Button>
-        <Button size="sm" variant="ghost" asChild title={t("designerToolbar.preview")}>
-          <Link href={"/reports/" + reportId} target="_blank" aria-label={t("designerToolbar.preview")}>
-            <Eye className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designerToolbar.preview")}</span>
-          </Link>
+        <Button size="sm" variant="ghost" onClick={onRun} disabled={running} title={runTitle} aria-busy={running}>
+          {running
+            ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" />{t("designerShell.running")}</>
+            : <><Play className="mr-1.5 h-4 w-4" />{t("designerShell.run")}</>}
         </Button>
-        {PublishButton && <PublishButton reportId={reportId} />}
-        {/* Story Mode — Business plan. On Cloud the page enforces the tier
-            gate (renders an upgrade card below Business) so the button stays
-            visible as a discovery affordance; Community has no story page. */}
-        {STORY_MODE && (
-          <Button size="sm" variant="ghost" asChild title={t("designerToolbar.storyTooltip")}>
-            <Link href={"/reports/" + reportId + "/story"} target="_blank" aria-label={t("designerToolbar.story")}>
-              <Sparkles className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designerToolbar.story")}</span>
-            </Link>
-          </Button>
-        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onTogglePageSetup}
+          title={pageSetupLabel}
+          aria-label={pageSetupLabel}
+          aria-pressed={pageSetupOpen}
+          aria-controls="designer-page-setup"
+          className={pageSetupOpen ? "text-foreground" : "text-muted-foreground"}
+        >
+          <PanelTop className="h-4 w-4 2xl:mr-1.5" /><span className="hidden 2xl:inline">{t("designer.pageSetup.label")}</span>
+        </Button>
+        <span className="mx-1 h-5 w-px bg-border" aria-hidden />
         <ReportExportMenu reportId={reportId} />
-        <Button size="sm" onClick={save} disabled={saveState === "saving"}>
+        {PublishButton && <PublishButton reportId={reportId} checkItems={checkItems} />}
+        <Button size="sm" onClick={() => void save()} disabled={saveState === "saving"} title={t("designer.saveTooltip")}>
           {saveState === "saving" ? (
             <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("common.saving")}</>
           ) : (
@@ -160,12 +154,30 @@ export function Toolbar({ reportId }: { reportId: string }) {
           )}
         </Button>
       </div>
-      <ScheduleDrawer
-        reportId={reportId}
-        reportName={name || t("common.untitled")}
-        open={scheduleOpen}
-        onClose={() => setScheduleOpen(false)}
-      />
+      <Dialog open={leaveTo !== null} onOpenChange={(o) => { if (!o && !leaving) setLeaveTo(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("designerLeave.title")}</DialogTitle>
+            <DialogDescription>{t("designerLeave.body")}</DialogDescription>
+          </DialogHeader>
+          <DialogBody />
+          <DialogFooter>
+            <Button variant="ghost" disabled={leaving} onClick={() => setLeaveTo(null)}>{t("designerLeave.stay")}</Button>
+            <Button variant="outline" disabled={leaving} onClick={() => { const to = leaveTo; setLeaveTo(null); if (to) router.push(to); }}>{t("designerLeave.discard")}</Button>
+            <Button
+              disabled={leaving}
+              onClick={async () => {
+                setLeaving(true);
+                const ok = await save();
+                setLeaving(false);
+                if (ok && leaveTo) { const to = leaveTo; setLeaveTo(null); router.push(to); }
+              }}
+            >
+              {leaving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}{t("designerLeave.saveLeave")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 }
@@ -174,146 +186,14 @@ function SaveIndicator({ state }: { state: SaveState }) {
   const { t } = useT();
   if (state === "idle") return null;
   if (state === "saving") return (
-    <span className="ml-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+    <span className="ml-1 inline-flex items-center gap-1 text-2xs text-muted-foreground">
       <Loader2 className="h-3 w-3 animate-spin" /> {t("common.saving")}
     </span>
   );
   if (state === "saved") return (
-    <span className="ml-1 inline-flex items-center gap-1 text-[11px] text-success">
+    <span className="ml-1 inline-flex items-center gap-1 text-2xs text-success">
       <Check className="h-3 w-3" /> {t("common.saved")}
     </span>
   );
-  return <span className="ml-1 text-[11px] text-destructive">{t("common.saveFailed")}</span>;
-}
-
-/**
- * DisplayPicker — how the viewer lays the report out: full-width dashboard
- * grid, or the A4 / Letter sheets it prints as. Exports and the designer
- * canvas always use the sheets; this only changes the interactive viewer.
- */
-const DISPLAY_OPTIONS: Array<{ value: ReportDisplay; labelKey: string; descriptionKey: string; Icon: typeof LayoutDashboard }> = [
-  { value: "dashboard", labelKey: "designerToolbar.display.dashboard", descriptionKey: "designerToolbar.display.dashboardDesc", Icon: LayoutDashboard },
-  { value: "page",      labelKey: "designerShell.pageLabel",           descriptionKey: "designerToolbar.display.pageDesc",      Icon: FileText },
-];
-
-function DisplayPicker() {
-  const { t } = useT();
-  const report = useDesignerStore((s) => s.report);
-  const setMeta = useDesignerStore((s) => s.updateReportMeta);
-  const current = DISPLAY_OPTIONS.find((o) => o.value === reportDisplay(report)) ?? DISPLAY_OPTIONS[0];
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="ghost" title={t("designerToolbar.displayTooltip")}>
-          <current.Icon className="mr-1.5 h-4 w-4" />
-          <span className="text-muted-foreground">{t("designerToolbar.displayLabel")}</span>&nbsp;{t(current.labelKey)}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        {DISPLAY_OPTIONS.map((o) => (
-          <DropdownMenuItem key={o.value} onClick={() => setMeta({ display: o.value })} className="flex items-start gap-2">
-            <o.Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="flex-1">
-              <span className="block text-sm font-medium">{t(o.labelKey)}</span>
-              <span className="block text-[10px] leading-tight text-muted-foreground">{t(o.descriptionKey)}</span>
-            </span>
-            {current.value === o.value && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/**
- * YearsPicker — how this report writes years for Thai readers. "Reader's
- * choice" (unset) follows each reader's Account preference; locking it to
- * พ.ศ. or ค.ศ. makes every reader, and every PDF and Excel file, show the
- * same year — what a regulatory or board report needs. Report.dateEra.
- */
-const YEARS_OPTIONS: Array<{ value: "be" | "ce" | undefined; labelKey: string; descriptionKey: string }> = [
-  { value: undefined, labelKey: "designerToolbar.years.reader", descriptionKey: "designerToolbar.years.readerDesc" },
-  { value: "be",      labelKey: "designerToolbar.years.be",     descriptionKey: "designerToolbar.years.beDesc" },
-  { value: "ce",      labelKey: "designerToolbar.years.ce",     descriptionKey: "designerToolbar.years.ceDesc" },
-];
-
-function YearsPicker() {
-  const { t } = useT();
-  const report = useDesignerStore((s) => s.report);
-  const setMeta = useDesignerStore((s) => s.updateReportMeta);
-  const current = YEARS_OPTIONS.find((o) => o.value === report.dateEra) ?? YEARS_OPTIONS[0]!;
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="ghost" title={t("designerToolbar.years.tooltip")}>
-          <CalendarDays className="mr-1.5 h-4 w-4" />
-          <span className="text-muted-foreground">{t("designerToolbar.years.label")}</span>&nbsp;{t(current.labelKey)}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        {YEARS_OPTIONS.map((o) => (
-          <DropdownMenuItem key={o.value ?? "reader"} onClick={() => setMeta({ dateEra: o.value })} className="flex items-start gap-2">
-            <span className="flex-1">
-              <span className="block text-sm font-medium">{t(o.labelKey)}</span>
-              <span className="block text-[10px] leading-tight text-muted-foreground">{t(o.descriptionKey)}</span>
-            </span>
-            {current.value === o.value && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/**
- * ThemePicker — opens a swatch dropdown of available theme presets and
- * sets `report.theme` on the designer store. Server-side, the save endpoint
- * gates `viz.theme_presets` (Team) — picking a non-default theme on Free
- * will fail at save time with a 402 surfaced as a destructive toast. We
- * deliberately keep the picker visible to everyone so Free users see what
- * they could unlock; the click→save→toast flow is the upgrade nudge.
- */
-function ThemePicker() {
-  const { t } = useT();
-  const theme = useDesignerStore((s) => (s.report as any).theme as Theme | undefined);
-  const setMeta = useDesignerStore((s) => s.updateReportMeta);
-  const current = THEME_PRESETS[theme ?? "default"];
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="ghost" title={t("designerToolbar.theme")}>
-          <span
-            aria-hidden
-            className="mr-1.5 inline-block h-3.5 w-3.5 rounded-full ring-1 ring-border"
-            style={{ background: current.swatch }}
-          />
-          <Palette className="mr-1.5 h-4 w-4" />
-          {t(`themePreset.${current.slug}`)}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        {Object.values(THEME_PRESETS).map((p) => (
-          <DropdownMenuItem
-            key={p.slug}
-            onClick={() => setMeta({ theme: p.slug } as any)}
-            className="flex items-start gap-2"
-          >
-            <span
-              aria-hidden
-              className="mt-0.5 inline-flex shrink-0 overflow-hidden rounded-md ring-1 ring-border"
-            >
-              {p.palette.slice(0, 5).map((c, i) => (
-                <span key={i} className="block h-3.5 w-2" style={{ background: c }} />
-              ))}
-            </span>
-            <span className="flex-1">
-              <span className="block text-sm font-medium">{t(`themePreset.${p.slug}`)}</span>
-              <span className="block text-[10px] leading-tight text-muted-foreground">{t(`themePreset.${p.slug}.desc`)}</span>
-            </span>
-            {(theme ?? "default") === p.slug && <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+  return <span className="ml-1 text-2xs text-destructive">{t("common.saveFailed")}</span>;
 }

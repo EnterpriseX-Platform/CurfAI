@@ -18,7 +18,8 @@ import { LineConnectionManager } from "./LineConnectionManager";
 
 export const dynamic = "force-dynamic";
 
-export default async function ConnectionSyncsPage({ params }: { params: { id: string } }) {
+export default async function ConnectionSyncsPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser();
   if (!user) redirect(`/login?next=/admin/connections/${params.id}/syncs`);
   if (user.role !== "admin") redirect("/");
@@ -65,7 +66,7 @@ export default async function ConnectionSyncsPage({ params }: { params: { id: st
         { label: "Connections", href: "/admin/connections" },
         { label: connection.name },
       ]}>
-        <div className="mx-auto max-w-5xl px-6 py-8">
+        <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
           <LineConnectionManager initial={initial} />
         </div>
       </AppShell>
@@ -140,7 +141,7 @@ export default async function ConnectionSyncsPage({ params }: { params: { id: st
       { label: "Connections", href: "/admin/connections" },
       { label: connection.name },
     ]}>
-      <div className="mx-auto max-w-5xl px-6 py-8">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <SyncsManager initial={initial} />
       </div>
     </AppShell>

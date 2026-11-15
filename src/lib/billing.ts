@@ -5,9 +5,10 @@ import type { CurfSessionUser } from "@/lib/auth";
 import type { Tx } from "@/lib/rls";
 import { EDITION } from "@/lib/ee/edition";
 import {
-  UPGRADE_URL, EDITOR_ROLES, PLANS, TIER_LEVEL, planForTier, tierAtLeast, aiCreditsPerMonth,
-  type Tier, type SeatCounts,
+  UPGRADE_URL, EDITOR_ROLES, PLANS, TIER_LEVEL, CURRENCIES, planForTier, tierAtLeast, aiCreditsPerMonth, priceEnvVar,
+  type Tier, type SeatCounts, type Plan, type Currency, type Interval,
 } from "@/lib/plans";
+import { applyLimitOverrides, entitlementActive, parseLimitOverrides, type LimitOverrides } from "@/lib/entitlements";
 
 /**
  * Billing on the server: Stripe price ids, tier reads from the database,
@@ -28,9 +29,9 @@ import {
  */
 export {
   UPGRADE_URL, TRIAL_DAYS, trialEligible, EDITOR_ROLES, PLANS, planForTier, tierAtLeast,
-  billableSeats, monthlyPriceUsd, aiCreditsPerMonth,
+  billableSeats, monthlyPriceUsd, aiCreditsPerMonth, seatPrices, periodPrice, priceEnvVar, ANNUAL_MONTHS, THB_SEAT_PRICES, CURRENCIES,
 } from "@/lib/plans";
-export type { Tier, PlanFeatures, Plan, SeatCounts } from "@/lib/plans";
+export type { Tier, PlanFeatures, Plan, SeatCounts, Currency, Interval } from "@/lib/plans";
 
 /** Either the singleton client or the `tx` withTenantContext() hands its callback. */
 type Db = PrismaClient | Tx;
@@ -38,23 +39,37 @@ type Db = PrismaClient | Tx;
 /** Count-based quotas are Cloud's free-tier ceilings; self-hosted Community has none. */
 const COUNT_QUOTAS_APPLY = EDITION !== "community";
 
-/** Stripe price ids for a tier's two seat kinds, read from env at request
- *  time. Null when the plan isn't sold per seat or either id is unset. */
-export function priceIdsForTier(tier: Tier): { editor: string; viewer: string } | null {
+/** Stripe price ids for a tier's two seat kinds in a currency and billing interval (USD monthly unless asked), read from env at
+ *  request time. Null when the plan isn't sold per seat there or either id is unset. */
+export function priceIdsForTier(tier: Tier, opts: { currency?: Currency; interval?: Interval } = {}): { editor: string; viewer: string } | null {
   const plan = planForTier(tier);
   if (!plan.priceEnvVars) return null;
-  const editor = process.env[plan.priceEnvVars.editor];
-  const viewer = process.env[plan.priceEnvVars.viewer];
+  const currency = opts.currency ?? "usd";
+  const interval = opts.interval ?? "month";
+  const editor = process.env[priceEnvVar(plan.priceEnvVars.editor, currency, interval)];
+  const viewer = process.env[priceEnvVar(plan.priceEnvVars.viewer, currency, interval)];
   return editor && viewer ? { editor, viewer } : null;
 }
 
-/** The tier a Stripe price id belongs to, or null if it isn't one of ours. */
-export function tierForPriceId(priceId: string): Tier | null {
+export type PriceVariant = { tier: Tier; seat: "editor" | "viewer"; currency: Currency; interval: Interval };
+
+/** What a Stripe price id is: which tier, seat kind, currency and interval — or null if it isn't one of ours. */
+export function variantForPriceId(priceId: string): PriceVariant | null {
   for (const plan of PLANS) {
-    const ids = priceIdsForTier(plan.tier);
-    if (ids && (ids.editor === priceId || ids.viewer === priceId)) return plan.tier;
+    for (const currency of CURRENCIES) {
+      for (const interval of ["month", "year"] as const) {
+        const ids = priceIdsForTier(plan.tier, { currency, interval });
+        if (ids?.editor === priceId) return { tier: plan.tier, seat: "editor", currency, interval };
+        if (ids?.viewer === priceId) return { tier: plan.tier, seat: "viewer", currency, interval };
+      }
+    }
   }
   return null;
+}
+
+/** The tier a Stripe price id belongs to (any currency or interval), or null if it isn't one of ours. */
+export function tierForPriceId(priceId: string): Tier | null {
+  return variantForPriceId(priceId)?.tier ?? null;
 }
 
 /** Editors and viewers in a workspace, by membership role. */
@@ -88,6 +103,44 @@ export async function loadTenantTier(tenantId: string, db: Db = prisma): Promise
     return TIER_LEVEL[tier] != null ? tier : "community";
   } catch {
     return "community";
+  }
+}
+
+export type TenantPlan = {
+  tier: Tier;
+  /** The tier's plan with this workspace's active limit overrides laid over it. */
+  plan: Plan;
+  /** The overrides that apply right now (empty once an entitlement has ended). */
+  overrides: LimitOverrides;
+  /** The operator-set entitlement, if any — including one that has ended. */
+  entitlement: { source: string; validUntil: Date | null; reference: string | null } | null;
+};
+
+/**
+ * The workspace's tier and the plan its quotas are checked against: the
+ * tier's plan, with any limit overrides an operator set (TenantEntitlement,
+ * lib/entitlements.ts) laid over it for as long as they last. Every quota
+ * reads the plan through here, so an override reaches all of them at once.
+ * Degrades to the Community plan on a read error, like loadTenantTier.
+ */
+export async function loadTenantPlan(tenantId: string, db: Db = prisma): Promise<TenantPlan> {
+  try {
+    const t = await db.tenant.findUnique({
+      where: { id: tenantId },
+      select: { tier: true, entitlement: { select: { source: true, limitsJson: true, validUntil: true, reference: true } } },
+    });
+    const raw = (t?.tier as Tier) ?? "community";
+    const tier = TIER_LEVEL[raw] != null ? raw : "community";
+    const e = t?.entitlement ?? null;
+    const overrides = entitlementActive(e) ? parseLimitOverrides(e!.limitsJson) : {};
+    return {
+      tier,
+      plan: applyLimitOverrides(planForTier(tier), overrides),
+      overrides,
+      entitlement: e ? { source: e.source, validUntil: e.validUntil, reference: e.reference } : null,
+    };
+  } catch {
+    return { tier: "community", plan: planForTier("community"), overrides: {}, entitlement: null };
   }
 }
 
@@ -131,8 +184,7 @@ export async function requireTier(
  */
 export async function requireReportQuota(user: CurfSessionUser, db: Db = prisma): Promise<NextResponse | null> {
   if (!COUNT_QUOTAS_APPLY) return null;
-  const tier = await loadTenantTier(user.tenantId, db);
-  const plan = planForTier(tier);
+  const { tier, plan } = await loadTenantPlan(user.tenantId, db);
   if (!Number.isFinite(plan.features.reports)) return null;
   const count = await db.report.count({ where: { tenantId: user.tenantId } });
   if (count < plan.features.reports) return null;
@@ -153,8 +205,7 @@ export async function requireReportQuota(user: CurfSessionUser, db: Db = prisma)
  */
 export async function requireDashboardQuota(user: CurfSessionUser, db: Db = prisma): Promise<NextResponse | null> {
   if (!COUNT_QUOTAS_APPLY) return null;
-  const tier = await loadTenantTier(user.tenantId, db);
-  const plan = planForTier(tier);
+  const { tier, plan } = await loadTenantPlan(user.tenantId, db);
   if (!Number.isFinite(plan.features.dashboards)) return null;
   const count = await db.dashboard.count({ where: { tenantId: user.tenantId } });
   if (count < plan.features.dashboards) return null;
@@ -177,8 +228,7 @@ export async function requireDashboardQuota(user: CurfSessionUser, db: Db = pris
  */
 export async function requireShareLinkQuota(user: CurfSessionUser, db: Db = prisma): Promise<NextResponse | null> {
   if (!COUNT_QUOTAS_APPLY) return null;
-  const tier = await loadTenantTier(user.tenantId, db);
-  const plan = planForTier(tier);
+  const { tier, plan } = await loadTenantPlan(user.tenantId, db);
   if (!Number.isFinite(plan.features.shareLinksMax)) return null;
   const live = await db.publicShareToken.count({
     where: { tenantId: user.tenantId, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -204,8 +254,7 @@ export async function requireShareLinkQuota(user: CurfSessionUser, db: Db = pris
  * this counter are the two layers CLAUDE.md asks for on a premium feature.
  */
 export async function requireAppQuota(user: CurfSessionUser, db: Db = prisma): Promise<NextResponse | null> {
-  const tier = await loadTenantTier(user.tenantId, db);
-  const plan = planForTier(tier);
+  const { tier, plan } = await loadTenantPlan(user.tenantId, db);
   if (!Number.isFinite(plan.features.apps)) return null;
   const count = await db.app.count({ where: { tenantId: user.tenantId } });
   if (count < plan.features.apps) return null;
@@ -247,8 +296,7 @@ export function monthStart(now: Date = new Date()): Date {
 
 /** Month-to-date AI spend and allowance for a workspace. */
 export async function aiCreditStatus(tenantId: string, db: Db = prisma): Promise<AiCreditStatus> {
-  const tier = await loadTenantTier(tenantId, db);
-  const plan = planForTier(tier);
+  const { tier, plan } = await loadTenantPlan(tenantId, db);
   const since = monthStart();
   const next = new Date(Date.UTC(since.getUTCFullYear(), since.getUTCMonth() + 1, 1));
   const [seats, spent] = await Promise.all([
@@ -290,12 +338,54 @@ export async function requireAiCredits(tenantId: string, db: Db = prisma): Promi
 }
 
 /**
+ * Block starting another Master Builder build when the workspace has started its plan's number this month
+ * (Community 2, paid plans unlimited — plans.ts masterBuildsPerMonth). A build costs far more model time than any
+ * other single action, so the free tier gets a few, not a credit-sized trickle. Drafts (an imported template not yet
+ * applied) and failed builds do not count; iterating on an existing build is not a new build.
+ */
+export async function requireMasterBuildQuota(tenantId: string, db: Db = prisma): Promise<NextResponse | null> {
+  if (!COUNT_QUOTAS_APPLY) return null;
+  const { tier, plan } = await loadTenantPlan(tenantId, db);
+  const cap = plan.features.masterBuildsPerMonth;
+  if (!Number.isFinite(cap)) return null;
+  const since = monthStart();
+  const started = await (db as any).masterBuild.count({
+    where: { tenantId, startedAt: { gte: since }, status: { notIn: ["draft", "failed"] } },
+  });
+  if (started < cap) return null;
+  const resetsAt = new Date(Date.UTC(since.getUTCFullYear(), since.getUTCMonth() + 1, 1)).toISOString();
+  return NextResponse.json(
+    {
+      error: `The ${plan.name} plan includes ${cap} Master Builder builds a month and this workspace has started them. The count resets on ${resetsAt.slice(0, 10)}; changes to an existing build are not limited.`,
+      code: "master_build_quota",
+      currentTier: tier,
+      requiredTier: "growth",
+      limit: cap,
+      used: started,
+      resetsAt,
+      upgradeUrl: UPGRADE_URL,
+    },
+    { status: 402 },
+  );
+}
+
+/**
+ * Scheduled agent briefs: the plan's cap and how many this workspace has (lib/briefs/). The caller decides what to
+ * say; creating one is allowed while `used < cap`. Always the real numbers, so the page can say "2 of 3".
+ */
+export async function agentBriefAllowance(tenantId: string, db: Db = prisma): Promise<{ tier: Tier; cap: number; used: number }> {
+  const { tier, plan } = await loadTenantPlan(tenantId, db);
+  const cap = plan.features.agentBriefsMax;
+  const used = await (db as any).agentBrief.count({ where: { tenantId } });
+  return { tier, cap: COUNT_QUOTAS_APPLY ? cap : Infinity, used };
+}
+
+/**
  * Block a `watcher.create` call when the tenant is at its plan's watcher
  * cap. Community = 0 (watchers fully gated), Growth = 10, Business = unlimited.
  */
 export async function requireWatcherQuota(user: CurfSessionUser, db: Db = prisma): Promise<NextResponse | null> {
-  const tier = await loadTenantTier(user.tenantId, db);
-  const plan = planForTier(tier);
+  const { tier, plan } = await loadTenantPlan(user.tenantId, db);
   if (plan.features.watchersMax === 0) {
     // Watcher feature itself is gated, not a quota — emit a clearer message.
     return NextResponse.json(

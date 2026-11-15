@@ -105,7 +105,7 @@ export function HeatmapBlock({ block, dataset, provenance, print, report, params
       {!bare && (cfg.title || cfg.subtitle) && (
         <header className="mb-3 pr-12">
           {cfg.title && <h3 className="text-sm font-semibold text-foreground">{cfg.title}</h3>}
-          {cfg.subtitle && <p className="mt-0.5 text-[11px] text-muted-foreground">{cfg.subtitle}</p>}
+          {cfg.subtitle && <p className="mt-0.5 text-2xs text-muted-foreground">{cfg.subtitle}</p>}
         </header>
       )}
       <div className={"min-h-0 flex-1 overflow-auto " + (bare ? "pt-8" : "")}>
@@ -405,7 +405,7 @@ function TilesHeatmap({
                   <div className="truncate text-xs font-semibold leading-snug">{String(r[labelField] ?? "")}</div>
                 )}
               </div>
-              <div className={`font-mono text-[11px] ${solid ? "opacity-90" : "opacity-75"}`}>
+              <div className={`font-mono text-2xs ${solid ? "opacity-90" : "opacity-75"}`}>
                 {hasValue ? fmt(displayV, cfg.format, currency) : ""}
                 {/* A bare tone ("success") only picks the colour — it isn't wording to show. */}
                 {rawStatus && !TONE_KEYS.has(rawStatus) && <span>{hasValue ? " · " : ""}{String(r[statusField])}</span>}
@@ -464,7 +464,7 @@ function TilesHeatmap({
         });
         if (entries.length === 0) return null;
         return (
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-2xs text-muted-foreground">
             {entries.map((e) => (
               <span key={e.key} className="inline-flex items-center gap-1.5">
                 <span
@@ -478,7 +478,7 @@ function TilesHeatmap({
         );
       })()}
       {overflow > 0 && (
-        <p className="mt-2 text-[11px] text-muted-foreground">+{overflow} more not shown</p>
+        <p className="mt-2 text-2xs text-muted-foreground">+{overflow} more not shown</p>
       )}
     </div>
   );

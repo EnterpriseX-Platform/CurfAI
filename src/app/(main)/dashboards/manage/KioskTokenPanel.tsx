@@ -131,7 +131,7 @@ export function KioskTokenPanel({
             {" "}{t("dashboards.tokens.mintedCopyHint")}
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <code className="flex-1 select-all overflow-x-auto rounded border border-border bg-background px-2 py-1.5 font-mono text-[11px]">
+            <code className="flex-1 select-all overflow-x-auto rounded border border-border bg-background px-2 py-1.5 font-mono text-2xs">
               {typeof window !== "undefined" ? window.location.origin : ""}{fresh.kioskUrl}
             </code>
             <Button size="sm" variant="outline" onClick={copyUrl}>
@@ -147,7 +147,7 @@ export function KioskTokenPanel({
 
       {/* Mint form. */}
       <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("dashboards.tokens.mintHeading")}</p>
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("dashboards.tokens.mintHeading")}</p>
         <p className="text-xs text-muted-foreground">
           {t("dashboards.tokens.mintDesc")}
         </p>

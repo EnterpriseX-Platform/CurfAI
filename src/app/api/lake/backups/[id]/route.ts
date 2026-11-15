@@ -16,7 +16,8 @@ export const runtime = "nodejs";
 
 const ActionSchema = z.object({ action: z.literal("restore") });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 
@@ -46,7 +47,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 

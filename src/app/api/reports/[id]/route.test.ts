@@ -43,7 +43,7 @@ const put = (dataSources: unknown[]) =>
   PUT(new NextRequest("http://localhost/api/reports/r1", {
     method: "PUT",
     body: JSON.stringify({ definition: definition(dataSources) }),
-  }), { params: { id: "r1" } });
+  }), { params: Promise.resolve({ id: "r1" }) });
 const gatedKeys = () => vi.mocked(featureGate).mock.calls.map((c) => c[1]);
 const upgradeRequired = () => NextResponse.json({ error: "Upgrade required" }, { status: 402 });
 

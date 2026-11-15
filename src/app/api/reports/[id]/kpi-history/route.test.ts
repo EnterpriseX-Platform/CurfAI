@@ -53,7 +53,7 @@ const savedRun = (id: string, createdAt: Date, source: string, v: number) => ({
 });
 const get = (blockId: string) => GET(
   new NextRequest(`http://localhost:3100/api/reports/r1/kpi-history?blockId=${blockId}`),
-  { params: { id: "r1" } },
+  { params: Promise.resolve({ id: "r1" }) },
 );
 
 beforeEach(() => {

@@ -24,7 +24,7 @@ export function DateOrderToggle({
           onClick={() => onChange(o)}
           title={t(o === "dmy" ? "tables.preview.dmyTitle" : "tables.preview.mdyTitle")}
           className={
-            "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors " +
+            "rounded px-1.5 py-0.5 text-2xs font-medium transition-colors " +
             (value === o
               ? "bg-primary-soft text-primary"
               : "text-muted-foreground hover:bg-muted")
@@ -34,7 +34,7 @@ export function DateOrderToggle({
         </button>
       ))}
       {unproven && (
-        <span className="text-[10px] text-warning" title={t("tables.preview.dateUnprovenHint")}>
+        <span className="text-2xs text-warning" title={t("tables.preview.dateUnprovenHint")}>
           {t("tables.preview.dateUnproven")}
         </span>
       )}

@@ -689,7 +689,7 @@ ${pt.group}` : ""}`}</desc>
               )}
             </h3>
           )}
-          {cfg.subtitle && <p className="mt-0.5 text-[11px] text-muted-foreground">{cfg.subtitle}</p>}
+          {cfg.subtitle && <p className="mt-0.5 text-2xs text-muted-foreground">{cfg.subtitle}</p>}
         </header>
       )}
       {!print && frames.length > 1 && (
@@ -708,7 +708,7 @@ ${pt.group}` : ""}`}</desc>
             aria-label={t("map.timelapse.frame")}
             className="min-w-0 flex-1 accent-[hsl(var(--primary))]"
           />
-          <span className="min-w-[5rem] shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+          <span className="min-w-[5rem] shrink-0 text-right font-mono text-2xs text-muted-foreground">
             {frameLabel(frames[frame]!)}{cfg.cumulative ? ` · ${t("map.timelapse.soFar")}` : ""}
           </span>
         </div>
@@ -902,7 +902,7 @@ ${pt.group}` : ""}`}</desc>
                   <X className="h-3 w-3" />
                 </button>
               </div>
-              <div className="space-y-1 px-2.5 py-2 text-[11px]">
+              <div className="space-y-1 px-2.5 py-2 text-2xs">
                 {entries.length > 0 ? entries.map(([k, v]) => {
                   const n = Number(v);
                   const display = v != null && v !== "" && Number.isFinite(n) ? fmt(n, "compact", currency) : String(v ?? "—");

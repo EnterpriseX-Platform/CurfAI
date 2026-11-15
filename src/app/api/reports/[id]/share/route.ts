@@ -17,7 +17,8 @@ async function ensureOwnsReport(userTenantId: string, reportId: string) {
   return r;
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);
@@ -38,7 +39,8 @@ const CreateSchema = z.object({
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
   const scopeBlock = requireReportInScope(user, params.id);
@@ -80,7 +82,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
   const scopeBlock = requireReportInScope(user, params.id);

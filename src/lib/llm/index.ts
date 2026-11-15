@@ -16,19 +16,25 @@
  * payload shapes. The only place provider knowledge lives is here +
  * lib/llm/providers/.
  */
+import { currentSpendScope } from "./spendScope";
 import { prisma } from "@/lib/db";
 import { anthropicDriver } from "./providers/anthropic";
 import { openaiDriver } from "./providers/openai";
 import { geminiDriver } from "./providers/gemini";
 import { openaiCompatibleDriver } from "./providers/openai-compatible";
 import { getLlmCredentials } from "./credentials";
-import { computeMicroCost, computeMicroCostMetered } from "./pricing";
+import { computeMicroCost, computeMicroCostMetered, type ModelRate } from "./pricing";
 import { hasEnvLlm } from "./credentials";
 import { llmTokens } from "@/lib/metrics";
 import { requireAiCredits } from "@/lib/billing";
-import type { NextResponse } from "next/server";
+import { UPGRADE_URL } from "@/lib/plans";
+import { NextResponse } from "next/server";
 import type { DriverContext, LlmDriver, LlmRequest, LlmResponse, ProviderId } from "./types";
-import { abortableSleep, acquireSlot, backoffMs, effectiveTimeoutMs, isRetryable, llmConcurrency, llmMaxRetries } from "./resilience";
+import type { ResolvedCredentials } from "./credentials";
+import {
+  abortableSleep, acquireSlot, backoffMs, effectiveTimeoutMs, isRetryable, wallCeilingMs, llmConcurrency, llmMaxRetries,
+  laneAdmitsLongJob, laneKey, LlmBusyError, type LaneLimit,
+} from "./resilience";
 
 const DRIVERS: Record<ProviderId, LlmDriver> = {
   anthropic: anthropicDriver,
@@ -102,6 +108,17 @@ const FAST_KIND_PREFIXES = [
   "strategist_critic",
 ];
 
+/**
+ * CURF_LLM_THINKING=off: the operator's host (the platform's own key, source "env") is a thinking model and every call on it should
+ * skip the thinking that has no switch of its own. Measured on Athena (Qwen 3.8, ~23 tokens/s), one DPW report design: 278 s with
+ * thinking at its default (the first call thought 200 s, 16,900 characters, was cut off, and the retry took 78 s) against 53 s
+ * with it off, for a comparable report (2026-10-25). Never applies to a workspace's own key, and a call that sets `reasoning`
+ * itself keeps its choice. Unset = each call as before.
+ */
+export function hostThinksOff(keySource: string): boolean {
+  return process.env.CURF_LLM_THINKING === "off" && keySource === "env";
+}
+
 export function isFastKind(kind: string): boolean {
   return FAST_KIND_PREFIXES.some((p) => kind === p || kind.startsWith(p + ".") || kind.startsWith(p + "_"));
 }
@@ -119,6 +136,37 @@ export async function requireAiCreditsFor(tenantId: string): Promise<NextRespons
 }
 
 export const AI_CREDITS_EXHAUSTED = "AI_CREDITS_EXHAUSTED";
+
+/** The queue limits a platform model carries (none for a workspace's own key or the env model). */
+function laneLimitOf(creds: { maxQueue?: number | null; maxWaitSec?: number | null }): LaneLimit | undefined {
+  if (creds.maxQueue == null && creds.maxWaitSec == null) return undefined;
+  return { maxQueue: creds.maxQueue ?? null, maxWaitMs: creds.maxWaitSec != null ? creds.maxWaitSec * 1000 : null };
+}
+
+/**
+ * Whether a long job (a Master Builder build, a deep research, a generated report) may start on the model this
+ * workspace runs on. A trial model's host is shared by every workspace on it, so a job that holds a slot for minutes
+ * is refused while others already wait for one. Returns the 503 an API route sends, or null. Never blocks a workspace's
+ * own key, the env model, or a model with no queue limit.
+ */
+export async function requireModelCapacityFor(tenantId: string): Promise<NextResponse | null> {
+  const creds = await getLlmCredentials(tenantId);
+  const busy = busyForLongJob(creds);
+  if (!busy) return null;
+  return NextResponse.json(
+    { error: "The trial model is busy right now. Try again in a few minutes, or upgrade to run on the faster model.", code: "trial_model_busy", upgradeUrl: UPGRADE_URL },
+    { status: 503, headers: { "Retry-After": "120" } },
+  );
+}
+
+/** True when a long job should not start on `creds` now. */
+function busyForLongJob(creds: ResolvedCredentials | null): boolean {
+  if (!creds || creds.source !== "env") return false;
+  const limit = laneLimitOf(creds);
+  const driver = DRIVERS[creds.provider];
+  if (!limit || !driver || !(driver.id === "openai" || driver.id === "openai-compatible")) return false;
+  return !laneAdmitsLongJob(laneKey(driver.id, creds.baseUrl), llmConcurrency(), limit);
+}
 
 export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
   const creds = await getLlmCredentials(req.tenantId);
@@ -177,10 +225,15 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
   const fast = isFastKind(req.kind);
   const model = req.model || (fast ? creds.fastModel : null) || creds.model || driver.defaultModel;
   if (fast && req.reasoning === undefined) req = { ...req, reasoning: "off" };
+  // A platform model says for itself whether its host thinks; the env model follows CURF_LLM_THINKING.
+  if (req.reasoning === undefined && (creds.thinkingOff ?? hostThinksOff(creds.source))) req = { ...req, reasoning: "off" };
 
   // Dispatch.
   const ctx: DriverContext = { apiKey: creds.apiKey, baseUrl: creds.baseUrl, model };
-  let resp = await callDriver(driver, req, ctx, creds.source, creds.baseUrl);
+  const meter: Meter = { keySource: creds.source, rate: creds.rate ?? null };
+  // Only a short call gives up in a full queue; a long job was admitted at its start, and is never cut off half way.
+  const limit = isFastKind(req.kind) ? laneLimitOf(creds) : undefined;
+  let resp = await callDriver(driver, req, ctx, meter, creds.baseUrl, limit);
 
   // One widened retry when a reasoning model spends its whole budget
   // thinking and emits nothing.
@@ -206,8 +259,8 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
     askedFor > 0 &&
     askedFor < REASONING_RETRY_CEILING
   ) {
-    recordUsage(req, resp, creds.source);
-    resp = await callDriver(driver, { ...req, maxTokens: REASONING_RETRY_CEILING }, ctx, creds.source, creds.baseUrl);
+    recordUsage(req, resp, meter);
+    resp = await callDriver(driver, { ...req, maxTokens: REASONING_RETRY_CEILING }, ctx, meter, creds.baseUrl, limit);
   }
 
   // Last resort: the model thought through the widened ceiling too — or the
@@ -222,13 +275,13 @@ export async function callLLM(req: LlmRequest): Promise<LlmResponse> {
     (resp.error ?? "").includes("REASONING_BUDGET_EXHAUSTED") &&
     req.reasoning !== "off"
   ) {
-    recordUsage(req, resp, creds.source); // the thinking attempt that was given up on: its tokens were spent
-    resp = await callDriver(driver, { ...req, reasoning: "off", maxTokens: Math.max(askedFor, REASONING_RETRY_CEILING) }, ctx, creds.source, creds.baseUrl);
+    recordUsage(req, resp, meter); // the thinking attempt that was given up on: its tokens were spent
+    resp = await callDriver(driver, { ...req, reasoning: "off", maxTokens: Math.max(askedFor, REASONING_RETRY_CEILING) }, ctx, meter, creds.baseUrl, limit);
   }
 
   // Record usage. Best-effort — we never let a logging failure poison
   // the user-facing response.
-  recordUsage(req, resp, creds.source);
+  recordUsage(req, resp, meter);
 
   return resp;
 }
@@ -249,13 +302,14 @@ async function callDriver(
   driver: LlmDriver,
   req: LlmRequest,
   ctx: DriverContext,
-  keySource: "env" | "tenant" | string,
+  meter: Meter,
   baseUrl: string | null,
+  limit?: LaneLimit,
 ): Promise<LlmResponse> {
   const governed = driver.id === "openai" || driver.id === "openai-compatible";
   if (!governed) return driver.call(req, ctx);
 
-  const lane = `${driver.id}|${baseUrl ?? ""}`;
+  const lane = laneKey(driver.id, baseUrl);
   const maxRetries = llmMaxRetries();
   let attemptReq: LlmRequest = { ...req, timeoutMs: effectiveTimeoutMs(req) };
   let queuedMs = 0;
@@ -264,9 +318,11 @@ async function callDriver(
     const waitStart = Date.now();
     let release: () => void;
     try {
-      release = await acquireSlot(lane, llmConcurrency(), req.signal);
-    } catch {
-      return failed(driver.id, ctx.model, "Cancelled", attempt - 1, queuedMs + (Date.now() - waitStart));
+      // A retry has already waited its turn once: only the first attempt of a short call can be refused for a busy host.
+      release = await acquireSlot(lane, llmConcurrency(), req.signal, attempt === 1 ? limit : undefined);
+    } catch (e) {
+      const busy = e instanceof LlmBusyError;
+      return failed(driver.id, ctx.model, busy ? e.message : "Cancelled", attempt - 1, queuedMs + (Date.now() - waitStart));
     }
     queuedMs += Date.now() - waitStart;
     let resp: LlmResponse;
@@ -279,14 +335,14 @@ async function callDriver(
     if (!isRetryable(resp) || attempt > maxRetries || req.signal?.aborted) return resp;
     if (resp.timedOut) {
       if (req.retryTimeouts === false || timeouts++ >= 1) return resp;
-      const more = Math.min(Math.round((attemptReq.timeoutMs ?? 90_000) * 1.5), 300_000);
+      const more = Math.min(Math.round((attemptReq.timeoutMs ?? 90_000) * 1.5), wallCeilingMs());
       if (more <= (attemptReq.timeoutMs ?? 0)) return resp; // already at the ceiling: another try has no more room
       attemptReq = { ...req, timeoutMs: more };
     }
     // The failed attempt is its own row so a retry is visible in the usage
     // log (kind, duration, error class) instead of vanishing behind the
     // attempt that finally answered.
-    recordUsage(req, resp, keySource);
+    recordUsage(req, resp, meter);
     console.warn(
       `[llm:${driver.id}] ${req.kind} attempt ${attempt} failed (${(resp.error ?? "").slice(0, 120)}) — retrying`,
     );
@@ -299,25 +355,32 @@ function failed(provider: ProviderId, model: string, error: string, attempts: nu
   return { text: "", provider, model, status: "failed", error, usage: { inputTokens: 0, outputTokens: 0 }, durationMs: 0, attempts, queuedMs };
 }
 
+/** Whose key a call ran on, and the rate a platform admin set for its model (null = the list price). */
+type Meter = { keySource: "env" | "tenant" | "tenant-legacy"; rate: ModelRate | null };
+
 /** Best-effort LlmTokenUsage row (setImmediate: the write adds nothing to the caller's latency). */
-function recordUsage(req: LlmRequest, resp: LlmResponse, keySource: "env" | "tenant" | string): void {
+function recordUsage(req: LlmRequest, resp: LlmResponse, meter: Meter): void {
+  const keySource = meter.keySource;
   if (!req.tenantId) return;
   const tenantId = req.tenantId;
   llmTokens.inc?.(
     { tenant: tenantId, kind: req.kind },
     resp.usage.inputTokens + resp.usage.outputTokens,
   );
+  // Read now: the write below runs after the caller's async context is gone.
+  const scope = currentSpendScope();
   setImmediate(() => {
     // A call on Curf's key draws down AI credits, so its cost must never
     // be null; a workspace's own key is only reported, never metered.
-    const microCostUsd = (keySource === "env" ? computeMicroCostMetered : computeMicroCost)({
+    const usage = {
       provider: resp.provider,
       model: resp.model,
       inputTokens: resp.usage.inputTokens,
       outputTokens: resp.usage.outputTokens,
       cacheReadTokens: resp.usage.cacheReadTokens,
       cacheCreateTokens: resp.usage.cacheCreateTokens,
-    });
+    };
+    const microCostUsd = keySource === "env" ? computeMicroCostMetered(usage, meter.rate) : computeMicroCost(usage);
     prisma.llmTokenUsage.create({
       data: {
         tenantId,
@@ -332,6 +395,7 @@ function recordUsage(req: LlmRequest, resp: LlmResponse, keySource: "env" | "ten
         microCostUsd,
         keySource: keySource === "env" ? "platform" : "tenant",
         reportId: req.reportId ?? null,
+        buildId: scope.buildId ?? null,
         durationMs: resp.durationMs,
         status: resp.status,
         errorKind: resp.status === "failed" ? classifyError(resp.error) : null,

@@ -30,12 +30,17 @@
  *      (`quality`), which its readers see.
  */
 import { runReportWithProof, type RunViewer } from "@/lib/reporting/runner";
+import { computeKpiValue } from "@/lib/reporting/kpi";
 import { neededQueries } from "@/lib/reporting/queryRefs";
 import { ReportSchema, type Report, type ReportQuality } from "@/lib/reporting/schema";
 import { applyAverageLines } from "./averageLines";
+import type { KpiAsk } from "./kpiMatch";
 import { qaInstantView, type QaCheck, type QaResult } from "./instantViewQa";
-import { applyRuleFix, blockTitle, detectViolations, queryIdOf, topNFromTitle, type Dataset, type NumberRuleFix, type Violation } from "./reportRules";
+import { applyRuleFix, applyScriptFix, blockTitle, detectViolations, resizeBlock, queryIdOf, quotableStrings, topNFromTitle, withLimit, type Dataset, type NumberRuleFix, type Violation } from "./reportRules";
+import { sanitizeNarrative } from "./narrativeChecks";
+import { compactRows, pickRateParts, rateProbeSql, tablesRead, type RateParts } from "./reportRulesNumbers";
 import { prisma } from "@/lib/db";
+import { ee } from "@/ee";
 import { parseSchemaJson } from "@/lib/lake/schemaGovernance";
 
 declare const GATED: unique symbol;
@@ -51,6 +56,18 @@ export type GateResult = {
   quality: ReportQuality;
 };
 
+/** Which blocks the gate took out of a failed report and why (a failed query, no rows, a rule), most telling first. */
+export function failureDetail(result: Pick<GateResult, "removed" | "quality" | "queryErrors">): string {
+  const parts = [
+    ...result.removed.map((r) => `"${r.title.slice(0, 40)}": ${r.reason.slice(0, 140)}`),
+    ...(result.quality?.changes ?? []).filter((c) => c.kind === "removed").map((c) => `"${String(c.title ?? "").slice(0, 40)}" removed${c.rule ? ` by ${c.rule}` : ""}${c.reason ? `: ${String(c.reason).slice(0, 140)}` : ""}`),
+  ];
+  const errors = Object.values(result.queryErrors ?? {});
+  if (parts.length === 0 && errors.length) parts.push(`${errors.length} query error(s): ${errors[0]!.slice(0, 140)}`);
+  const shown = parts.slice(0, 6).join("; ");
+  return parts.length > 6 ? `${shown}; +${parts.length - 6} more` : shown;
+}
+
 /**
  * The definition to save for a generated report — the only way to get one
  * from the gate's result. A report that failed its checks is not saved.
@@ -58,7 +75,10 @@ export type GateResult = {
 export function persistableDefinition(result: GateResult): string {
   if (result.verdict === "fail") {
     const why = result.checks.find((c) => c.status === "fail")?.detail ?? "it failed its checks";
-    throw new Error(`report not saved: ${why}`);
+    const detail = failureDetail(result);
+    // The draft is not kept, so what emptied it has to be in the message (build notes) and the server log.
+    if (detail) console.warn(`[gate] report not saved: ${why} - ${detail}`);
+    throw new Error(`report not saved: ${why}${detail ? ` (${detail})` : ""}`);
   }
   return JSON.stringify(result.report);
 }
@@ -87,6 +107,11 @@ export async function gateGeneratedReport(args: {
    * relying on it, and its data can come back.
    */
   existing?: boolean;
+  /**
+   * The verifier's own repair of a saved report (master-builder/verify/repairDeterministic.ts). A figure people already read changes
+   * only when the verifier's repair says so: this says so, for R26 (an average of a rate becomes the sum of its parts over the sum).
+   */
+  repair?: boolean;
   /** What the report was asked to answer. */
   prompt: string;
   /** The generator's caption text, so it can be checked and, if needed, found and replaced. */
@@ -96,6 +121,8 @@ export async function gateGeneratedReport(args: {
   locale?: "en" | "th" | "zh";
   tenantCurrency?: string | null;
   averageLineBlockIds?: string[];
+  /** The KPIs the brief named, each with the target it gave: a KPI that is one of them holds that target as its plan (R12). */
+  kpiAsks?: KpiAsk[];
   /** Before each query runs, and each one's result as it lands — the instant-view stream shows them live. */
   onQueryStart?: (e: { n: number; total: number; name: string }) => void;
   onQuery?: (e: { queryId: string; name: string; n: number; total: number; rows: Dataset[string]; proof: unknown; error?: string }) => void;
@@ -103,6 +130,11 @@ export async function gateGeneratedReport(args: {
   signal?: AbortSignal;
 }): Promise<GateResult> {
   let report: Report = structuredClone(args.report);
+  // A KPI that names one of the workspace's defined metrics reads the defined SQL, not the model's own (lib/metrics).
+  if (args.authored === "ai" && !args.existing) {
+    try { report = (await ee.metrics?.governReport?.(report, { tenantId: args.tenantId, viewer: args.viewer }))?.report ?? report; }
+    catch (e: any) { console.warn("[gate] governed metrics skipped:", e?.message); }
+  }
   let caption = args.caption?.trim() || undefined;
   let subtitle = (args.subtitle ?? titleSubtitle(report))?.trim() || undefined;
   const changes: Change[] = [];
@@ -116,7 +148,7 @@ export async function gateGeneratedReport(args: {
   // 1. Every query, as the reader.
   const { dataset, queryErrors } = await runQueries(report, args);
   const tableColumns = await lakeTableColumns(args.tenantId);
-  const checks = () => ({ ...prose(), tableColumns });
+  const checks = () => ({ ...prose(), tableColumns, kpiAsks: args.kpiAsks, locale: args.locale });
   // Drill queries the code wrote (R18) are run once each, so a drill-down that opens nothing is never kept.
   const drillsChecked = new Map<string, boolean>();
   if (args.averageLineBlockIds?.length) report = applyAverageLines(report, dataset, args.averageLineBlockIds);
@@ -192,11 +224,33 @@ export async function gateGeneratedReport(args: {
   for (const v of detectViolations(report, dataset, checks())) {
     // A drill-down is an improvement the code adds when it can: one it could not make (no rows) is no flag on the report.
     if (v.rule === "R18") continue;
+    // R29/R30 in the prose a model wrote: the sentence (or the leaked script) goes; a caption or subtitle left empty goes too.
+    if ((v.rule === "R29" || v.rule === "R30") && (v.target === "caption" || v.target === "subtitle")) {
+      const text = v.target === "caption" ? caption : subtitle;
+      if (!text) continue;
+      const next = sanitizeNarrative(text, { locale: args.locale, allow: quotableStrings(dataset), jargon: false }).text;
+      if (v.target === "caption") {
+        report = next ? replaceCaption(report, text, next) : removeCaption(report, text);
+        caption = next ?? undefined;
+        changes.push({ kind: next ? "captionRewritten" : "captionDropped", rule: v.rule, reason: v.detail });
+      } else {
+        report = setSubtitle(report, next ?? undefined);
+        subtitle = next ?? undefined;
+        changes.push({ kind: next ? "subtitleRewritten" : "subtitleDropped", rule: v.rule, reason: v.detail });
+      }
+      continue;
+    }
     const reason = confirmed.get(`${v.target}:${v.rule}`);
     if (reason && CONFIRMABLE.has(v.rule)) { notes.push(`${titleFor(report, v)}: ${reason}`); continue; }
     // On a report people already read, a block is flagged rather than taken
     // away; a figure in prose that isn't in the results still goes.
-    const hard = args.authored === "ai" && (v.rule === "R4" || (!args.existing && CONFIRMABLE.has(v.rule)));
+    // A card with no value goes from a new report (as one with no rows does, R5), unless something else names it.
+    const noValue = v.rule === "R27" && !args.existing && JSON.stringify(report).split(`"${v.target}"`).length - 1 <= 1;
+    // A wrong figure under a rate label is worse than none, so it goes the same way; the build's completion can add it back done properly.
+    const notARate = v.rule === "R28" && !args.existing && JSON.stringify(report).split(`"${v.target}"`).length - 1 <= 1;
+    // A broken title and an impossible percent are worse than a missing card, so they go the same way.
+    const unreadable = (v.rule === "R33" || v.rule === "R34" || v.rule === "R35") && !args.existing && v.target !== "report";
+    const hard = noValue || notARate || unreadable || (args.authored === "ai" && (v.rule === "R4" || (!args.existing && CONFIRMABLE.has(v.rule))));
     if (!hard) { flags.push({ rule: v.rule, title: v.target === "caption" || v.target === "subtitle" ? undefined : titleFor(report, v) }); continue; }
     if (v.target === "caption") {
       report = removeCaption(report, caption);
@@ -214,6 +268,42 @@ export async function gateGeneratedReport(args: {
   if (drop.length > 0) report = removeBlocks(report, drop);
 
   return stamp(report, qa, args, changes, [...qa.review.notes, ...notes], flags, dataset, queryErrors);
+}
+
+/** What the gate would take out of an AI-written report on the rules alone: a words-versus-query mismatch, a card with no value, a wrong rate. */
+const REMOVING_RULES = new Set<Violation["rule"]>(["R4", "R27", "R28", "R33", "R34", "R35", ...CONFIRMABLE]);
+
+export type GateFinding = { blockId: string; title: string; rule: string; detail: string };
+
+/**
+ * The blocks the gate would remove from this draft, found before anything is saved, so the designer that wrote them can be
+ * told (Master Builder's designer agent). Runs the queries as the reader and the same checks the gate enforces, without the
+ * reviewer model; what code repairs by itself (a promised Top N, a chart's height) is not a finding. A block whose query
+ * fails or returns nothing is one too, since the gate removes it.
+ */
+export async function previewGateFindings(args: {
+  report: Report; tenantId: string; viewer: RunViewer; caption?: string; locale?: "en" | "th" | "zh"; kpiAsks?: KpiAsk[]; signal?: AbortSignal;
+}): Promise<GateFinding[]> {
+  const report = structuredClone(args.report);
+  const { dataset, queryErrors } = await runQueries(report, args);
+  const tableColumns = await lakeTableColumns(args.tenantId);
+  const subtitle = titleSubtitle(report)?.trim() || undefined;
+  const found: GateFinding[] = [];
+  for (const b of report.pages.flatMap((p) => p.blocks)) {
+    const qid = queryIdOf(b);
+    if (!qid || (b.config as any)?.drilldown?.queryId === qid) continue;
+    if (queryErrors[qid]) found.push({ blockId: b.id, title: blockTitle(b), rule: "query", detail: `its query failed: ${queryErrors[qid]!.slice(0, 160)}` });
+    else if ((dataset[qid]?.length ?? 0) === 0) found.push({ blockId: b.id, title: blockTitle(b), rule: "R5", detail: "its query returned no rows" });
+  }
+  const seen = new Set(found.map((f) => f.blockId));
+  for (const v of detectViolations(report, dataset, { caption: args.caption?.trim() || undefined, subtitle, tableColumns, kpiAsks: args.kpiAsks, locale: args.locale })) {
+    if (v.fix || !REMOVING_RULES.has(v.rule) || seen.has(v.target)) continue;
+    const block = findBlock(report, v.target);
+    if (!block) continue;
+    seen.add(v.target);
+    found.push({ blockId: block.id, title: blockTitle(block), rule: v.rule, detail: v.detail });
+  }
+  return found;
 }
 
 function stamp(
@@ -252,7 +342,7 @@ function stamp(
 // ── Queries ────────────────────────────────────────────────────────────
 
 type GateArgs = Parameters<typeof gateGeneratedReport>[0];
-type RunArgs = Pick<GateArgs, "tenantId" | "viewer" | "onQuery" | "onQueryStart" | "signal">;
+type RunArgs = Pick<GateArgs, "tenantId" | "viewer" | "onQuery" | "onQueryStart" | "signal" | "existing" | "repair">;
 
 function defaultParams(report: Report): Record<string, unknown> {
   const params: Record<string, unknown> = {};
@@ -322,11 +412,7 @@ export function retitleProblem(from: string, to: string): string | null {
   return null;
 }
 
-/** Cut a query to `n` rows — its own LIMIT when it ends with one, else wrapped. */
-export function withLimit(sql: string, n: number): string {
-  const trailing = /\blimit\s+\d+\s*;?\s*$/i;
-  return trailing.test(sql) ? sql.replace(trailing, `LIMIT ${n}`) : `SELECT * FROM (${sql.replace(/;\s*$/, "")}) AS limited LIMIT ${n}`;
-}
+export { withLimit };
 
 async function limitQuery(report: Report, queryId: string, n: number, dataset: Dataset, queryErrors: Record<string, string>, args: RunArgs): Promise<void> {
   const ds = report.dataSources.find((d) => d.id === queryId);
@@ -349,18 +435,53 @@ export async function lakeTableColumns(tenantId: string): Promise<Record<string,
   }
 }
 
+/**
+ * R26: for each KPI that averages a rate column, which two columns of its table the rate is the ratio of. Found by
+ * asking the table's own rows (the pair that reproduces the rate on every row, within its rounding), run as the
+ * reader; no pair, no rewrite - the rule then only flags.
+ */
+async function probeRateParts(
+  report: Report, dataset: Dataset, text: { caption?: string; subtitle?: string; tableColumns?: Record<string, string[]>; kpiAsks?: KpiAsk[] }, args: RunArgs,
+): Promise<Record<string, RateParts>> {
+  const wanted = new Map<string, { table: string; column: string }>();
+  for (const v of detectViolations(report, dataset, text)) if (v.rule === "R26" && v.probe) wanted.set(`${v.probe.table}.${v.probe.column}`, v.probe);
+  if (wanted.size === 0) return {};
+  const lake = await prisma.lakeTable.findMany({ where: { tenantId: args.tenantId, name: { in: [...new Set([...wanted.values()].map((w) => w.table))] } }, select: { name: true, schemaJson: true } });
+  const out: Record<string, RateParts> = {};
+  for (const [key, w] of wanted) {
+    const numeric = parseSchemaJson(lake.find((t) => t.name === w.table)?.schemaJson).filter((c) => c.type === "number").map((c) => c.name);
+    const source = report.dataSources.find((d) => d.sql && tablesRead(d.sql).includes(w.table));
+    if (!source || !numeric.includes(w.column)) continue;
+    // One column over one column first; a numerator of two columns added only when none of those fits.
+    for (const plus of [false, true]) {
+      const probe = rateProbeSql(w.table, w.column, numeric, plus);
+      if (probe.pairs.length === 0) continue;
+      const q = { id: "q_probe_rate", name: "rate parts", dataSourceId: source.dataSourceId, sql: probe.sql } as Report["dataSources"][number];
+      const scratch: Dataset = {};
+      const errors: Record<string, string> = {};
+      await runOne({ ...report, dataSources: [q] }, q.id, scratch, errors, { ...args, onQuery: undefined });
+      const parts = errors[q.id] ? null : pickRateParts((scratch[q.id]?.[0] ?? {}) as Record<string, unknown>, probe.pairs);
+      if (parts) { out[key] = parts; break; }
+    }
+  }
+  return out;
+}
+
 /** The fixes reportRules.ts can name on its own: a promised count, a chart's height. */
 async function applyCodeFixes(
   report: Report, dataset: Dataset, queryErrors: Record<string, string>, args: RunArgs, changes: Change[],
-  text: { caption?: string; subtitle?: string; tableColumns?: Record<string, string[]> },
+  text: { caption?: string; subtitle?: string; tableColumns?: Record<string, string[]>; kpiAsks?: KpiAsk[]; rateParts?: Record<string, RateParts>; locale?: string },
   drillsChecked: Map<string, boolean> = new Map(),
 ): Promise<Report> {
+  text = { ...text, rateParts: await probeRateParts(report, dataset, text, args) };
   // Limits first: a chart's height follows the rows it ends up with.
   for (const v of detectViolations(report, dataset, text)) {
     const block = findBlock(report, v.target);
     if (v.fix?.kind !== "limit" || !block) continue;
+    // A list on a report people already read is flagged (R23), not cut; the verifier's repair cuts it on purpose (autofix limit-rows).
+    if (v.rule === "R23" && args.existing) continue;
     await limitQuery(report, v.fix.queryId, v.fix.n, dataset, queryErrors, args);
-    changes.push({ kind: "limited", rule: "R1", title: blockTitle(block), n: v.fix.n });
+    changes.push({ kind: "limited", rule: v.rule, title: blockTitle(block), n: v.fix.n });
   }
   for (const v of detectViolations(report, dataset, text)) {
     const block = findBlock(report, v.target);
@@ -368,17 +489,47 @@ async function applyCodeFixes(
     report = resizeBlock(report, block.id, v.fix.h);
     changes.push({ kind: "resized", rule: "R6", title: blockTitle(block) });
   }
+  // R29: words in the wrong script — a translation with a leak goes (the reader sees the report's own words), a minority run in
+  // the report's own words is taken out. On a report people already read it is flagged instead.
+  if (!args.existing) {
+    for (const v of detectViolations(report, dataset, text)) {
+      if (v.fix?.kind !== "script") continue;
+      const done = applyScriptFix(report, v.fix);
+      if (!done) continue;
+      report = done.report;
+      changes.push({ kind: "adjusted", rule: "R29", title: done.title });
+    }
+  }
   // The other mechanical repairs (R12-R18): a plan from the label, a readable field, time order, digits, a KPI's drill-down.
   // (A drill the code wrote and found empty is not written again.)
-  const rest = detectViolations(report, dataset, text).filter((v) => v.fix && v.fix.kind !== "limit" && v.fix.kind !== "height" && !(v.fix.kind === "drill-new" && drillsChecked.get(v.fix.queryId) === false));
+  const rest = detectViolations(report, dataset, text).filter((v) => v.fix && v.fix.kind !== "limit" && v.fix.kind !== "height" && v.fix.kind !== "script" && !(v.fix.kind === "drill-new" && drillsChecked.get(v.fix.queryId) === false));
   if (rest.length > 0) {
     report = structuredClone(report);
     for (const v of rest) {
+      // A card on a report people already read is flagged, not taken away; the verifier's repair drops a repeat on purpose.
+      if (v.rule === "R24" && args.existing) continue;
+      // The same for a number: a figure people already read changes only when the verifier's repair says so.
+      if (v.rule === "R26" && args.existing && !args.repair) continue;
+      // A year moved back because it had no data (year-literal with relabel) is kept only if the card then shows a number.
+      const fallback = v.fix!.kind === "year-literal" && v.fix.relabel
+        ? { report: structuredClone(report), rows: structuredClone(dataset[v.fix.queryId] ?? []), error: queryErrors[v.fix.queryId] }
+        : null;
       const done = applyRuleFix(report, v.fix as NumberRuleFix, dataset);
       if (!done) continue;
       changes.push({ kind: "adjusted", rule: v.rule, title: done.title });
       // A re-sorted query returns its rows in a new order: the checks after this read them.
-      if (v.fix!.kind === "order") await runOne(report, (v.fix as { queryId: string }).queryId, dataset, queryErrors, { ...args, onQuery: undefined });
+      if (v.fix!.kind === "order" || v.fix!.kind === "weighted-ratio" || v.fix!.kind === "year-literal") await runOne(report, (v.fix as { queryId: string }).queryId, dataset, queryErrors, { ...args, onQuery: undefined });
+      if (fallback && v.fix!.kind === "year-literal") {
+        const qid = v.fix.queryId, cfg: any = findBlock(report, v.fix.blockId)?.config;
+        const shown = cfg ? computeKpiValue({ valueField: cfg.valueField, aggregate: cfg.aggregate }, (dataset[qid] ?? []) as any) : NaN;
+        if (!Number.isFinite(shown)) {
+          // The year before has no number either: the card goes back as it was (and is dealt with as an empty card).
+          report = fallback.report;
+          dataset[qid] = fallback.rows;
+          if (fallback.error) queryErrors[qid] = fallback.error; else delete queryErrors[qid];
+          changes.pop();
+        }
+      }
     }
   }
   return dropDeadDrills(report, dataset, queryErrors, args, drillsChecked);
@@ -425,38 +576,13 @@ function titleFor(report: Report, v: Violation): string {
   return b ? blockTitle(b) : v.target;
 }
 
-/** Grow a block and push everything below it down by the same amount. */
-function resizeBlock(report: Report, id: string, h: number): Report {
-  return {
-    ...report,
-    pages: report.pages.map((p) => {
-      const target = p.blocks.find((b) => b.id === id);
-      if (!target) return p;
-      const bottom = target.y + target.h;
-      const delta = h - target.h;
-      return { ...p, blocks: p.blocks.map((b) => (b.id === id ? { ...b, h } : b.y >= bottom ? { ...b, y: b.y + delta } : b)) };
-    }),
-  };
-}
-
 /** Drop blocks, the queries only they used, and the grid rows they leave empty. */
-function removeBlocks(report: Report, ids: string[]): Report {
+export function removeBlocks(report: Report, ids: string[]): Report {
   const gone = new Set(ids);
   const pages = report.pages.map((p) => ({ ...p, blocks: compactRows(p.blocks.filter((b) => !gone.has(b.id))) }));
   // Every query a kept block reads — its own, a sparkline's, map pins', a drill's — and what those join.
   const used = neededQueries(report.dataSources, pages);
   return { ...report, pages, dataSources: report.dataSources.filter((d) => used.has(d.id)) };
-}
-
-/** Close any grid row no block covers any more. */
-function compactRows(blocks: Block[]): Block[] {
-  let out = blocks.map((b) => ({ ...b }));
-  const bottom = out.reduce((m, b) => Math.max(m, b.y + b.h), 0);
-  for (let row = bottom - 1; row >= 0; row--) {
-    if (out.some((b) => b.y <= row && row < b.y + b.h)) continue;
-    out = out.map((b) => (b.y > row ? { ...b, y: b.y - 1 } : b));
-  }
-  return out;
 }
 
 function titleSubtitle(report: Report): string | undefined {
@@ -470,6 +596,16 @@ function setSubtitle(report: Report, subtitle: string | undefined): Report {
     pages: report.pages.map((p) => ({
       ...p,
       blocks: p.blocks.map((b) => (b.type === "title" ? { ...b, config: { ...(b.config as any), subtitle } } as Block : b)),
+    })),
+  };
+}
+
+function replaceCaption(report: Report, from: string, to: string): Report {
+  return {
+    ...report,
+    pages: report.pages.map((p) => ({
+      ...p,
+      blocks: p.blocks.map((b) => (b.type === "text" && (b.config as any)?.text === from ? { ...b, config: { ...(b.config as any), text: to } } as Block : b)),
     })),
   };
 }

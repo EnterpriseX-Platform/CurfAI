@@ -23,6 +23,7 @@ import { lakeGate, HIDDEN_BY_VISIBILITY } from "@/lib/reporting/runner";
 import { hashQueryDef } from "@/lib/reporting/provenance";
 import { visibleReport } from "@/lib/reporting/visibleReport";
 import { savedRunReader, parseSavedRun, WITHHELD_NOTE } from "./snapshotAccess";
+import { EDITION } from "@/lib/ee/edition";
 
 const db = prisma as any;
 const gate = vi.mocked(lakeGate);
@@ -181,6 +182,12 @@ describe("savedRunReader", () => {
 
     const asMember = await savedRunReader(T, r, member)(saved);
     expect(asMember.dataset["metric:revenue"]).toEqual([]);
+    if (EDITION === "community") {
+      // No metric catalogue to check the source against: the rows are withheld from everyone.
+      expect(asMember.provenance["metric:revenue"]).toMatchObject({ queryId: "metric:revenue", accessDeniedNote: WITHHELD_NOTE });
+      expect((await savedRunReader(T, r, financeMember)(saved)).dataset["metric:revenue"]).toEqual([]);
+      return;
+    }
     expect(asMember.provenance["metric:revenue"]).toMatchObject({ queryId: "metric:revenue", accessDeniedNote: HIDDEN_BY_VISIBILITY });
 
     const asFinance = await savedRunReader(T, r, financeMember)(saved);

@@ -45,7 +45,7 @@ const definition = (dataSources: unknown[]) => JSON.stringify({
 });
 const restore = () =>
   POST(new NextRequest("http://localhost/api/reports/r1/versions/2/restore", { method: "POST" }), {
-    params: { id: "r1", version: "2" },
+    params: Promise.resolve({ id: "r1", version: "2" }),
   });
 
 beforeEach(() => vi.clearAllMocks());

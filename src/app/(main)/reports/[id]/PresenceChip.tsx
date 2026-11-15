@@ -115,7 +115,7 @@ export function PresenceChip({ reportId, selfKey }: { reportId: string; selfKey:
           ))}
         </span>
         {overflow > 0 && (
-          <span className="ml-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold text-muted-foreground">
+          <span className="ml-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-muted px-1 text-2xs font-semibold text-muted-foreground">
             +{overflow}
           </span>
         )}
@@ -133,7 +133,7 @@ export function PresenceChip({ reportId, selfKey }: { reportId: string; selfKey:
             onClick={() => setOpen(false)}
           />
           <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-2xl">
-            <div className="border-b border-border bg-muted/30 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="border-b border-border bg-muted/30 px-3 py-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               Viewing right now ({others.length})
             </div>
             <ul className="max-h-72 divide-y divide-border overflow-y-auto">
@@ -143,14 +143,14 @@ export function PresenceChip({ reportId, selfKey }: { reportId: string; selfKey:
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-medium">{v.name}</span>
                     {v.email && v.email !== v.name && (
-                      <span className="block truncate text-[10px] text-muted-foreground">{v.email}</span>
+                      <span className="block truncate text-2xs text-muted-foreground">{v.email}</span>
                     )}
                   </span>
                 </li>
               ))}
             </ul>
             {!connected && (
-              <div className="flex items-center justify-center gap-1.5 border-t border-border bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
+              <div className="flex items-center justify-center gap-1.5 border-t border-border bg-muted/30 px-3 py-1.5 text-2xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" /> Reconnecting…
               </div>
             )}
@@ -164,7 +164,7 @@ export function PresenceChip({ reportId, selfKey }: { reportId: string; selfKey:
 function Avatar({ viewer, ringClass }: { viewer: Viewer; ringClass: string }) {
   return (
     <span
-      className={"flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-semibold text-white ring-2 " + ringClass}
+      className={"flex h-5 w-5 items-center justify-center rounded-full text-2xs font-semibold text-white ring-2 " + ringClass}
       style={{ background: `hsl(${viewer.hue}, 60%, 45%)` }}
       title={viewer.name}
     >

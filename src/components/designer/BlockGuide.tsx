@@ -563,7 +563,7 @@ export function BlockGuide({ blockType }: { blockType: BlockType }) {
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button size="icon" variant="ghost" title={t("guide.settings") || (locale === "th" ? "คำแนะนำการตั้งค่า (Guide)" : "Settings Guide")}>
+        <Button size="icon" variant="ghost" title={t("designer.blockGuide")} aria-label={t("designer.blockGuide")}>
           <HelpCircle className="h-4 w-4 text-primary hover:text-primary transition-colors" />
         </Button>
       </DialogTrigger>
@@ -571,7 +571,7 @@ export function BlockGuide({ blockType }: { blockType: BlockType }) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <Info className="h-5 w-5 text-primary" />
-            {t("guide.settings") || (locale === "th" ? "คำแนะนำการตั้งค่า" : locale === "zh" ? "设置指南" : "Settings Guide")}
+            {t("designer.blockGuide")}
           </DialogTitle>
         </DialogHeader>
         <div className="py-4">

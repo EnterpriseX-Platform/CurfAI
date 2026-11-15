@@ -48,7 +48,8 @@ const ImportSchema = z.object({
   }).optional(),
 }).refine((b) => !!b.name !== !!b.standard, { message: "Give either a new table name or a standard dataset, not both." });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 

@@ -93,14 +93,14 @@ export function GaugeZonesEditor({
             });
           })()}
         </div>
-        <div className="flex justify-between text-[10px] tabular-nums text-muted-foreground">
+        <div className="flex justify-between text-2xs tabular-nums text-muted-foreground">
           <span>{min}</span>
           <span>{max}</span>
         </div>
       </div>
 
       {list.length === 0 && (
-        <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-[11px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-2xs text-muted-foreground">
           {t("gaugeZones.empty")}
         </p>
       )}
@@ -108,7 +108,7 @@ export function GaugeZonesEditor({
       {list.map((z, i) => (
         <div key={i} className="flex items-center gap-2 rounded-md border border-border bg-background p-2">
           <div className="grid gap-0.5">
-            <Label className="text-[10px]">{t("gaugeZones.upTo")}</Label>
+            <Label className="text-2xs">{t("gaugeZones.upTo")}</Label>
             <Input
               type="number"
               value={z.upTo}
@@ -117,7 +117,7 @@ export function GaugeZonesEditor({
             />
           </div>
           <div className="grid flex-1 gap-0.5">
-            <Label className="text-[10px]">{t("common.color")}</Label>
+            <Label className="text-2xs">{t("common.color")}</Label>
             <div className="flex flex-wrap gap-1">
               {(Object.keys(COLOR_CHIP) as Color[]).map((c) => {
                 const cfg = COLOR_CHIP[c];

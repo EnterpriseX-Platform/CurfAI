@@ -65,14 +65,14 @@ export function SlowQueryBanner({ reportId, isAdmin }: { reportId: string; isAdm
             Avg <span className="font-mono tabular-nums">{avgSec}s</span> across {stats.runCount} runs in the last 7 days · {stats.slowCount} run{stats.slowCount === 1 ? "" : "s"} over {(stats.threshold / 1000).toFixed(0)}s · max <span className="font-mono tabular-nums">{maxSec}s</span>.
           </span>
         </p>
-        <p className="mt-1 text-[12px] text-warning/80 ">
+        <p className="mt-1 text-xs text-warning/80 ">
           Cache it as a <span className="font-medium">materialized view</span> — the result rebuilds on a cron and readers get it from a lake table in milliseconds.
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Link
           href={`/tables?suggestMv=${encodeURIComponent(reportId)}#materialized-views`}
-          className="inline-flex items-center gap-1 rounded-md border border-warning/50 bg-warning/20 px-2.5 py-1.5 text-[12px] font-semibold text-warning hover:bg-warning/30 "
+          className="inline-flex items-center gap-1 rounded-md border border-warning/50 bg-warning/20 px-2.5 py-1.5 text-xs font-semibold text-warning hover:bg-warning/30 "
         >
           <Layers className="h-3.5 w-3.5" /> Cache as MV
         </Link>

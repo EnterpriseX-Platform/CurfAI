@@ -6,6 +6,7 @@
  */
 import type { ComponentType } from "react";
 import type { Edition } from "./types";
+import type { CheckItem } from "@/lib/reporting/designerCheck";
 
 export type EeClientRegistry = {
   edition: Edition;
@@ -21,7 +22,7 @@ export type EeClientRegistry = {
     /** "Curf noticed an anomaly — add a watcher?" banner on the report viewer. */
     WatcherSuggestionsBanner?: ComponentType<any>;
     /** The Ask Curf chat panel on the report viewer (ai.talks_back). */
-    AskCurfPanel?: ComponentType<{ reportId: string; currentParams: Record<string, unknown> }>;
+    AskCurfPanel?: ComponentType<{ reportId: string; currentParams: Record<string, unknown>; /** An element beside the report to dock in. */ dockHost?: HTMLElement | null }>;
     /** "Why?" on a KPI card — grounded explanation of what moved (ai.why_everywhere). */
     AskWhyButton?: ComponentType<any>;
     /** Overflow-menu entry: Claude proposes chart-click Operate templates for this report. */
@@ -32,9 +33,11 @@ export type EeClientRegistry = {
 
   designer?: {
     /** Toolbar "Publish" — turns the report into an Analytic App. */
-    PublishButton?: ComponentType<{ reportId: string }>;
+    PublishButton?: ComponentType<{ reportId: string; checkItems?: CheckItem[] }>;
     /** Toolbar "Suggest" — Claude proposes the next chart (ai.suggest_charts). */
     SuggestChartButton?: ComponentType<{ reportId: string }>;
+    /** Right-panel "Assistant" tab — proposes block changes to the open page (POST /api/reports/[id]/assist). */
+    AssistantPanel?: ComponentType<{ reportId: string; onApplied: () => void }>;
     /** Toolbar "Story" — the auto-narrated walkthrough page (ai.story_mode). */
     storyMode?: boolean;
     /** Governed metrics are offered in the KPI query picker (the /api/metrics route is paid). */

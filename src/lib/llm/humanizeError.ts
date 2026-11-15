@@ -11,7 +11,21 @@
  * on any of it. Centralized here so every LLM call site gets the same
  * treatment for free.
  */
-export function humanizeLlmError(rawError: string | undefined): {
+type ErrLocale = "en" | "th" | "zh";
+
+/**
+ * One message in the reader's language. With no locale it is the original
+ * English-then-Thai pair, so callers that do not know the reader's language
+ * (Master Builder logs, agents) read exactly what they always did.
+ */
+function msg(locale: ErrLocale | undefined, en: string, th: string, zh: string): string {
+  if (locale === "th") return th;
+  if (locale === "zh") return zh;
+  return locale === "en" ? en : `${en}
+(${th})`;
+}
+
+export function humanizeLlmError(rawError: string | undefined, locale?: ErrLocale): {
   message: string;
   notConfigured: boolean;
   /**
@@ -32,24 +46,40 @@ export function humanizeLlmError(rawError: string | undefined): {
     return {
       notConfigured: true,
       canSwitchModel: false,
-      message:
-        "This prompt doesn't match a built-in preset, and no AI provider is connected. Connect a key in Tenant Settings → LLM.\n(คำสั่งนี้ไม่ตรงกับรูปแบบมาตรฐาน และยังไม่ได้เชื่อมต่อ AI โปรดตั้งค่าใน Tenant Settings → LLM)",
+      message: msg(locale,
+        "This prompt doesn't match a built-in preset, and no AI provider is connected. Connect a key in Tenant Settings → LLM.",
+        "คำสั่งนี้ไม่ตรงกับรูปแบบมาตรฐาน และยังไม่ได้เชื่อมต่อ AI โปรดตั้งค่าใน Tenant Settings → LLM",
+        "此提示不匹配任何内置预设，且尚未连接 AI 服务。请在 Tenant Settings → LLM 中连接密钥。"),
     };
   }
   if (raw.includes("AI_CREDITS_EXHAUSTED")) {
     return {
       notConfigured: false,
       canSwitchModel: false,
-      message:
-        "This workspace has used its AI credits for the month. They reset on the 1st; an admin can add editor seats, upgrade the plan, or connect the workspace's own key in Tenant Settings → LLM, which is never metered.\n(เวิร์กสเปซนี้ใช้เครดิต AI ของเดือนนี้หมดแล้ว เครดิตจะรีเซ็ตวันที่ 1 ผู้ดูแลสามารถเพิ่มที่นั่ง Editor อัปเกรดแพ็กเกจ หรือเชื่อมต่อคีย์ของเวิร์กสเปซเองใน Tenant Settings → LLM ซึ่งไม่มีการนับเครดิต)",
+      message: msg(locale,
+        "This workspace has used its AI credits for the month. They reset on the 1st; an admin can add editor seats, upgrade the plan, or connect the workspace's own key in Tenant Settings → LLM, which is never metered.",
+        "เวิร์กสเปซนี้ใช้เครดิต AI ของเดือนนี้หมดแล้ว เครดิตจะรีเซ็ตวันที่ 1 ผู้ดูแลสามารถเพิ่มที่นั่ง Editor อัปเกรดแพ็กเกจ หรือเชื่อมต่อคีย์ของเวิร์กสเปซเองใน Tenant Settings → LLM ซึ่งไม่มีการนับเครดิต",
+        "本工作区本月的 AI 额度已用完，将于 1 日重置。管理员可以增加编辑席位、升级套餐，或在 Tenant Settings → LLM 中连接工作区自己的密钥（不计额度）。"),
+    };
+  }
+  if (raw.includes("TRIAL_MODEL_BUSY")) {
+    return {
+      notConfigured: false,
+      canSwitchModel: false,
+      message: msg(locale,
+        "The trial model is busy right now. Try again in a few minutes, or upgrade to run on the faster model.",
+        "โมเดลทดลองกำลังมีผู้ใช้งานหนาแน่น กรุณาลองใหม่ในอีกสักครู่ หรืออัปเกรดเพื่อใช้โมเดลที่เร็วกว่า",
+        "试用模型目前较忙。请几分钟后重试，或升级以使用更快的模型。"),
     };
   }
   if (raw.includes("REASONING_BUDGET_EXHAUSTED")) {
     return {
       notConfigured: false,
       canSwitchModel: true,
-      message:
-        "This model spent its entire response budget on internal reasoning and never produced an answer for this prompt. It may work for simpler prompts but isn't reliable for Master Builder's larger ones — try a different sub-model in Tenant Settings → LLM, or rephrase more narrowly.\n(โมเดลนี้ใช้ token ทั้งหมดไปกับการ \"คิด\" ภายในจนไม่เหลือสำหรับคำตอบจริง อาจใช้ได้กับคำสั่งง่ายๆ แต่ไม่เสถียรพอสำหรับ Master Builder ลองเปลี่ยนโมเดลย่อยใน Tenant Settings → LLM หรือปรับคำสั่งให้แคบลง)",
+      message: msg(locale,
+        "This model spent its entire response budget on internal reasoning and never produced an answer for this prompt. It may work for simpler prompts but isn't reliable for Master Builder's larger ones — try a different sub-model in Tenant Settings → LLM, or rephrase more narrowly.",
+        "โมเดลนี้ใช้ token ทั้งหมดไปกับการ \"คิด\" ภายในจนไม่เหลือสำหรับคำตอบจริง อาจใช้ได้กับคำสั่งง่ายๆ แต่ไม่เสถียรพอสำหรับ Master Builder ลองเปลี่ยนโมเดลย่อยใน Tenant Settings → LLM หรือปรับคำสั่งให้แคบลง",
+        "该模型把全部回复额度都用在内部推理上，没有给出答案。它可能适合简单提示，但对 Master Builder 较大的任务不够稳定。请在 Tenant Settings → LLM 中换用其他子模型，或把提示写得更具体。"),
     };
   }
   if (lower.includes("timed out after")) {
@@ -60,9 +90,10 @@ export function humanizeLlmError(rawError: string | undefined): {
     return {
       notConfigured: false,
       canSwitchModel: true,
-      message:
-        `The AI provider took too long to respond and the request was cancelled after ${seconds} seconds. This can happen even on a working model — some are slower to "think" on harder prompts. Please try again, or switch to a different sub-model in Tenant Settings → LLM if it keeps happening.\n` +
-        `(ผู้ให้บริการ AI ตอบกลับช้าเกินไป ระบบยกเลิกคำขอหลังจากรอ ${seconds} วินาที เหตุการณ์นี้เกิดขึ้นได้แม้ model จะใช้งานได้ปกติ เพราะบาง model "คิด" นานกว่าเมื่อเจอคำสั่งที่ซับซ้อน กรุณาลองใหม่ หรือเปลี่ยนโมเดลย่อยใน Tenant Settings → LLM หากเกิดซ้ำบ่อย)`,
+      message: msg(locale,
+        `The AI provider took too long to respond and the request was cancelled after ${seconds} seconds. This can happen even on a working model — some are slower to "think" on harder prompts. Please try again, or switch to a different sub-model in Tenant Settings → LLM if it keeps happening.`,
+        `ผู้ให้บริการ AI ตอบกลับช้าเกินไป ระบบยกเลิกคำขอหลังจากรอ ${seconds} วินาที เหตุการณ์นี้เกิดขึ้นได้แม้ model จะใช้งานได้ปกติ เพราะบาง model "คิด" นานกว่าเมื่อเจอคำสั่งที่ซับซ้อน กรุณาลองใหม่ หรือเปลี่ยนโมเดลย่อยใน Tenant Settings → LLM หากเกิดซ้ำบ่อย`,
+        `AI 服务响应过慢，请求在等待 ${seconds} 秒后被取消。即使模型正常，较难的提示也可能“思考”更久。请重试；如果经常发生，请在 Tenant Settings → LLM 中换用其他子模型。`),
     };
   }
   if (lower.includes("temperature")) {
@@ -72,16 +103,20 @@ export function humanizeLlmError(rawError: string | undefined): {
       // model on the same provider/key accepts fine) — unlike the branches
       // below, a different sub-model plausibly just works.
       canSwitchModel: true,
-      message:
-        "The AI model settings (e.g., Temperature) are incompatible. Please check your settings.\n(การตั้งค่าโมเดล AI เช่น ค่า Temperature ไม่รองรับกับโมเดลนี้ กรุณาตรวจสอบการตั้งค่า)",
+      message: msg(locale,
+        "The AI model settings (e.g., Temperature) are incompatible. Please check your settings.",
+        "การตั้งค่าโมเดล AI เช่น ค่า Temperature ไม่รองรับกับโมเดลนี้ กรุณาตรวจสอบการตั้งค่า",
+        "AI 模型设置（如 Temperature）不兼容，请检查设置。"),
     };
   }
   if (lower.includes("fetch failed") || lower.includes("timeout") || lower.includes("aborted")) {
     return {
       notConfigured: false,
       canSwitchModel: false,
-      message:
-        "Connection to the AI provider failed or timed out. Please try again.\n(พบปัญหาการเชื่อมต่อกับ AI หรือเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง)",
+      message: msg(locale,
+        "Connection to the AI provider failed or timed out. Please try again.",
+        "พบปัญหาการเชื่อมต่อกับ AI หรือเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง",
+        "与 AI 服务的连接失败或超时，请重试。"),
     };
   }
   // The provider account has no credit left. Kimi answers this with HTTP 429
@@ -98,32 +133,40 @@ export function humanizeLlmError(rawError: string | undefined): {
     return {
       notConfigured: false,
       canSwitchModel: false,
-      message:
-        "The AI provider's account has run out of credit, so it is refusing every request. Trying again won't help: an admin needs to top up the account with the provider, or connect a different key in Tenant Settings → LLM.\n(บัญชีผู้ให้บริการ AI ไม่มียอดเงินคงเหลือ จึงปฏิเสธทุกคำขอ การลองใหม่ไม่ช่วย ผู้ดูแลต้องเติมเงินกับผู้ให้บริการ หรือเชื่อมต่อคีย์อื่นใน Tenant Settings → LLM)",
+      message: msg(locale,
+        "The AI provider's account has run out of credit, so it is refusing every request. Trying again won't help: an admin needs to top up the account with the provider, or connect a different key in Tenant Settings → LLM.",
+        "บัญชีผู้ให้บริการ AI ไม่มียอดเงินคงเหลือ จึงปฏิเสธทุกคำขอ การลองใหม่ไม่ช่วย ผู้ดูแลต้องเติมเงินกับผู้ให้บริการ หรือเชื่อมต่อคีย์อื่นใน Tenant Settings → LLM",
+        "AI 服务账户余额不足，已拒绝所有请求。重试没有帮助：管理员需要向服务商充值，或在 Tenant Settings → LLM 中连接其他密钥。"),
     };
   }
   if (lower.includes("rate limit") || lower.includes("rate_limit") || raw.includes("429")) {
     return {
       notConfigured: false,
       canSwitchModel: false,
-      message:
-        "AI provider rate limit exceeded. Please wait a moment and try again.\n(เกินขีดจำกัดการใช้งาน AI ชั่วคราว กรุณารอสักครู่แล้วลองใหม่)",
+      message: msg(locale,
+        "AI provider rate limit exceeded. Please wait a moment and try again.",
+        "เกินขีดจำกัดการใช้งาน AI ชั่วคราว กรุณารอสักครู่แล้วลองใหม่",
+        "AI 服务请求次数超限，请稍候再试。"),
     };
   }
   if (raw.includes("401") || raw.includes("403") || lower.includes("invalid_api_key")) {
     return {
       notConfigured: false,
       canSwitchModel: false,
-      message:
-        "AI API Key is invalid or expired. Please check Tenant Settings.\n(API Key ของ AI ไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบในการตั้งค่า)",
+      message: msg(locale,
+        "AI API Key is invalid or expired. Please check Tenant Settings.",
+        "API Key ของ AI ไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบในการตั้งค่า",
+        "AI 的 API Key 无效或已过期，请在设置中检查。"),
     };
   }
   if (!raw) {
     return {
       notConfigured: false,
       canSwitchModel: true,
-      message:
-        "The AI took too long to think or the response was blocked. Please try again.\n(ระบบ AI ใช้เวลาคิดนานเกินไป หรือการตอบกลับถูกบล็อก กรุณาลองใหม่อีกครั้ง)",
+      message: msg(locale,
+        "The AI took too long to think or the response was blocked. Please try again.",
+        "ระบบ AI ใช้เวลาคิดนานเกินไป หรือการตอบกลับถูกบล็อก กรุณาลองใหม่อีกครั้ง",
+        "AI 思考时间过长，或回复被拦截，请重试。"),
     };
   }
   // Last resort — still not the raw provider payload, just a generic notice.
@@ -135,7 +178,9 @@ export function humanizeLlmError(rawError: string | undefined): {
   return {
     notConfigured: false,
     canSwitchModel: true,
-    message:
-      "AI planning failed. Please try again.\n(การสร้างแผน AI ล้มเหลว กรุณาลองใหม่อีกครั้ง)",
+    message: msg(locale,
+        "AI planning failed. Please try again.",
+        "การสร้างแผน AI ล้มเหลว กรุณาลองใหม่อีกครั้ง",
+        "AI 规划失败，请重试。"),
   };
 }

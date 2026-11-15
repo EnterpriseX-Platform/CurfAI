@@ -271,7 +271,7 @@ export function Stage3D({
           </button>
         )}
       </div>
-      <div ref={tipRef} hidden className="pointer-events-none absolute z-10 max-w-xs whitespace-pre-line rounded-md border border-border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md" />
+      <div ref={tipRef} hidden className="pointer-events-none absolute z-10 max-w-xs whitespace-pre-line rounded-md border border-border bg-popover px-2 py-1 text-2xs text-popover-foreground shadow-md" />
     </div>
   );
 }

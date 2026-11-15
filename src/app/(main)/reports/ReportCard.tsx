@@ -2,27 +2,29 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Clock, Pencil, ExternalLink, MoreVertical, Trash2 } from "lucide-react";
+import { Clock, Pencil, ExternalLink, MoreVertical, Trash2, LayoutGrid, Table2, Shield } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { DeleteReportDialog } from "./DeleteReportDialog";
-
-/** The card's thumbnail — the report's own last run, not a picture of it. */
-export type ReportThumb = {
-  kpis: Array<{ label: string; value: string; delta: string | null; good: boolean | null }>;
-  bars: number[];
-};
+import { ReportThumbnail } from "@/components/lists/ReportThumbnail";
+import type { ThumbModel } from "@/components/lists/thumbnailModel";
 
 export type ReportCardData = {
   id: string;
+  /** A report opens in the viewer; a dashboard in its own rotation viewer. */
+  kind: "report" | "dashboard";
+  href: string;
+  editHref: string;
   name: string;
-  description: string | null;
   category: string | null;
   updatedAgo: string;
-  version: number;
+  /** ISO time of the last change, for sorting. */
+  updatedAt: string;
+  /** Reports are versioned, dashboards are not. */
+  version: number | null;
   ownerInitials: string;
   ownerName: string;
   /** Relative time of the last recorded run, or null when it never ran. */
@@ -31,9 +33,14 @@ export type ReportCardData = {
   freshness: "ok" | "warn" | "crit" | "none";
   schedules: number;
   blocks: number;
-  thumb: ReportThumb;
+  /** Reports only; a dashboard has no draft state. */
+  published: boolean | null;
+  /** Who can see it, when that is narrower than the whole workspace. */
+  audience: string | null;
+  /** Miniature of the first page, drawn from the definition (components/lists/thumbnailModel.ts). */
+  shape: ThumbModel;
   /** Localised copy, resolved on the server so the card stays a pure renderer. */
-  labels: { lastRun: string; neverRun: string; blocks: string; scheduled: string; empty: string; noSummary: string };
+  labels: { lastRun: string; neverRun: string; blocks: string; scheduled: string; by: string; published: string; draft: string; report: string; dashboard: string };
 };
 
 const DOT: Record<ReportCardData["freshness"], string> = {
@@ -43,96 +50,76 @@ const DOT: Record<ReportCardData["freshness"], string> = {
 export function ReportCard({ r, isAdmin }: { r: ReportCardData; isAdmin: boolean }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
-  const max = Math.max(...r.thumb.bars, 0) || 1;
-  const min = Math.min(...r.thumb.bars, max);
-  const hasThumb = r.thumb.kpis.length > 0 || r.thumb.bars.length > 1;
+  const TypeIcon = r.kind === "dashboard" ? LayoutGrid : Table2;
 
   return (
     <>
       <div className="group relative">
-        {/* Whole-card link: Open the report */}
+        {/* Whole-card link: Open the report or dashboard */}
         <Link
-          href={`/reports/${r.id}`}
+          href={r.href}
           className="flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all hover:-translate-y-px hover:border-input hover:shadow-md"
         >
-          {/* Live thumbnail: mini KPI tiles from the last run + a short
-              series. Empty until the report has run once. */}
-          <div className="grid h-[136px] grid-cols-2 grid-rows-[auto_1fr] gap-2 border-b border-border bg-muted p-3">
-            {hasThumb ? (
-              <>
-                {r.thumb.kpis.map((k, i) => (
-                  <div key={i} className="min-w-0 rounded-md border border-border bg-card px-2.5 py-1.5">
-                    <div className="truncate text-[9.5px] font-medium uppercase tracking-[.04em] text-faint">{k.label}</div>
-                    <div className="truncate text-[15px] font-semibold leading-tight tracking-[-.01em] tabular-nums">{k.value}</div>
-                    {k.delta && (
-                      <div className={cn("text-[10.5px] font-medium tabular-nums", k.good === false ? "text-destructive" : "text-success")}>{k.delta}</div>
-                    )}
-                  </div>
-                ))}
-                {r.thumb.kpis.length === 1 && <div />}
-                {r.thumb.bars.length > 1 && (
-                  // row-start-2: a chart-only report (no KPI blocks, e.g.
-                  // Loan Book Register) makes this the grid's ONLY child,
-                  // and CSS grid auto-placement then puts it in the
-                  // "auto"-sized first row instead of the flexible second
-                  // one — every bar's percentage `height` then resolves
-                  // against that auto row's ~0 natural height and the
-                  // whole chart renders invisible, even though the data
-                  // is real (confirmed in the server-rendered HTML: the
-                  // bars are there, just collapsed). Pinning it to row 2
-                  // makes the placement the same regardless of how many
-                  // KPI tiles came before it.
-                  <div className="col-span-2 row-start-2 flex min-h-0 items-end gap-[5px] px-0.5">
-                    {r.thumb.bars.map((v, i) => (
-                      <i
-                        key={i}
-                        className={cn("block flex-1 rounded-t-[2px] bg-primary", i === r.thumb.bars.length - 1 ? "opacity-100" : "opacity-70")}
-                        style={{ height: `${Math.max(8, Math.round(((v - min) / (max - min || 1)) * 70 + 30))}%` }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="col-span-2 row-span-2 flex items-center justify-center font-mono text-xs text-faint">
-                {/* A report can run fine and still have nothing to
-                    summarize here — e.g. a table-only layout with no KPI
-                    or chart block. r.lastRun tells them apart: "No run
-                    yet" is only accurate when it's genuinely never run. */}
-                {r.lastRun ? r.labels.noSummary : r.labels.empty}
-              </div>
-            )}
-          </div>
+          <ReportThumbnail model={r.shape} className="h-[148px] border-b border-border" />
 
-          <div className="flex flex-col gap-2 px-3.5 py-3">
-            <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-2.5 px-3.5 py-3">
+            <div className="flex items-start justify-between gap-2">
               <h3 className="truncate text-sm font-semibold tracking-tight" title={r.name}>{r.name}</h3>
-              <span className="shrink-0 rounded-sm border border-border px-1.5 py-px font-mono text-[11px] text-faint">v{r.version}</span>
+              {r.version != null && (
+                <span className="shrink-0 rounded-sm border border-border px-1.5 py-px font-mono text-2xs text-faint">v{r.version}</span>
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-xs text-faint">
-              <span
-                className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-primary-soft font-sans text-[10px] font-semibold text-primary-ink"
-                title={r.ownerName}
-              >
-                {r.ownerInitials}
-              </span>
-              <span className={cn("inline-flex items-center gap-1.5", r.freshness === "crit" && "text-destructive", r.freshness === "warn" && "text-warning")}>
-                <span className={cn("h-2 w-2 rounded-full", DOT[r.freshness])} />
-                {r.lastRun ? `${r.labels.lastRun} ${r.lastRun}` : r.labels.neverRun}
-              </span>
-              {r.schedules > 0 && (
-                <span className="inline-flex items-center gap-1" title={r.labels.scheduled}>
-                  <Clock className="h-3 w-3" /> {r.schedules}
+            {/* Tags: state (reports only), the type, who can see it when that
+                is narrower than the workspace, then the category. */}
+            <div className="flex flex-wrap items-center gap-1.5 text-2xs">
+              {r.published != null && (
+                <span className={cn("inline-flex h-5 items-center rounded-full px-2 font-medium", r.published ? "bg-success/10 text-success" : "bg-muted text-muted-foreground")}>
+                  {r.published ? r.labels.published : r.labels.draft}
                 </span>
               )}
-              {r.blocks > 0 && <span>{r.blocks} {r.labels.blocks}</span>}
-              {r.category && <span className="rounded-sm border border-border px-1.5 py-px text-[11px]">{r.category}</span>}
+              <span className="inline-flex h-5 items-center gap-1 rounded-full bg-primary-soft px-2 font-medium text-primary-ink">
+                <TypeIcon className="h-3 w-3" /> {r.kind === "dashboard" ? r.labels.dashboard : r.labels.report}
+              </span>
+              {r.audience && (
+                <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border px-2 text-muted-foreground">
+                  <Shield className="h-3 w-3" /> {r.audience}
+                </span>
+              )}
+              {r.category && <span className="inline-flex h-5 items-center rounded-full border border-border px-2 text-muted-foreground">{r.category}</span>}
+            </div>
+            {/* Footer: who and when on one line, the run's facts on a second,
+                so the rows stay the same height from card to card. */}
+            <div className="flex flex-col gap-1.5 border-t border-border pt-2.5 text-xs text-faint">
+              <div className="flex items-center gap-2">
+                <span
+                  className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-primary-soft font-sans text-2xs font-semibold text-primary-ink"
+                  title={r.ownerName}
+                >
+                  {r.ownerInitials}
+                </span>
+                <span className="min-w-0 truncate">{r.labels.by} {r.ownerName} · {r.updatedAgo}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-2xs">
+                {r.kind === "report" && (
+                  <span className={cn("inline-flex items-center gap-1.5", r.freshness === "crit" && "text-destructive", r.freshness === "warn" && "text-warning")}>
+                    <span className={cn("h-1.5 w-1.5 rounded-full", DOT[r.freshness])} />
+                    {r.lastRun ? `${r.labels.lastRun} ${r.lastRun}` : r.labels.neverRun}
+                  </span>
+                )}
+                {r.schedules > 0 && (
+                  <span className="inline-flex items-center gap-1" title={r.labels.scheduled}>
+                    <Clock className="h-3 w-3" /> {r.schedules}
+                  </span>
+                )}
+                {r.blocks > 0 && <span>{r.blocks} {r.labels.blocks}</span>}
+              </div>
             </div>
           </div>
         </Link>
 
-        {/* Actions menu — positioned inside the card but above the link */}
-        <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        {/* Actions menu — positioned inside the card but above the link. Always
+            visible (not hover-only) so it is reachable on touch screens. */}
+        <div className="absolute right-2 top-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -145,13 +132,13 @@ export function ReportCard({ r, isAdmin }: { r: ReportCardData; isAdmin: boolean
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuItem onClick={() => router.push(`/reports/${r.id}`)}>
+              <DropdownMenuItem onClick={() => router.push(r.href)}>
                 <ExternalLink className="mr-2 h-4 w-4" /> Open
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => router.push(`/reports/${r.id}/edit`)}>
+              <DropdownMenuItem onClick={() => router.push(r.editHref)}>
                 <Pencil className="mr-2 h-4 w-4" /> Edit
               </DropdownMenuItem>
-              {isAdmin && (
+              {isAdmin && r.kind === "report" && (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem

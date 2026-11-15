@@ -10,6 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger,
 } from "@/components/ui/dialog";
 import { useToast } from "@/lib/toast";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * "Generate from prompt" — natural-language report builder.
@@ -23,26 +24,26 @@ import { useToast } from "@/lib/toast";
 const EXAMPLES = [
   {
     icon: TrendingUp,
-    title: "Marketing performance",
-    description: "By channel, with monthly heatmap and top campaigns",
+    titleKey: "reports.generate.exMarketing.title",
+    descriptionKey: "reports.generate.exMarketing.desc",
     prompt: "Build a marketing performance dashboard: KPIs for total spend, leads, and average ROI; a combo chart of spend (bars) and leads (line) by channel; a calendar heatmap of daily campaign launches; and a list of top campaigns by ROI.",
   },
   {
     icon: BarChart3,
-    title: "Sales pipeline",
-    description: "Conversion rates by stage with rep leaderboard",
+    titleKey: "reports.generate.exSales.title",
+    descriptionKey: "reports.generate.exSales.desc",
     prompt: "Sales pipeline dashboard: KPIs for total revenue and active deals; a funnel chart of opportunities by stage; a treemap of revenue by product category; and a leaderboard of top reps this quarter.",
   },
   {
     icon: Users,
-    title: "Customer growth",
-    description: "Signups over 90 days with cohort heatmap",
+    titleKey: "reports.generate.exCustomers.title",
+    descriptionKey: "reports.generate.exCustomers.desc",
     prompt: "Customer growth dashboard: KPIs for total customers, new this month, and churn; a calendar heatmap of daily signups over the last 90 days; an area chart of cumulative customers over time; and a regional breakdown bar chart.",
   },
   {
     icon: Globe,
-    title: "Geographic breakdown",
-    description: "World choropleth + regional KPIs",
+    titleKey: "reports.generate.exGeo.title",
+    descriptionKey: "reports.generate.exGeo.desc",
     prompt: "Geographic dashboard: KPIs for revenue by region; a world map (choropleth) of revenue by country; a bar chart of top 10 countries; and a pivot table of revenue by region × product category.",
   },
 ];
@@ -61,13 +62,14 @@ type Inventory = {
 };
 
 const PROGRESS_STAGES = [
-  "Inspecting your data sources…",
-  "Designing the queries…",
-  "Laying out the blocks…",
-  "Validating and saving…",
+  "reports.generate.stage1",
+  "reports.generate.stage2",
+  "reports.generate.stage3",
+  "reports.generate.stage4",
 ];
 
 export function GenerateReportButton() {
+  const { t } = useT();
   const router = useRouter();
   const { push } = useToast();
   const [open, setOpen] = useState(false);
@@ -128,7 +130,7 @@ export function GenerateReportButton() {
 
   async function generate() {
     if (!prompt.trim()) {
-      setError("Tell me what you want to see.");
+      setError(t("reports.generate.errEmpty"));
       return;
     }
     setError(null);
@@ -144,14 +146,14 @@ export function GenerateReportButton() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setError(json.error ?? "Generation failed");
+        setError(json.error ?? t("reports.generate.errFailed"));
         if (json.raw) console.warn("[generate] raw response", json.raw);
         return;
       }
       push({
         variant: "success",
-        title: "Report generated",
-        description: json.name ? "Opening " + json.name : "Opening your new report",
+        title: t("reports.generate.toastDone"),
+        description: json.name ? t("reports.generate.toastOpening").replace("{name}", json.name) : t("reports.generate.toastOpeningNew"),
       });
       setOpen(false);
       setPrompt("");
@@ -167,7 +169,7 @@ export function GenerateReportButton() {
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setError(null); } }}>
       <DialogTrigger asChild>
         <Button size="sm" variant="default" className="gap-1.5">
-          <Sparkles className="h-4 w-4" /> Generate
+          <Sparkles className="h-4 w-4" /> {t("reports.generate.button")}
         </Button>
       </DialogTrigger>
 
@@ -181,15 +183,14 @@ export function GenerateReportButton() {
         {/* Header — a plain surface; the accent is spent on the Generate button, not the frame */}
         <div className="relative border-b border-border bg-card px-6 py-5">
           <DialogHeader className="relative">
-            <div className="mb-2 inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
-              <Sparkles className="h-3 w-3" /> AI-powered
+            <div className="mb-2 inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-2xs font-semibold uppercase tracking-wider text-primary">
+              <Sparkles className="h-3 w-3" /> {t("reports.generate.badge")}
             </div>
             <DialogTitle className="text-xl font-semibold tracking-tight">
-              Generate a report from a prompt
+              {t("reports.generate.title")}
             </DialogTitle>
             <DialogDescription className="text-sm">
-              Describe what you want to see in plain English. Curf inspects your data, designs the
-              queries, and lays out the dashboard for you.
+              {t("reports.generate.desc")}
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -201,8 +202,8 @@ export function GenerateReportButton() {
           {/* Connection picker — only shows when there are 2+ connections */}
           {inventory && inventory.connections.length > 1 && (
             <div className="grid gap-1.5">
-              <label htmlFor="generate-source" className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Source
+              <label htmlFor="generate-source" className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {t("reports.generate.source")}
               </label>
               <select
                 id="generate-source"
@@ -218,11 +219,11 @@ export function GenerateReportButton() {
                   const usable = (fileBacked && c.tables.length > 0) ||
                                  (c.kind === "rest" && c.schemaProbed);
                   const detail = fileBacked
-                    ? `${c.tables.length} table${c.tables.length === 1 ? "" : "s"}`
-                    : c.schemaProbed ? `${c.fields?.length ?? 0} fields` : "no schema yet";
+                    ? t("reports.generate.tablesCount").replace("{n}", String(c.tables.length)).replace("{plural}", c.tables.length === 1 ? "" : "s")
+                    : c.schemaProbed ? t("reports.generate.fieldsCount").replace("{n}", String(c.fields?.length ?? 0)) : t("reports.generate.noSchema");
                   return (
                     <option key={c.id} value={c.id} disabled={!usable}>
-                      {c.name} [{c.kind}] — {detail}{usable ? "" : " (probe first)"}
+                      {c.name} [{c.kind}] — {detail}{usable ? "" : " " + t("reports.generate.probeFirst")}
                     </option>
                   );
                 })}
@@ -232,15 +233,15 @@ export function GenerateReportButton() {
 
           {/* Prompt textarea */}
           <div className="grid gap-1.5">
-            <label htmlFor="generate-prompt" className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              What would you like to see?
+            <label htmlFor="generate-prompt" className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t("reports.generate.promptLabel")}
             </label>
             <textarea
               id="generate-prompt"
               ref={promptRef}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g., 'Q1 marketing performance with KPIs, a combo chart by channel, monthly spend heatmap, and a list of top campaigns by ROI'"
+              placeholder={t("reports.generate.promptPlaceholder")}
               disabled={busy}
               rows={5}
               className="w-full resize-none rounded-md border border-border bg-background px-3 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/40"
@@ -249,13 +250,13 @@ export function GenerateReportButton() {
 
           {/* Example starting points — cards instead of pills */}
           <div className="grid gap-1.5">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Or start from a template idea
+            <label className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t("reports.generate.templates")}
             </label>
             <div className="grid grid-cols-2 gap-2">
               {EXAMPLES.map((ex) => (
                 <button
-                  key={ex.title}
+                  key={ex.titleKey}
                   type="button"
                   disabled={busy}
                   onClick={() => setPrompt(ex.prompt)}
@@ -265,8 +266,8 @@ export function GenerateReportButton() {
                     <ex.icon className="h-3.5 w-3.5" />
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-[12px] font-medium text-foreground">{ex.title}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{ex.description}</span>
+                    <span className="block text-xs font-medium text-foreground">{t(ex.titleKey)}</span>
+                    <span className="block truncate text-2xs text-muted-foreground">{t(ex.descriptionKey)}</span>
                   </span>
                 </button>
               ))}
@@ -278,11 +279,11 @@ export function GenerateReportButton() {
             <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
               <div className="mb-2 flex items-center gap-2 text-xs font-medium text-primary">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {PROGRESS_STAGES[stage]}
+                {t(PROGRESS_STAGES[stage])}
               </div>
               <div className="space-y-1">
                 {PROGRESS_STAGES.map((s, i) => (
-                  <div key={s} className="flex items-center gap-1.5 text-[11px]">
+                  <div key={s} className="flex items-center gap-1.5 text-2xs">
                     <span className={
                       i < stage ? "text-success" :
                       i === stage ? "text-primary" : "text-muted-foreground/50"
@@ -292,7 +293,7 @@ export function GenerateReportButton() {
                        "○"}
                     </span>
                     <span className={i <= stage ? "text-foreground" : "text-muted-foreground/60"}>
-                      {s}
+                      {t(s)}
                     </span>
                   </div>
                 ))}
@@ -309,16 +310,16 @@ export function GenerateReportButton() {
 
         {/* Footer with actions */}
         <div className="flex items-center justify-between gap-3 border-t border-border bg-muted/20 px-6 py-3">
-          <p className="text-[11px] text-muted-foreground">
-            Curf validates the AI response against the report schema before saving. You can refine in the designer.
+          <p className="text-2xs text-muted-foreground">
+            {t("reports.generate.footnote")}
           </p>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={busy}>
-              Cancel
+              {t("action.cancel")}
             </Button>
             <Button size="sm" onClick={generate} disabled={busy || pending || !prompt.trim()}>
-              {busy ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Generating&hellip;</>
-                    : <><Sparkles className="mr-1.5 h-4 w-4" /> Generate report</>}
+              {busy ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("reports.generate.generating")}</>
+                    : <><Sparkles className="mr-1.5 h-4 w-4" /> {t("reports.generate.submit")}</>}
             </Button>
           </div>
         </div>
@@ -338,11 +339,12 @@ function DataInventoryStrip({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useT();
   if (!inventory) {
     return (
       <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
         <Database className="h-3.5 w-3.5" />
-        Discovering your data sources…
+        {t("reports.generate.discovering")}
       </div>
     );
   }
@@ -350,7 +352,7 @@ function DataInventoryStrip({
     return (
       <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
         <Database className="h-3.5 w-3.5" />
-        No connected data sources yet. Add one under Data → Connections, then come back.
+        {t("reports.generate.noSources")}
       </div>
     );
   }
@@ -364,8 +366,11 @@ function DataInventoryStrip({
         <div className="flex items-center gap-2 text-xs">
           <Database className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="font-medium text-foreground">
-            Curf can see {inventory.totalTables} table{inventory.totalTables === 1 ? "" : "s"} across{" "}
-            {inventory.totalConnections} connection{inventory.totalConnections === 1 ? "" : "s"}
+            {t("reports.generate.canSee")
+              .replace("{tables}", String(inventory.totalTables))
+              .replace("{tablesPlural}", inventory.totalTables === 1 ? "" : "s")
+              .replace("{connections}", String(inventory.totalConnections))
+              .replace("{connectionsPlural}", inventory.totalConnections === 1 ? "" : "s")}
           </span>
         </div>
         <ChevronDown className={"h-3.5 w-3.5 text-muted-foreground transition-transform " + (expanded ? "rotate-180" : "")} />
@@ -386,6 +391,7 @@ function ConnectionEntry({
 }: {
   c: Inventory["connections"][number];
 }) {
+  const { t } = useT();
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [localFields, setLocalFields] = useState(c.fields ?? []);
@@ -408,7 +414,7 @@ function ConnectionEntry({
       });
       const j = await r.json();
       if (!r.ok) {
-        setProbeError(j.error ?? "Probe failed");
+        setProbeError(j.error ?? t("reports.generate.probeFailed"));
         return;
       }
       setLocalFields(j.schema.fields ?? []);
@@ -419,9 +425,9 @@ function ConnectionEntry({
 
   return (
     <div className="mb-3 last:mb-0">
-      <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold text-foreground">
+      <div className="mb-1 flex items-center gap-2 text-2xs font-semibold text-foreground">
         <Layers className="h-3 w-3" /> {c.name}
-        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
           {c.kind}
         </span>
         {c.kind === "rest" && (
@@ -429,10 +435,10 @@ function ConnectionEntry({
             type="button"
             onClick={() => setShowProbeForm((v) => !v)}
             disabled={probing}
-            className="ml-auto inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 text-2xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
           >
             {probing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-            {localProbed ? "Re-probe" : "Probe schema"}
+            {localProbed ? t("reports.generate.reprobe") : t("reports.generate.probeSchema")}
           </button>
         )}
       </div>
@@ -440,24 +446,24 @@ function ConnectionEntry({
       {/* Inline probe form for REST */}
       {c.kind === "rest" && showProbeForm && (
         <div className="ml-5 mt-1 grid gap-1.5 rounded-md border border-border bg-background p-2">
-          <label className="grid gap-0.5 text-[10px] text-muted-foreground">
-            Sample path
+          <label className="grid gap-0.5 text-2xs text-muted-foreground">
+            {t("reports.generate.samplePath")}
             <input
               type="text" value={probePath}
               onChange={(e) => setProbePath(e.target.value)}
               placeholder="/v3.1/all?fields=name,population,region,cca3"
               disabled={probing}
-              className="h-6 rounded border border-border bg-background px-2 font-mono text-[11px]"
+              className="h-6 rounded border border-border bg-background px-2 font-mono text-2xs"
             />
           </label>
-          <label className="grid gap-0.5 text-[10px] text-muted-foreground">
-            jsonPath (optional, e.g. $.data.items)
+          <label className="grid gap-0.5 text-2xs text-muted-foreground">
+            {t("reports.generate.jsonPath")}
             <input
               type="text" value={probeJsonPath}
               onChange={(e) => setProbeJsonPath(e.target.value)}
-              placeholder="(leave blank to auto-detect)"
+              placeholder={t("reports.generate.jsonPathPlaceholder")}
               disabled={probing}
-              className="h-6 rounded border border-border bg-background px-2 font-mono text-[11px]"
+              className="h-6 rounded border border-border bg-background px-2 font-mono text-2xs"
             />
           </label>
           <div className="flex justify-end gap-1.5">
@@ -465,9 +471,9 @@ function ConnectionEntry({
               type="button"
               onClick={runProbe}
               disabled={probing}
-              className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-2xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
-              {probing ? <><Loader2 className="h-3 w-3 animate-spin" /> Probing&hellip;</> : "Run probe"}
+              {probing ? <><Loader2 className="h-3 w-3 animate-spin" /> {t("reports.generate.probing")}</> : t("reports.generate.runProbe")}
             </button>
           </div>
         </div>
@@ -476,9 +482,9 @@ function ConnectionEntry({
       {/* SQLite tables */}
       {c.kind === "sqlite" && c.tables.length > 0 && (
         <div className="flex flex-wrap gap-1 pl-5">
-          {c.tables.map((t) => (
-            <code key={t} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground">
-              {t}
+          {c.tables.map((tbl) => (
+            <code key={tbl} className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-foreground">
+              {tbl}
             </code>
           ))}
         </div>
@@ -488,7 +494,7 @@ function ConnectionEntry({
       {c.kind === "rest" && localProbed && localFields.length > 0 && (
         <div className="flex flex-wrap gap-1 pl-5">
           {localFields.map((f) => (
-            <code key={f.name} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground" title={f.type}>
+            <code key={f.name} className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-foreground" title={f.type}>
               {f.name}
               <span className="ml-1 text-muted-foreground">({f.type})</span>
             </code>
@@ -498,14 +504,14 @@ function ConnectionEntry({
 
       {/* REST: not probed yet */}
       {c.kind === "rest" && !localProbed && !probeError && (
-        <div className="pl-5 text-[10px] italic text-muted-foreground">
-          Schema not yet discovered. Click <strong>Probe schema</strong> to inspect the API.
+        <div className="pl-5 text-2xs italic text-muted-foreground">
+          {t("reports.generate.notProbed")}
         </div>
       )}
 
       {/* REST: probe error */}
       {probeError && (
-        <div className="ml-5 mt-1 rounded border border-destructive/30 bg-destructive/5 px-2 py-1 text-[10px] text-destructive">
+        <div className="ml-5 mt-1 rounded border border-destructive/30 bg-destructive/5 px-2 py-1 text-2xs text-destructive">
           {probeError}
         </div>
       )}

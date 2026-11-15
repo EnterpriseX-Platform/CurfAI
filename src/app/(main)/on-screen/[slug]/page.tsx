@@ -19,7 +19,8 @@ import { prefetchDashboardPayload } from "@/app/(main)/dashboards/[slug]/payload
  */
 export const dynamic = "force-dynamic";
 
-export default async function OnScreenPage({ params }: { params: { slug: string } }) {
+export default async function OnScreenPage(props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const session = await getSession();
   if (!session) redirect(`/login?callbackUrl=/on-screen/${encodeURIComponent(params.slug)}`);
   const user = session.user as any;

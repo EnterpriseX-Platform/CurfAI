@@ -33,6 +33,7 @@
 import { createHash } from "crypto";
 import type { Row } from "@/lib/reporting/interpolate";
 import { referencedParamNames } from "./namedParams";
+import { onNotice, publishNotice } from "@/lib/redis/notices";
 
 const DEFAULT_TTL_MS = 30 * 1000;
 // Per-tenant cap. Very rough — a 100k-row result is ~50MB; capping at 256
@@ -223,6 +224,11 @@ export function setCachedRows(opts: {
  * to it see fresh rows on next refresh, not the stale cache).
  */
 export function bustTenantCache(tenantId: string): void {
+  bustTenantLocal(tenantId);
+  publishNotice("cache-bust", { tenantId });
+}
+
+function bustTenantLocal(tenantId: string): void {
   const c = caches.get(tenantId);
   if (!c) return;
   c.entries.clear();
@@ -236,12 +242,23 @@ export function bustTenantCache(tenantId: string): void {
  * payload was produced from this source.
  */
 export function bustForDataSource(tenantId: string, dataSourceId: string): void {
+  bustSourceLocal(tenantId, dataSourceId);
+  publishNotice("cache-bust", { tenantId, dataSourceId });
+}
+
+function bustSourceLocal(tenantId: string, dataSourceId: string): void {
   const c = caches.get(tenantId);
   if (!c) return;
   for (const [key, entry] of c.entries) {
     if (entry.dataSourceId === dataSourceId) c.entries.delete(key);
   }
 }
+
+// Another replica changed the data: drop the same entries here (lib/redis/notices.ts).
+onNotice("cache-bust", (p: { tenantId: string; dataSourceId?: string }) => {
+  if (!p?.tenantId) return;
+  if (p.dataSourceId) bustSourceLocal(p.tenantId, p.dataSourceId); else bustTenantLocal(p.tenantId);
+});
 
 /**
  * Per-tenant counters for /admin/usage. Numbers are cumulative since the

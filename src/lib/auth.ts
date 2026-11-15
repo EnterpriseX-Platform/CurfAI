@@ -27,10 +27,22 @@ import { getServerSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import GitHubProvider from "next-auth/providers/github";
+import { ee } from "@/ee";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { bindRequestDbContext, withSystemDbContext } from "@/lib/dbContext";
 import { rateLimit } from "@/lib/rateLimit";
+import { mustVerifyBeforeSignIn } from "@/lib/emailVerification";
+import { tenantOpen } from "@/lib/tenantStatus";
+import { isDemoAccountEmail } from "@/lib/demoAccount";
+
+/** The error a password sign-in fails with when the account's email isn't verified yet. The login page matches on it. */
+export const EMAIL_NOT_VERIFIED = "Email not verified";
+
+/** The error a password sign-in fails with when every workspace the account belongs to has been suspended. */
+export const WORKSPACE_SUSPENDED = "Workspace suspended";
+/** Keycloak is the sign-in and this person must use it (already moved, the password window is over, or an organisation rule). */
+export const USE_IDENTITY_PROVIDER = "Use single sign-on";
 
 export type CurfMembership = {
   tenantId: string;
@@ -43,6 +55,14 @@ export type CurfMembership = {
    * back to the slug when it's absent.
    */
   tenantTier?: string;
+  /**
+   * "suspended" when a Curf operator has suspended the workspace
+   * (lib/platform/tenants.ts), "pending_deletion" while its deletion grace
+   * period runs (lib/lifecycle/deletion.ts) — anything but "active" is closed
+   * (lib/tenantStatus.ts). A session never stays in one: session() moves it
+   * to another workspace, or ends it when there is none.
+   */
+  tenantStatus?: string;
   /**
    * True for a workspace synthesized from OrgMembership(platform_admin)
    * oversight rather than a real Membership row — the person has never
@@ -111,7 +131,7 @@ async function loadMembershipsForUserId(userId: string): Promise<CurfMembership[
   return withSystemDbContext(async () => {
     const rows = await prisma.membership.findMany({
       where: { userId },
-      include: { tenant: { select: { id: true, slug: true, name: true, tier: true } } },
+      include: { tenant: { select: { id: true, slug: true, name: true, tier: true, status: true } } },
       orderBy: { createdAt: "asc" },
     });
     const real = rows.map((m: any) => ({
@@ -120,6 +140,7 @@ async function loadMembershipsForUserId(userId: string): Promise<CurfMembership[
       tenantName: m.tenant.name,
       role: m.role,
       tenantTier: m.tenant.tier ?? undefined,
+      tenantStatus: m.tenant.status ?? undefined,
     }));
 
     // Platform Admin oversight (Growth+, gated by featureGate("org.platform_admin")
@@ -136,11 +157,11 @@ async function loadMembershipsForUserId(userId: string): Promise<CurfMembership[
       const realTenantIds = new Set(real.map((m) => m.tenantId));
       const orgTenants = await prisma.tenant.findMany({
         where: { organizationId: { in: orgGrants.map((g) => g.organizationId) } },
-        select: { id: true, slug: true, name: true, tier: true },
+        select: { id: true, slug: true, name: true, tier: true, status: true },
       });
       virtual = orgTenants
         .filter((t) => !realTenantIds.has(t.id))
-        .map((t) => ({ tenantId: t.id, tenantSlug: t.slug, tenantName: t.name, role: "admin", tenantTier: t.tier ?? undefined, isVirtual: true }));
+        .map((t) => ({ tenantId: t.id, tenantSlug: t.slug, tenantName: t.name, role: "admin", tenantTier: t.tier ?? undefined, tenantStatus: t.status ?? undefined, isVirtual: true }));
     }
 
     return [...real, ...virtual];
@@ -164,59 +185,102 @@ export async function loadMembershipsForEmail(email: string): Promise<CurfMember
 // logged in again.
 const ROLE_CHECK_INTERVAL_MS = 5 * 60_000;
 
+/** The caller's address and browser for a session record. NextAuth's signIn callback has no request, so read the request's headers. */
+async function requestMeta(): Promise<{ ip: string | null; userAgent: string | null }> {
+  try {
+    const { headers } = await import("next/headers");
+    const h = await headers();
+    const fwd = h.get("x-forwarded-for")?.split(",")[0]?.trim();
+    return { ip: fwd || h.get("x-real-ip"), userAgent: h.get("user-agent") };
+  } catch {
+    return { ip: null, userAgent: null };
+  }
+}
+
+let cachedProviders: ReturnType<typeof buildProviders> | undefined;
+
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
-  providers: buildProviders(),
+  // A getter, not a call: the providers include the paid edition's (ee.identity), and the ee registry imports modules that import
+  // this one, so touching `ee` while this module is still loading is a "before initialization" error. NextAuth reads this per request.
+  get providers() { return (cachedProviders ??= buildProviders()); },
   callbacks: {
-    async signIn({ user, account }) {
-      if (account && account.provider !== "credentials" && user?.email) {
-        const domain = user.email.split("@")[1] ?? "default";
-        let tenant = await prisma.tenant.upsert({
-          where: { slug: domain.toLowerCase() },
-          update: {},
-          create: { slug: domain.toLowerCase(), name: domain },
-        });
-        // Every tenant needs an Organization (Growth+ Platform Admin
-        // oversight reads Tenant.organizationId — see
-        // loadMembershipsForUserId()) — lazily attach one if this tenant
-        // predates that, or was just created above. Whoever establishes it
-        // becomes its Platform Admin, same rule as /api/signup.
-        let orgJustCreated = false;
-        if (!tenant.organizationId) {
-          const org = await prisma.organization.create({
-            data: { slug: tenant.slug, name: tenant.name, accountType: "individual" },
-          }).catch(() =>
-            prisma.organization.create({
-              data: { slug: `${tenant.slug}-${Date.now().toString(36)}`, name: tenant.name, accountType: "individual" },
-            }),
-          );
-          tenant = await prisma.tenant.update({ where: { id: tenant.id }, data: { organizationId: org.id } });
-          orgJustCreated = true;
+    async signIn({ user, account, profile }) {
+      if (account?.provider === "keycloak" && ee.identity?.enabled()) {
+        // Keycloak says who the person is and how strongly they proved it; Curf decides whether they get in and as whom
+        // (src/ee/identity/signin.ts): linking by sub, org policy (SSO, MFA), no membership from a domain match alone.
+        const meta = await requestMeta();
+        const decision = await ee.identity.signIn({ profile, ip: meta.ip, userAgent: meta.userAgent });
+        if (!decision.ok) {
+          if (decision.userId && decision.tenantIds?.length) {
+            const { recordAudit } = await import("@/lib/audit");
+            for (const tenantId of decision.tenantIds) {
+              recordAudit({
+                tenantId, userId: decision.userId, userEmail: user?.email ?? undefined, kind: "signin.failed",
+                meta: { reason: `keycloak_${decision.reason}`, provider: "keycloak", organizationId: decision.organizationId ?? null },
+              });
+            }
+          }
+          return `/login?error=sso_${decision.reason}`;
         }
-        // One global account per email — find it, or create it. A row that
-        // already exists (from a different workspace, or a prior credentials
-        // signup) keeps its passwordHash untouched; only `name` is refreshed.
-        let row = await prisma.user.findUnique({ where: { email: user.email } });
-        if (!row) {
-          row = await prisma.user.create({ data: { email: user.email, name: user.name ?? undefined } });
-        } else if (user.name && user.name !== row.name) {
-          row = await prisma.user.update({ where: { id: row.id }, data: { name: user.name } });
-        }
-        const membership = await prisma.membership.upsert({
-          where: { userId_tenantId: { userId: row.id, tenantId: tenant.id } },
-          update: {},
-          create: { userId: row.id, tenantId: tenant.id, role: "developer" },
-        });
-        if (orgJustCreated) {
-          await prisma.orgMembership.upsert({
-            where: { userId_organizationId: { userId: row.id, organizationId: tenant.organizationId! } },
-            update: {},
-            create: { userId: row.id, organizationId: tenant.organizationId!, role: "platform_admin" },
+        const { recordAudit } = await import("@/lib/audit");
+        if (decision.linked || decision.created || decision.joinedTenantIds.length > 0 || decision.emailNewlyVerified) {
+          recordAudit({
+            tenantId: decision.tenantId, userId: decision.userId, userEmail: decision.email, kind: "identity.linked", target: decision.userId,
+            meta: { provider: "keycloak", linked: decision.linked, created: decision.created, joinedTenantIds: decision.joinedTenantIds, emailNewlyVerified: decision.emailNewlyVerified, passwordCleared: decision.passwordCleared },
           });
         }
-        (user as any).id = row.id;
-        (user as any).role = membership.role;
-        (user as any).tenantId = tenant.id;
+        (user as any).id = decision.userId;
+        (user as any).email = decision.email;
+        (user as any).role = decision.role;
+        (user as any).tenantId = decision.tenantId;
+        (user as any).sid = decision.sid;
+        (user as any).acr = decision.acr;
+        return true;
+      }
+      if (account && account.provider !== "credentials" && account.provider !== "keycloak") {
+        // Google / GitHub reach only an existing account that already belongs
+        // to a workspace, and only with a provider-verified email. It never
+        // creates a workspace or a membership — see lib/ssoSignIn.ts for why
+        // the old email-domain workspace was removed.
+        const { resolveSsoSignIn } = await import("@/lib/ssoSignIn");
+        const decision = await resolveSsoSignIn({
+          provider: account.provider,
+          email: user?.email,
+          name: user?.name,
+          profile,
+          accessToken: account.access_token,
+        });
+        if (!decision.ok) {
+          if (decision.userId && decision.tenantIds?.length) {
+            const { recordAudit } = await import("@/lib/audit");
+            for (const tenantId of decision.tenantIds) {
+              recordAudit({
+                tenantId,
+                userId: decision.userId,
+                userEmail: user?.email ?? undefined,
+                kind: "signin.failed",
+                meta: { reason: `sso_${decision.reason}`, provider: account.provider },
+              });
+            }
+          }
+          return `/login?error=sso_${decision.reason}`;
+        }
+        if (decision.emailNewlyVerified) {
+          const { recordAudit } = await import("@/lib/audit");
+          recordAudit({
+            tenantId: decision.tenantId,
+            userId: decision.userId,
+            userEmail: decision.email,
+            kind: "email.verified",
+            target: decision.userId,
+            meta: { via: account.provider, passwordCleared: decision.passwordCleared },
+          });
+        }
+        (user as any).id = decision.userId;
+        (user as any).email = decision.email;
+        (user as any).role = decision.role;
+        (user as any).tenantId = decision.tenantId;
       }
       return true;
     },
@@ -241,6 +305,8 @@ export const authOptions: NextAuthOptions = {
         (token as any).tenantId = (user as any).tenantId;
         (token as any).activeTenantId = (user as any).tenantId;
         (token as any).roleCheckedAt = Date.now();
+        // Keycloak sign-in: the session id (what a back-channel logout names) and the level of authentication.
+        if ((user as any).sid) { (token as any).sid = (user as any).sid; (token as any).acr = (user as any).acr; }
         if ((user as any).email) {
           (token as any).email = (user as any).email;
           const { isPlatformAdmin } = await import("@/lib/platformAdmin");
@@ -256,7 +322,8 @@ export const authOptions: NextAuthOptions = {
         if (next.activeTenantId && (token as any).id) {
           const current = await loadMembershipsForUserId((token as any).id);
           const m = current.find((m) => m.tenantId === next.activeTenantId);
-          if (m) {
+          // Never switch into a suspended workspace.
+          if (m && tenantOpen(m.tenantStatus)) {
             // token.id is unchanged — one identity, every workspace.
             (token as any).activeTenantId = m.tenantId;
             (token as any).role = m.role;
@@ -359,6 +426,12 @@ export const authOptions: NextAuthOptions = {
           if (account?.passwordChangedAt && account.passwordChangedAt.getTime() > ((token as any).authAt ?? 0)) {
             (token as any).deleted = true;
           }
+          // A Keycloak-backed session also ends when it is revoked (back-channel logout, "sign out everywhere"), or goes past
+          // the organisation's idle or maximum-age limit (src/ee/identity/session.ts).
+          if ((token as any).sid && ee.identity) {
+            const verdict = await ee.identity.checkSession((token as any).sid, (token as any).id);
+            if (verdict !== "ok") (token as any).deleted = true;
+          }
           (token as any).roleCheckedAt = Date.now();
         } catch (e: any) {
           console.warn("[auth] periodic membership re-check failed; keeping the session as-is and retrying next request:", e?.message ?? e);
@@ -375,16 +448,34 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).tenantId = undefined;
         return session;
       }
-      (session.user as any).id = (token as any).id;
-      (session.user as any).role = (token as any).role;
-      (session.user as any).tenantId = (token as any).tenantId;
       // Resolved fresh from the DB every request rather than cached on the
       // token — see the top-of-file comment for why it can't live in the
       // cookie.
-      (session.user as any).memberships = (token as any).id
-        ? await loadMembershipsForUserId((token as any).id)
-        : [];
-      (session.user as any).activeTenantId = (token as any).activeTenantId ?? (token as any).tenantId;
+      const memberships = (token as any).id ? await loadMembershipsForUserId((token as any).id) : [];
+      let tenantId = (token as any).tenantId;
+      let role = (token as any).role;
+      let activeTenantId = (token as any).activeTenantId ?? (token as any).tenantId;
+      // A suspended workspace is closed to everyone in it, at once (not at the
+      // next 5-minute re-check): the session moves to a workspace that is
+      // still open, or — with none — carries no identity, which requireUser()
+      // treats as "not signed in". Same shape as a removed membership.
+      const current = memberships.find((m) => m.tenantId === tenantId);
+      if (current && !tenantOpen(current.tenantStatus)) {
+        const open = memberships.find((m) => tenantOpen(m.tenantStatus) && !m.isVirtual) ?? memberships.find((m) => tenantOpen(m.tenantStatus));
+        if (!open) {
+          (session.user as any).id = undefined;
+          (session.user as any).tenantId = undefined;
+          return session;
+        }
+        tenantId = open.tenantId;
+        role = open.role;
+        activeTenantId = open.tenantId;
+      }
+      (session.user as any).id = (token as any).id;
+      (session.user as any).role = role;
+      (session.user as any).tenantId = tenantId;
+      (session.user as any).memberships = memberships;
+      (session.user as any).activeTenantId = activeTenantId;
       (session.user as any).isPlatformAdmin = !!(token as any).isPlatformAdmin;
       return session;
     },
@@ -406,6 +497,7 @@ export const authOptions: NextAuthOptions = {
     async signOut({ token }) {
       const { recordAudit } = await import("@/lib/audit");
       const t = token as any;
+      if (t?.sid && ee.identity) await ee.identity.revokeSessions({ sid: t.sid }).catch(() => null);
       if (!t?.tenantId) return;
       recordAudit({
         tenantId: t.tenantId,
@@ -479,10 +571,13 @@ export async function requireUser(req?: NextRequest): Promise<CurfSessionUser | 
         revokedAt: null,
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
+      include: { tenant: { select: { status: true } } },
     });
     if (!row) return null;
     const ok = await bcrypt.compare(token, row.hashedSecret);
     if (!ok) return null;
+    // A suspended workspace's keys stop working at once (lib/platform/tenants.ts).
+    if (!tenantOpen(row.tenant?.status)) return null;
     // Usage metering (Phase 3.2) rides the same best-effort update as the
     // existing lastUsedAt touch — one write, not two, and a metering
     // failure (or a slow write under load) never blocks the request since
@@ -622,11 +717,14 @@ function buildProviders() {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials.password) return null;
+        // Keycloak is the only sign-in: a password here is for the anonymous demo visitors' throwaway accounts and nobody else
+        // (same answer for every other address, so it says nothing about who has an account).
+        if (ee.identity?.only() && !isDemoAccountEmail(credentials.email)) throw new Error(USE_IDENTITY_PROVIDER);
         // Brute-force / credential-stuffing throttle, keyed per email so
         // one attacker guessing many accounts can't exhaust a single
         // shared bucket. 10 attempts/5min is generous for a mistyped
         // password, tight for a guessing loop.
-        const limitResult = rateLimit(`login:${credentials.email.toLowerCase()}`, 10, 5 * 60_000);
+        const limitResult = await rateLimit(`login:${credentials.email.toLowerCase()}`, 10, 5 * 60_000);
         if (!limitResult.ok) throw new Error("Too many attempts. Try again in a few minutes.");
         // email is globally unique now — deterministic, unlike the old
         // per-tenant findFirst that could hit any one of several rows for
@@ -636,7 +734,7 @@ function buildProviders() {
         const memberships = await prisma.membership.findMany({
           where: { userId: user.id },
           orderBy: { createdAt: "asc" },
-          select: { tenantId: true, role: true },
+          select: { tenantId: true, role: true, tenant: { select: { status: true } } },
         });
         const ok = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!ok) {
@@ -658,10 +756,53 @@ function buildProviders() {
           }
           return null;
         }
+        // Right password, but the address was never proven: a new account
+        // can't sign in with a password until it follows the mailed link
+        // (lib/emailVerification.ts). Checked after the password so this
+        // message only reaches someone who knows it, and says nothing to a
+        // stranger probing for accounts. Accounts from before the feature
+        // are exempt, and nobody is held back where the platform can't send
+        // the link.
+        if (mustVerifyBeforeSignIn(user)) {
+          const { recordAudit } = await import("@/lib/audit");
+          for (const m of memberships) {
+            recordAudit({
+              tenantId: m.tenantId,
+              userId: user.id,
+              userEmail: user.email,
+              kind: "signin.failed",
+              meta: { reason: "email_unverified" },
+            });
+          }
+          throw new Error(EMAIL_NOT_VERIFIED);
+        }
+        // Keycloak is the sign-in here: a local password works only inside the migration window, for an account not yet moved,
+        // and never where an organisation the person belongs to enforces SSO or MFA (src/ee/identity/migrate.ts).
+        // A demo visitor's throwaway account (lib/demoAccount.ts) is never moved into Keycloak: it has no person behind it.
+        if (ee.identity?.enabled() && !isDemoAccountEmail(user.email)) {
+          const verdict = await ee.identity.passwordSignIn({ id: user.id, email: user.email, name: user.name, identityMigratedAt: user.identityMigratedAt }, credentials.password);
+          if (verdict !== "ok") {
+            const { recordAudit } = await import("@/lib/audit");
+            for (const m of memberships) {
+              recordAudit({ tenantId: m.tenantId, userId: user.id, userEmail: user.email, kind: "signin.failed", meta: { reason: "use_identity_provider" } });
+            }
+            throw new Error(USE_IDENTITY_PROVIDER);
+          }
+        }
         // No membership left (account exists, e.g. removed from every
         // workspace) — there's nothing to log in TO.
-        const primary = memberships[0];
-        if (!primary) return null;
+        if (memberships.length === 0) return null;
+        // Land in the oldest workspace that is still open. When every one of
+        // them has been suspended there is nothing to open — say so, after
+        // the password, rather than letting the person in to a wall.
+        const primary = memberships.find((m) => tenantOpen(m.tenant?.status));
+        if (!primary) {
+          const { recordAudit } = await import("@/lib/audit");
+          for (const m of memberships) {
+            recordAudit({ tenantId: m.tenantId, userId: user.id, userEmail: user.email, kind: "signin.failed", meta: { reason: "workspace_suspended" } });
+          }
+          throw new Error(WORKSPACE_SUSPENDED);
+        }
         return {
           id: user.id,
           email: user.email,
@@ -672,26 +813,50 @@ function buildProviders() {
       },
     }),
   ];
-  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    list.push(GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    }));
+  // Google and GitHub are Keycloak's to broker when Keycloak is the only sign-in (realm identity providers, k8s/keycloak/realm);
+  // Curf registers them itself only otherwise.
+  if (!ee.identity?.only()) {
+    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+      list.push(GoogleProvider({
+        clientId: process.env.GOOGLE_CLIENT_ID!,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      }));
+    }
+    if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+      list.push(GitHubProvider({
+        clientId: process.env.GITHUB_CLIENT_ID!,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+      }));
+    }
   }
-  if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
-    list.push(GitHubProvider({
-      clientId: process.env.GITHUB_CLIENT_ID!,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
-    }));
-  }
+  // Keycloak sign-in (CURF_AUTH=keycloak), from the paid edition's identity module; none in Community.
+  list.push(...(ee.identity?.providers() ?? []));
   return list;
 }
 
-export function enabledSsoProviders(): Array<"google" | "github"> {
-  const out: Array<"google" | "github"> = [];
+/** Keycloak is the sign-in (CURF_AUTH=keycloak and configured): the login page offers it. */
+export function keycloakSignInEnabled(): boolean {
+  return !!ee.identity?.enabled();
+}
+
+/** Keycloak is the only sign-in: no password form, no Google/GitHub of Curf's own (demo visitors aside, see lib/demoAccount.ts). */
+export function keycloakOnlySignIn(): boolean {
+  return !!ee.identity?.enabled() && !!ee.identity.only();
+}
+
+export function enabledSsoProviders(): Array<"google" | "github" | "keycloak"> {
+  const out: Array<"google" | "github" | "keycloak"> = [];
+  if (ee.identity?.enabled()) out.push("keycloak");
+  if (keycloakOnlySignIn()) return out;
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) out.push("google");
   if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) out.push("github");
   return out;
+}
+
+/** What the login pages need: which buttons, whether the password form is offered, and which social sign-ins go through Keycloak. */
+export function signInOptions(): { providers: string[]; passwordLogin: boolean; brokered: string[]; companySso: boolean } {
+  // companySso: the login page may ask for a work email and send the person to their company's own provider (Keycloak is on).
+  return { providers: enabledSsoProviders(), passwordLogin: !keycloakOnlySignIn(), brokered: keycloakOnlySignIn() ? (ee.identity?.brokered() ?? []) : [], companySso: !!ee.identity?.enabled() };
 }
 
 // -------------- RBAC helpers --------------

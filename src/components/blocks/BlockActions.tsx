@@ -68,7 +68,7 @@ export function BlockActions({
           hover-only opacity-0 each existing component carries. */}
       {open && (
         <div
-          className="mr-1 inline-flex items-center gap-0.5 rounded-md border border-border bg-popover/95 px-1 py-0.5 shadow-md backdrop-blur [&_button]:opacity-100"
+          className="mr-1 inline-flex items-center gap-0.5 rounded-md border border-border bg-popover px-1 py-0.5 shadow-md [&_button]:opacity-100"
         >
           {children}
         </div>

@@ -48,7 +48,7 @@ rules:
           # Allowlist intentional cross-tenant reads:
           - metavariable-regex:
               metavariable: $MODEL
-              regex: "^(?!tenant$|marketplaceTemplate$|marketplaceCollection$|user$|userIdentity$|account$|session$|auditEvent$|webhookSubscription$|tenantInvite$|publicAppView$).*"
+              regex: "^(?!tenant$|marketplaceTemplate$|marketplaceCollection$|user$|userIdentity$|account$|session$|auditEvent$|webhookSubscription$|tenantInvite$|publicAppView$|orgSecurityPolicy$|verifiedDomain$|ssoConnection$|userSession$).*"
       # findFirst without tenantId in where
       - patterns:
           - pattern: prisma.$MODEL.findFirst($X)
@@ -57,7 +57,7 @@ rules:
           - pattern-not: prisma.$MODEL.findFirst()
           - metavariable-regex:
               metavariable: $MODEL
-              regex: "^(?!tenant$|marketplaceTemplate$|marketplaceCollection$|user$|userIdentity$|account$|session$|auditEvent$|webhookSubscription$|tenantInvite$|publicAppView$).*"
+              regex: "^(?!tenant$|marketplaceTemplate$|marketplaceCollection$|user$|userIdentity$|account$|session$|auditEvent$|webhookSubscription$|tenantInvite$|publicAppView$|orgSecurityPolicy$|verifiedDomain$|ssoConnection$|userSession$).*"
       # update without tenantId in where
       - patterns:
           - pattern: prisma.$MODEL.update($X)

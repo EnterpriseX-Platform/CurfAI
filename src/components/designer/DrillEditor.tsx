@@ -76,7 +76,7 @@ export function DrillEditor({
           </SelectContent>
         </Select>
         {mode === "none" && !isKpi && params.length === 0 && (
-          <p className="text-[11px] leading-snug text-muted-foreground">{t("drill.editor.noParams")}</p>
+          <p className="text-2xs leading-snug text-muted-foreground">{t("drill.editor.noParams")}</p>
         )}
       </div>
 
@@ -89,7 +89,7 @@ export function DrillEditor({
               {params.map((p) => <SelectItem key={p.name} value={p.name}>{p.label || p.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <p className="text-[11px] leading-snug text-muted-foreground">{t(isHeatmap ? "drill.editor.filterHintTiles" : "drill.editor.filterHint")}</p>
+          <p className="text-2xs leading-snug text-muted-foreground">{t(isHeatmap ? "drill.editor.filterHintTiles" : "drill.editor.filterHint")}</p>
         </div>
       )}
 
@@ -119,7 +119,7 @@ export function DrillEditor({
                   {targetParams.map((n) => <SelectItem key={n} value={n}><span className="font-mono">:{n}</span></SelectItem>)}
                 </SelectContent>
               </Select>
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-2xs leading-snug text-muted-foreground">
                 {targetParams.length === 0 ? t("drill.editor.noSqlParams") : t("drill.editor.filterParamHint")}
               </p>
             </div>
@@ -131,9 +131,9 @@ export function DrillEditor({
           <div className="grid gap-1">
             <Label>{t("drill.editor.columns")}</Label>
             <ColumnsEditor value={(config.drilldown.columns ?? []) as any} onChange={(cols: any[]) => setDrilldown({ columns: cols.length ? cols : undefined })} />
-            <p className="text-[11px] leading-snug text-muted-foreground">{t("drill.editor.columnsHint")}</p>
+            <p className="text-2xs leading-snug text-muted-foreground">{t("drill.editor.columnsHint")}</p>
           </div>
-          <p className="text-[11px] leading-snug text-muted-foreground">{t("drill.editor.rowsHint")}</p>
+          <p className="text-2xs leading-snug text-muted-foreground">{t("drill.editor.rowsHint")}</p>
         </>
       )}
 

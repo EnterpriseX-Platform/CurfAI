@@ -181,11 +181,11 @@ export function StandardMappingPanel({
         </div>
       )}
       {data.savedFrom !== null && (
-        <p className="rounded-md bg-primary-soft px-3 py-2 text-[11px] text-primary">
+        <p className="rounded-md bg-primary-soft px-3 py-2 text-2xs text-primary">
           {t("tables.import.mapping.savedFrom").replace("{file}", data.savedFrom || "—")}
         </p>
       )}
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-2xs text-muted-foreground">
         {t(data.dataset.exists ? `tables.import.target.replaceNote.${dataset}` : `tables.import.target.hint.${dataset}`)}
       </p>
 
@@ -196,19 +196,19 @@ export function StandardMappingPanel({
               type="button"
               onClick={() => void askAi()}
               disabled={disabled || asking}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-2xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
             >
               {asking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3 text-primary" />}
               {t(asking ? "tables.import.mapping.askingAi" : "tables.import.mapping.askAi")}
             </button>
           )}
-          {aiNote && <span className="text-[11px] text-muted-foreground">{aiNote}</span>}
+          {aiNote && <span className="text-2xs text-muted-foreground">{aiNote}</span>}
         </div>
       )}
 
       <div className="max-h-[45vh] overflow-y-auto rounded-md border border-border">
         <table className="w-full text-xs">
-          <thead className="sticky top-0 z-10 bg-muted text-[10px] uppercase tracking-wider text-muted-foreground">
+          <thead className="sticky top-0 z-10 bg-muted text-2xs uppercase tracking-wider text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-medium">{t("tables.import.mapping.field")}</th>
               <th className="px-3 py-2 text-left font-medium">{t("tables.import.mapping.fromFile")}</th>
@@ -230,11 +230,11 @@ export function StandardMappingPanel({
                     <div className="font-medium">{label(f.key)}</div>
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {(f.required || f.requiredGroup) && (
-                        <span className={"rounded px-1 text-[10px] " + (isMissing ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}>
+                        <span className={"rounded px-1 text-2xs " + (isMissing ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}>
                           {t(f.requiredGroup ? "tables.import.mapping.requiredOne" : "tables.import.mapping.required")}
                         </span>
                       )}
-                      <span className="font-mono text-[10px] text-faint">{f.key}</span>
+                      <span className="font-mono text-2xs text-faint">{f.key}</span>
                     </div>
                   </td>
                   <td className="px-3 py-1.5">
@@ -243,14 +243,14 @@ export function StandardMappingPanel({
                       disabled={disabled}
                       onValueChange={(v) => setField(f.key, v === NONE ? null : v === FIXED ? { value: "" } : { column: v.slice(4) })}
                     >
-                      <SelectTrigger className="h-7 w-44 text-[11px]">
+                      <SelectTrigger className="h-7 w-44 text-2xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={NONE} className="text-[11px]">{t("tables.import.mapping.notInFile")}</SelectItem>
-                        {f.allowFixed && <SelectItem value={FIXED} className="text-[11px]">{t("tables.import.mapping.typeValue")}</SelectItem>}
+                        <SelectItem value={NONE} className="text-2xs">{t("tables.import.mapping.notInFile")}</SelectItem>
+                        {f.allowFixed && <SelectItem value={FIXED} className="text-2xs">{t("tables.import.mapping.typeValue")}</SelectItem>}
                         {data.columns.map((c) => (
-                          <SelectItem key={c.name} value={`col:${c.name}`} className="text-[11px]">{c.name}</SelectItem>
+                          <SelectItem key={c.name} value={`col:${c.name}`} className="text-2xs">{c.name}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -260,7 +260,7 @@ export function StandardMappingPanel({
                         disabled={disabled}
                         onChange={(e) => setField(f.key, { value: e.target.value })}
                         placeholder={t(`tables.import.mapping.valuePlaceholder.${f.type === "date" ? "date" : "text"}`)}
-                        className="mt-1 h-7 w-44 rounded-md border border-border bg-background px-2 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="mt-1 h-7 w-44 rounded-md border border-border bg-background px-2 text-2xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       />
                     )}
                     {src && "column" in src && f.type === "date" && (
@@ -271,19 +271,19 @@ export function StandardMappingPanel({
                       />
                     )}
                     {origin && (
-                      <div className="mt-0.5 text-[10px] text-muted-foreground">
+                      <div className="mt-0.5 text-2xs text-muted-foreground">
                         {t("tables.import.mapping.origin." + origin)}
                       </div>
                     )}
                     {derived && (
-                      <div className="mt-0.5 text-[10px] text-success">
+                      <div className="mt-0.5 text-2xs text-success">
                         {f.key === "sale_time"
                           ? t("tables.import.mapping.derivedTime")
                           : t("tables.import.mapping.derived").replace("{fields}", f.derivedFrom!.map(label).join(" × "))}
                       </div>
                     )}
                   </td>
-                  <td className="max-w-[12rem] truncate px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                  <td className="max-w-[12rem] truncate px-3 py-1.5 font-mono text-2xs text-muted-foreground">
                     {sample ?? ""}
                   </td>
                 </tr>
@@ -294,7 +294,7 @@ export function StandardMappingPanel({
       </div>
 
       {missing.length > 0 && (
-        <p className="text-[11px] text-destructive">
+        <p className="text-2xs text-destructive">
           {t("tables.import.mapping.missing").replace(
             "{fields}",
             missing.map((m) => m.split("|").map(label).join(t("tables.import.mapping.or"))).join(", "),

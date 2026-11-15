@@ -29,7 +29,8 @@ const Schema = z.object({
   resetPassword: z.string().min(8).max(200).optional(),
 });
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
   const body = await req.json().catch(() => null);
@@ -44,7 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     include: { user: { select: { email: true } } },
   });
   if (!target) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (parsed.data.resetPassword && await belongsToOtherWorkspaces(params.id, user.tenantId)) {
+  if (parsed.data.resetPassword && (await belongsToOtherWorkspaces(params.id, user.tenantId))) {
     return NextResponse.json({ error: "This account also belongs to other workspaces, so only its owner can change it — they can reset their password from the sign-in page." }, { status: 403 });
   }
 

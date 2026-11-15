@@ -43,9 +43,9 @@ export function internalBase(): string {
   return process.env.INTERNAL_BASE_URL ?? process.env.NEXTAUTH_URL ?? "http://localhost:3100";
 }
 
-export function appBaseFromHeaders(): string {
+export async function appBaseFromHeaders(): Promise<string> {
   if (process.env.NEXTAUTH_URL) return process.env.NEXTAUTH_URL.replace(/\/+$/, "");
-  const h = headers();
+  const h = (await headers());
   const proto = h.get("x-forwarded-proto");
   const host = h.get("x-forwarded-host") ?? h.get("host");
   if (proto && host) return `${proto}://${host}`;

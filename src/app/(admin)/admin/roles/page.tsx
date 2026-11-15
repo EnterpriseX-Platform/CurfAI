@@ -9,8 +9,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -19,7 +19,7 @@ export default async function RolesAdminPage() {
   const user = (session?.user as any) ?? null;
   if (!session) redirect("/login?callbackUrl=/admin/roles");
   if ((session.user as any)?.role !== "admin") redirect("/reports");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   const roles = await prisma.role.findMany({ where: { tenantId: user.tenantId }, orderBy: { slug: "asc" } });
 

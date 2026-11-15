@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { isRlsEnabled } from "@/lib/rls";
+import { cacheUrl, pingRedis, queueUrl } from "@/lib/redis";
 
 /**
  * Liveness + readiness probe. Hit by every PaaS (Railway, Fly, Render,
@@ -9,6 +10,9 @@ import { isRlsEnabled } from "@/lib/rls";
  * Semantics:
  *   200 + { status: "ok", db: "ok", rls, uptimeS, version } when DB is reachable.
  *   503 + { status: "degraded", db: "fail", error }    when the DB roundtrip fails.
+ *
+ * Redis (when configured) is reported, never fatal: the app degrades to in-process limits and waits without it, so a blip
+ * in Redis must not pull every pod out of the load balancer. `redis`/`queue` are "off" (not configured), "ok" or "fail".
  *
  * Deliberately NOT guarded by auth - health checks come from infra.
  */
@@ -22,7 +26,12 @@ export async function GET() {
 
   try {
     await prisma.$queryRaw`SELECT 1 as ok`;
-    return NextResponse.json({ status: "ok", db: "ok", rls: isRlsEnabled(), uptimeS, version });
+    const [cache, queue] = await Promise.all([
+      cacheUrl() ? pingRedis("cache") : null,
+      queueUrl() ? pingRedis("queue") : null,
+    ]);
+    const word = (p: { ok: boolean } | null) => (p === null ? "off" : p.ok ? "ok" : "fail");
+    return NextResponse.json({ status: "ok", db: "ok", redis: word(cache), queue: word(queue), rls: isRlsEnabled(), uptimeS, version });
   } catch (e: any) {
     return NextResponse.json(
       { status: "degraded", db: "fail", error: e?.message ?? "db error", uptimeS, version },

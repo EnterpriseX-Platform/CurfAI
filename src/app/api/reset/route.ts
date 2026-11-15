@@ -6,6 +6,8 @@ import { prisma } from "@/lib/db";
 import { recordAudit } from "@/lib/audit";
 import { ensureLimit } from "@/lib/rateLimit";
 import { clientIp } from "@/lib/security/clientIp";
+import { markEmailVerified } from "@/lib/emailVerification";
+import { ee } from "@/ee";
 
 export const dynamic = "force-dynamic";
 
@@ -20,8 +22,14 @@ function hashToken(t: string): string {
 
 export async function POST(req: NextRequest) {
   const ip = clientIp(req);
-  const limited = ensureLimit("reset", `ip:${ip}`, 10, 5 * 60_000);
+  const limited = await ensureLimit("reset", `ip:${ip}`, 10, 5 * 60_000);
   if (limited) return limited;
+
+  // Keycloak is the only sign-in: a password is chosen there, through the link it mails. Curf's own reset/invite links
+  // (issued before the cutover) no longer set anything.
+  if (ee.identity?.only()) {
+    return NextResponse.json({ error: "Passwords are managed by single sign-on now. Use \"Forgot password\" on the sign-in page for a new link." }, { status: 410 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = Schema.safeParse(body);
@@ -54,6 +62,11 @@ export async function POST(req: NextRequest) {
     data: { passwordHash, passwordChangedAt: new Date() },
     select: { id: true, email: true },
   });
+  // The link was mailed to this address, so using it proves the address —
+  // for a reset and for an invite alike. This is also what lets someone who
+  // finds a stranger's password on "their" account take it back: resetting
+  // replaces that password and verifies the address in one step.
+  await markEmailVerified(target.id);
 
   // One passwordHash change takes effect for every workspace this email
   // belongs to — audit it against each one, not just PasswordResetToken's

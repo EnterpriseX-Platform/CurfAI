@@ -29,6 +29,9 @@ import {
 import { useToast } from "@/lib/toast";
 import { refreshNavCounts } from "@/lib/navCounts";
 import { KioskTokenPanel } from "./KioskTokenPanel";
+import { BlockCardName, BlockPicker } from "./BlockCards";
+import { parseSlotKey, slotKey } from "@/lib/dashboards/slotKey";
+import { DashboardCheck } from "./DashboardCheck";
 import { UpgradeLock, isFeatureAvailable } from "@/components/common/UpgradeLock";
 import { InlineTagManager } from "@/components/common/InlineTagManager";
 
@@ -382,11 +385,15 @@ function DashboardForm({
   }, [editing]);
 
   const reportById = new Map(availableReports.map((r) => [r.id, r]));
-  const available = availableReports.filter((r) => !reportIds.includes(r.id));
 
   function addReport(id: string) {
     if (reportIds.includes(id) || reportIds.length >= 12) return;
     setReportIds([...reportIds, id]);
+  }
+  function addBlock(reportId: string, blockId: string) {
+    const key = slotKey(reportId, blockId);
+    if (reportIds.includes(key) || reportIds.length >= 12) return;
+    setReportIds([...reportIds, key]);
   }
   function removeReport(id: string) {
     setReportIds(reportIds.filter((x) => x !== id));
@@ -512,7 +519,7 @@ function DashboardForm({
                 <rect x="28" y="24" width="16" height="4" rx="1" fill="currentColor" fillOpacity="0.5" />
               </svg>
               <span className="text-xs font-medium text-center">{t("dashboardsMgr.tpl.tableChart")}</span>
-              <span className="text-[10px] text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.tableChart.desc")}</span>
+              <span className="text-2xs text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.tableChart.desc")}</span>
             </div>
           </label>
           {/* Chart Only */}
@@ -526,7 +533,7 @@ function DashboardForm({
                 <rect x="32" y="14" width="8" height="14" rx="1" fill="currentColor" />
               </svg>
               <span className="text-xs font-medium">{t("dashboardsMgr.tpl.chartOnly")}</span>
-              <span className="text-[10px] text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.chartOnly.desc")}</span>
+              <span className="text-2xs text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.chartOnly.desc")}</span>
             </div>
           </label>
           {/* Custom — free-form drag/resize, edited live on the dashboard
@@ -543,7 +550,7 @@ function DashboardForm({
                 <rect x="22" y="15" width="21" height="13" rx="1" fill="currentColor" fillOpacity="0.85" />
               </svg>
               <span className="text-xs font-medium text-center">{t("dashboardsMgr.tpl.custom")}</span>
-              <span className="text-[10px] text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.custom.desc")}</span>
+              <span className="text-2xs text-muted-foreground text-center leading-tight">{t("dashboardsMgr.tpl.custom.desc")}</span>
             </div>
           </label>
         </div>
@@ -559,7 +566,7 @@ function DashboardForm({
                   <rect width="36" height="24" rx="3" fill="currentColor" fillOpacity="0.15" />
                   <rect x="3" y="3" width="30" height="18" rx="2" fill="currentColor" />
                 </svg>
-                <span className="text-[10px] font-medium">{t("dashboardsMgr.chartMode.carousel")}</span>
+                <span className="text-2xs font-medium">{t("dashboardsMgr.chartMode.carousel")}</span>
               </label>
               <label className={`cursor-pointer rounded-md border-2 p-2 text-center transition-colors ${chartSubLayout === "grid_2x1" ? "border-primary bg-primary/10" : "border-transparent bg-muted/30 hover:bg-accent/50"}`}>
                 <input type="radio" className="sr-only" checked={chartSubLayout === "grid_2x1"} onChange={() => setChartSubLayout("grid_2x1")} />
@@ -568,7 +575,7 @@ function DashboardForm({
                   <rect x="3" y="3" width="13" height="18" rx="1" fill="currentColor" />
                   <rect x="20" y="3" width="13" height="18" rx="1" fill="currentColor" />
                 </svg>
-                <span className="text-[10px] font-medium">{t("dashboardsMgr.chartMode.grid1x2")}</span>
+                <span className="text-2xs font-medium">{t("dashboardsMgr.chartMode.grid1x2")}</span>
               </label>
               <label className={`cursor-pointer rounded-md border-2 p-2 text-center transition-colors ${chartSubLayout === "grid_2x2" ? "border-primary bg-primary/10" : "border-transparent bg-muted/30 hover:bg-accent/50"}`}>
                 <input type="radio" className="sr-only" checked={chartSubLayout === "grid_2x2"} onChange={() => setChartSubLayout("grid_2x2")} />
@@ -579,7 +586,7 @@ function DashboardForm({
                   <rect x="3" y="13" width="13" height="8" rx="1" fill="currentColor" />
                   <rect x="20" y="13" width="13" height="8" rx="1" fill="currentColor" />
                 </svg>
-                <span className="text-[10px] font-medium">{t("dashboardsMgr.chartMode.grid2x2")}</span>
+                <span className="text-2xs font-medium">{t("dashboardsMgr.chartMode.grid2x2")}</span>
               </label>
             </div>
           </div>
@@ -643,13 +650,17 @@ function DashboardForm({
             </div>
           )}
           {reportIds.map((id, i) => {
-            const r = reportById.get(id);
+            const ref = parseSlotKey(id);
+            const r = reportById.get(ref.reportId);
             return (
               <div key={id} className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5 last:border-b-0">
                 <span className="w-6 text-center text-xs text-muted-foreground">{i + 1}.</span>
-                <span className="flex-1 text-sm">{r?.name ?? <span className="italic text-muted-foreground">{t("dashboardsMgr.missingReport").replace("{id}", id.slice(0, 8))}</span>}</span>
+                <span className="flex-1 text-sm">{ref.blockId
+                  ? <BlockCardName slotKey={id} reportName={r?.name ?? null} />
+                  : (r?.name ?? <span className="italic text-muted-foreground">{t("dashboardsMgr.missingReport").replace("{id}", id.slice(0, 8))}</span>)}</span>
+                {ref.blockId && <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-2xs text-primary">{t("dashboardsMgr.blockBadge")}</span>}
                 {r?.category && (
-                  <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.category}</span>
+                  <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-2xs text-muted-foreground">{r.category}</span>
                 )}
                 <Button size="icon" variant="ghost" onClick={() => move(id, -1)} disabled={i === 0} title={t("dashboardsMgr.moveUp")}>
                   <MoveUp className="h-3.5 w-3.5" />
@@ -664,30 +675,31 @@ function DashboardForm({
             );
           })}
         </div>
+        <DashboardCheck reportIds={reportIds} layout={layout} />
       </F>
 
       {/* Available reports. */}
       <F label={t("dashboardsMgr.availableReports")}>
         <div className="max-h-48 overflow-y-auto rounded-md border bg-background">
-          {available.length === 0 && (
-            <div className="p-4 text-center text-xs text-muted-foreground italic">
-              {availableReports.length === 0 ? t("dashboardsMgr.noReportsYet") : t("dashboardsMgr.allReportsAdded")}
-            </div>
+          {availableReports.length === 0 && (
+            <div className="p-4 text-center text-xs text-muted-foreground italic">{t("dashboardsMgr.noReportsYet")}</div>
           )}
-          {available.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              className="flex w-full items-center gap-2 border-b border-border/60 px-3 py-1.5 text-left hover:bg-muted/40 last:border-b-0"
-              onClick={() => addReport(r.id)}
-              disabled={reportIds.length >= 12}
-            >
-              <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="flex-1 text-sm">{r.name}</span>
-              {r.category && (
-                <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.category}</span>
-              )}
-            </button>
+          {availableReports.map((r) => (
+            <div key={r.id} className="border-b border-border/60 last:border-b-0">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/40 disabled:opacity-50"
+                onClick={() => addReport(r.id)}
+                disabled={reportIds.length >= 12 || reportIds.includes(r.id)}
+              >
+                <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="flex-1 text-sm">{r.name}</span>
+                {r.category && (
+                  <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-2xs text-muted-foreground">{r.category}</span>
+                )}
+              </button>
+              <BlockPicker reportId={r.id} taken={reportIds} full={reportIds.length >= 12} onAdd={(blockId) => addBlock(r.id, blockId)} />
+            </div>
           ))}
         </div>
       </F>
@@ -756,7 +768,7 @@ function VisibilityPicker({
 
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("dashboardsMgr.vis.heading")}</p>
+      <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("dashboardsMgr.vis.heading")}</p>
       <div className="grid gap-1.5 text-sm">
         <label className="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted/40">
           <input type="radio" className="mt-1" checked={mode === "tenant"} onChange={() => onChange({ mode: "tenant" })} />

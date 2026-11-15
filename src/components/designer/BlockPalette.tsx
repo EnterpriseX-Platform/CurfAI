@@ -9,6 +9,11 @@ import { useDesignerStore } from "@/lib/reporting/store";
 import type { BlockType } from "@/lib/reporting/schema";
 import { BLOCK_TEMPLATES, type BlockTemplate } from "@/lib/reporting/blockTemplates";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { eeClient } from "@/ee/client";
+
+// AI chart suggestions add blocks, so they sit with the palette rather
+// than in the document bar.
+const SuggestChartButton = eeClient.designer?.SuggestChartButton ?? null;
 
 // Group blocks into categories for a cleaner palette UX. Block names come
 // from the blockType.<type> keys and template text from blockTemplate.<id>,
@@ -25,7 +30,7 @@ const TEMPLATE_ICONS = {
   LayoutDashboard, FileText, Award,
 } as const;
 
-export function BlockPalette() {
+export function BlockPalette({ reportId }: { reportId?: string }) {
   const addBlock = useDesignerStore((s) => s.addBlock);
   const addBlockTemplate = useDesignerStore((s) => s.addBlockTemplate);
   const { t } = useT();
@@ -37,26 +42,31 @@ export function BlockPalette() {
         <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-0.5">
           <button
             onClick={() => setTab("blocks")}
-            className={"rounded-sm px-2 py-1 text-[11px] font-medium transition-colors " + (tab === "blocks" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
+            className={"rounded-sm px-2 py-1 text-2xs font-medium transition-colors " + (tab === "blocks" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
           >
             {t("blockPalette.blocksTab")}
           </button>
           <button
             onClick={() => setTab("templates")}
-            className={"rounded-sm px-2 py-1 text-[11px] font-medium transition-colors " + (tab === "templates" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
+            className={"rounded-sm px-2 py-1 text-2xs font-medium transition-colors " + (tab === "templates" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
           >
             {t("nav.templates")}
           </button>
         </div>
+        {SuggestChartButton && reportId && (
+          <div className="mt-2 [&>button]:w-full [&>button]:justify-start">
+            <SuggestChartButton reportId={reportId} />
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "blocks" ? (
           <div className="flex flex-col gap-5">
-            <p className="px-1 text-[11px] text-muted-foreground">{t("blockPalette.blocksHint")}</p>
+            <p className="px-1 text-2xs text-muted-foreground">{t("blockPalette.blocksHint")}</p>
             {GROUPS.map((g) => (
               <div key={g.labelKey} className="space-y-1">
-                <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">{t(g.labelKey)}</p>
+                <p className="px-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground/80">{t(g.labelKey)}</p>
                 <div className="grid grid-cols-2 gap-1.5">
                   {g.types.filter((bt) => BlockOrder.includes(bt)).map((type) => {
                     const entry = BlockRegistry[type];
@@ -87,7 +97,7 @@ export function BlockPalette() {
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            <p className="px-1 text-[11px] text-muted-foreground">{t("blockPalette.templatesHint")}</p>
+            <p className="px-1 text-2xs text-muted-foreground">{t("blockPalette.templatesHint")}</p>
             {BLOCK_TEMPLATES.map((tpl) => (
               <TemplateCard key={tpl.id} tpl={tpl} onInsert={() => addBlockTemplate(tpl.blocks)} />
             ))}
@@ -116,8 +126,8 @@ function TemplateCard({ tpl, onInsert }: { tpl: BlockTemplate; onInsert: () => v
       </span>
       <div className="min-w-0">
         <div className="text-xs font-medium leading-tight">{t(`blockTemplate.${tpl.id}`)}</div>
-        <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground line-clamp-2">{t(`blockTemplate.${tpl.id}.desc`)}</div>
-        <div className="mt-1 inline-flex rounded-sm bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+        <div className="mt-0.5 text-2xs leading-snug text-muted-foreground line-clamp-2">{t(`blockTemplate.${tpl.id}.desc`)}</div>
+        <div className="mt-1 inline-flex rounded-sm bg-muted px-1 py-0.5 text-2xs font-medium text-muted-foreground">
           {tpl.blocks.length === 1 ? t("blockPalette.oneBlock") : t("blockPalette.nBlocks").replace("{n}", String(tpl.blocks.length))}
         </div>
       </div>

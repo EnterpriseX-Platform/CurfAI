@@ -11,8 +11,12 @@ import { useT } from "@/lib/i18n/LocaleContext";
  * CLICK TO DRILL chip, filter bar, and the bottom-right "What is this?"
  * pill — with a CSS pulse animation and a tooltip pinned next to each.
  *
- * Auto-runs once per browser. Different localStorage key from the badge so
- * the two features don't shadow each other.
+ * Never starts on its own: a first-time visitor gets a small "Take the
+ * tour" chip in the corner, and the tour runs only when they click it — an
+ * auto-started tooltip used to land on top of the first number they came to
+ * read. Dismissing or finishing remembers it per browser, under a different
+ * localStorage key from the badge, and tells the badge (TOUR_DONE_EVENT) it
+ * may now show its own pill, so only one floating helper is up at a time.
  *
  * Why hand-rolled instead of a coach-mark library:
  *   - We need ~4 steps, no library buys back its kB cost
@@ -20,7 +24,10 @@ import { useT } from "@/lib/i18n/LocaleContext";
  *   - Easy to evolve (add a step, change copy) without learning an API
  */
 
-const STORAGE_KEY = "curf-tour-v1";
+export const TOUR_STORAGE_KEY = "curf-tour-v1";
+const STORAGE_KEY = TOUR_STORAGE_KEY;
+/** Fired on window when a tour is finished or dismissed. */
+export const TOUR_DONE_EVENT = "curf:tour-done";
 
 export type Step = {
   /** CSS selector for the element this step points at. First match wins. */
@@ -82,24 +89,24 @@ export function OnboardingTour({
   const { t } = useT();
   const steps = given ?? reportSteps(t);
   const [active, setActive] = useState(false);
+  const [invited, setInvited] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   // Bounding rect of the current step's target. We re-measure on every step
   // change AND on resize/scroll so the tooltip never drifts off the element.
   const [rect, setRect] = useState<DOMRect | null>(null);
   const targetRef = useRef<HTMLElement | null>(null);
 
-  // ----- Lifecycle: decide whether to auto-start -----
+  // ----- Lifecycle: decide whether to offer the tour -----
   useEffect(() => {
     let cancelled = false;
     try {
       if (window.localStorage.getItem(storageKey) === "1") return;
     } catch {
-      /* storage blocked, run anyway */
+      /* storage blocked, offer anyway */
     }
     // Wait a beat so the report has time to render and our [data-*] anchors
-    // exist in the DOM. 800ms is comfortably longer than the typical Recharts
-    // / map mount, but not so long the user has already started clicking.
-    const timer = setTimeout(() => { if (!cancelled) setActive(true); }, 800);
+    // exist by the time the visitor accepts.
+    const timer = setTimeout(() => { if (!cancelled) setInvited(true); }, 800);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [storageKey]);
 
@@ -170,9 +177,17 @@ export function OnboardingTour({
   function finishTour(rememberDismissal: boolean) {
     document.querySelectorAll("." + PULSE_CLASS).forEach((n) => n.classList.remove(PULSE_CLASS));
     setActive(false);
+    setInvited(false);
     if (rememberDismissal) {
       try { window.localStorage.setItem(storageKey, "1"); } catch { /* ignore */ }
     }
+    window.dispatchEvent(new Event(TOUR_DONE_EVENT));
+  }
+
+  function start() {
+    setInvited(false);
+    setStepIdx(0);
+    setActive(true);
   }
 
   function next() {
@@ -182,7 +197,24 @@ export function OnboardingTour({
   }
   function skip() { finishTour(true); }
 
-  if (!active) return null;
+  if (!active) {
+    if (!invited) return null;
+    return (
+      <div className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] right-4 z-40 flex items-center gap-1 rounded-full border border-border bg-card py-1 pl-3 pr-1 text-sm shadow-md md:bottom-4">
+        <button type="button" onClick={start} className="inline-flex items-center gap-1.5 font-medium text-primary hover:text-primary-ink">
+          <Sparkles className="h-3.5 w-3.5" /> {t("tour.invite")}
+        </button>
+        <button
+          type="button"
+          onClick={skip}
+          className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label={t("tour.skip")}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
   const step = steps[stepIdx];
 
   // Position the tooltip relative to the target. Falls back to centered
@@ -246,7 +278,7 @@ export function OnboardingTour({
         style={tooltipStyle}
       >
         <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+          <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-primary">
             <Sparkles className="h-3 w-3" />
             <span>{t("tour.progress").replace("{n}", String(stepIdx + 1)).replace("{m}", String(steps.length))}</span>
           </div>
@@ -260,19 +292,19 @@ export function OnboardingTour({
           </button>
         </div>
         <h3 className="text-sm font-semibold text-foreground">{step.title}</h3>
-        <p className="mt-1 text-[12px] leading-snug text-muted-foreground">{step.body}</p>
+        <p className="mt-1 text-xs leading-snug text-muted-foreground">{step.body}</p>
         <div className="mt-3 flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={skip}
-            className="text-[11px] text-muted-foreground hover:text-foreground"
+            className="text-2xs text-muted-foreground hover:text-foreground"
           >
             {t("tour.skip")}
           </button>
           <button
             type="button"
             onClick={next}
-            className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90"
+            className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-2xs font-medium text-primary-foreground hover:opacity-90"
           >
             {stepIdx + 1 === steps.length ? t("tour.done") : t("tour.next")}
             {stepIdx + 1 < steps.length && <ArrowRight className="h-3 w-3" />}

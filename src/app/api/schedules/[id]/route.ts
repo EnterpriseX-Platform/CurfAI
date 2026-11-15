@@ -10,7 +10,8 @@ import { canBuild } from "@/lib/roles";
 // the Schedule table but have their own routes and stricter rules
 // (watcher ownership, admin-only digests) that this route mustn't bypass.
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!canBuild(user.role)) return NextResponse.json({ error: "Viewer role is read-only" }, { status: 403 });
@@ -33,7 +34,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   }
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!canBuild(user.role)) return NextResponse.json({ error: "Viewer role is read-only" }, { status: 403 });

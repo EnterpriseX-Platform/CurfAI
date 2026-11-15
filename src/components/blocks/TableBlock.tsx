@@ -238,8 +238,8 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
         </div>
       )}
       <div className="mb-2 flex items-center justify-between gap-3 pr-8">
-        <h3 className="truncate text-base font-semibold tracking-tight text-foreground">{title ?? ""}</h3>
-        <span className="shrink-0 font-mono text-xs text-faint">table · {rows.length} {t("kpi.rows")}</span>
+        <h3 className="line-clamp-2 break-words text-base font-semibold tracking-tight text-foreground" title={title ?? undefined}>{title ?? ""}</h3>
+        <span className="shrink-0 font-mono text-xs text-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 print:hidden">table · {rows.length} {t("kpi.rows")}</span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-sm">
@@ -251,7 +251,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
                 <th
                   key={col.key}
                   className={cn(
-                    "whitespace-nowrap border-b border-border px-3 py-2 text-left text-[11px] font-medium uppercase tracking-[.04em]",
+                    "whitespace-nowrap border-b border-border px-3 py-2 text-left text-2xs font-medium uppercase tracking-[.04em]",
                     col.align === "right" && "text-right",
                     col.align === "center" && "text-center",
                     (col.type === "number" || col.type === "currency" || col.type === "percent") &&
@@ -262,7 +262,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
                 </th>
               ))}
               {!print && ((Array.isArray(actions) && actions.length > 0) || onOperateAction) && (
-                <th className="w-1 whitespace-nowrap border-b border-border px-3 py-2 text-right text-[11px] font-medium uppercase tracking-[.04em]">Actions</th>
+                <th className="w-1 whitespace-nowrap border-b border-border px-3 py-2 text-right text-2xs font-medium uppercase tracking-[.04em]">Actions</th>
               )}
             </tr>
           </thead>
@@ -417,7 +417,7 @@ function TableBlockInner({ block, dataset, provenance, print, report, params, re
                       {onOperateAction && (
                         <button
                           type="button"
-                          className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-primary hover:text-primary"
+                          className="rounded border border-border px-1.5 py-0.5 text-2xs text-muted-foreground hover:border-primary hover:text-primary"
                           onClick={(e) => {
                             e.stopPropagation();
                             onOperateAction({

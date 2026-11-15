@@ -7,11 +7,10 @@
  *
  *   broadcastToTenant(tenantId, { kind: "lake.bust", dataSourceId });
  *
- * Why home-grown instead of Redis pub/sub: Curf is single-process in the
- * common deploy (1-2 Node containers behind a load balancer); the rare
- * customer running 10+ replicas can route the SSE endpoint through a
- * sticky session, or we add Redis later. For now the registry is in-
- * process and lives on globalThis to survive HMR.
+ * The registry of connected clients is in process (it lives on globalThis to
+ * survive HMR). With Redis configured (lib/redis/notices.ts) every event is also
+ * published, and each replica delivers it to its own clients, so a viewer on one
+ * pod hears a change made on another. Without Redis nothing else happens.
  *
  * Event shapes:
  *   - { kind: "lake.bust"; dataSourceId; tableName?; ts }
@@ -23,6 +22,8 @@
  *   - { kind: "ping"; ts }
  *       Keep-alive heartbeat (every 25s) so reverse proxies don't reap.
  */
+
+import { onNotice, publishNotice } from "@/lib/redis/notices";
 
 export type RealtimeEvent =
   | { kind: "lake.bust"; dataSourceId: string; tableName?: string | null; ts: number }
@@ -58,6 +59,16 @@ export function subscribe(tenantId: string, send: Subscriber["send"]): { close: 
 }
 
 export function broadcastToTenant(tenantId: string, event: RealtimeEvent): void {
+  deliverLocally(tenantId, event);
+  if (event.kind !== "ping") publishNotice("realtime", { tenantId, event });
+}
+
+// An event raised on another replica: deliver it to the clients connected here.
+onNotice("realtime", (p: { tenantId: string; event: RealtimeEvent }) => {
+  if (p?.tenantId && p.event) deliverLocally(p.tenantId, p.event);
+});
+
+function deliverLocally(tenantId: string, event: RealtimeEvent): void {
   const set = REGISTRY.get(tenantId);
   if (!set || set.size === 0) return;
   for (const sub of set) {

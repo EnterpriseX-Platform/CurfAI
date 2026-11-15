@@ -86,7 +86,7 @@ export function Scatter3D({ ctx, palette }: { ctx: ChartRenderCtx; palette: stri
             scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: new THREE.Color(css ? `hsl(${css.replace(/\s+/g, ", ")})` : "#d6d9e3") })));
             // Axis ends and names.
             const axis = "pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] text-muted-foreground";
-            const title = "pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-semibold text-foreground";
+            const title = "pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-2xs font-semibold text-foreground";
             label(short(rx[0]), [-HALF, -HALF - 6, HALF + 6], axis);
             label(short(rx[1]), [HALF, -HALF - 6, HALF + 6], axis);
             label(`${name(xField)} →`, [0, -HALF - 14, HALF + 10], title);

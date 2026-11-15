@@ -57,7 +57,7 @@ export function AnnotationsEditor({
   return (
     <div className="space-y-2">
       {list.length === 0 && (
-        <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-[11px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-2xs text-muted-foreground">
           {t("annotationsEditor.empty")}
         </p>
       )}
@@ -74,7 +74,7 @@ export function AnnotationsEditor({
           <div className="flex items-center gap-1.5">
             <div className="grid flex-1 grid-cols-2 gap-1.5">
               <div className="grid gap-0.5">
-                <Label className="text-[10px]">{t("annotationsEditor.xValue")}</Label>
+                <Label className="text-2xs">{t("annotationsEditor.xValue")}</Label>
                 <Input
                   list="annot-xvals"
                   value={a.xValue}
@@ -84,7 +84,7 @@ export function AnnotationsEditor({
                 />
               </div>
               <div className="grid gap-0.5">
-                <Label className="text-[10px]">{t("common.label")}</Label>
+                <Label className="text-2xs">{t("common.label")}</Label>
                 <Input
                   value={a.label}
                   onChange={(e) => patchOne(i, { label: e.target.value })}
@@ -108,7 +108,7 @@ export function AnnotationsEditor({
             onChange={(v) => patchOne(i, { variant: v })}
           />
           <div className="grid gap-1">
-            <Label className="text-[10px] text-muted-foreground">{t("common.icon")}</Label>
+            <Label className="text-2xs text-muted-foreground">{t("common.icon")}</Label>
             <IconKindGrid
               value={a.iconKind}
               variant={a.variant}

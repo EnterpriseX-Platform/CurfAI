@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Pencil, Loader2, Clock, RotateCcw, Eye, RefreshCw, Check, MoreHorizontal, AlertTriangle,
+  Pencil, Loader2, Clock, RotateCcw, Eye, RefreshCw, Check, MoreHorizontal, AlertTriangle, History, Presentation,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { Report } from "@/lib/reporting/schema";
@@ -19,6 +19,7 @@ import { ReportExportMenu } from "@/components/reports/ReportExportMenu";
 import { ShareButton } from "./ShareButton";
 import { RegenerateButton } from "./RegenerateButton";
 import { WhatIsThisBadge } from "@/components/viewer/WhatIsThisBadge";
+import { localizeBlock } from "@/lib/reporting/localize";
 import { OnboardingTour } from "@/components/viewer/OnboardingTour";
 import { PresenceChip } from "./PresenceChip";
 import { OperateActionsProvider } from "@/components/providers/OperateActionsProvider";
@@ -26,6 +27,7 @@ import { eeClient } from "@/ee/client";
 import { reportDisplay } from "@/lib/reporting/schema";
 
 const WatcherSuggestionsBanner = eeClient.reports?.WatcherSuggestionsBanner ?? null;
+const STORY_MODE = !!eeClient.designer?.storyMode;
 const AskCurfPanel = eeClient.reports?.AskCurfPanel ?? null;
 const IS_COMMUNITY = eeClient.edition === "community";
 const SuggestOperateActionsButton = eeClient.reports?.SuggestOperateActionsButton ?? null;
@@ -69,11 +71,6 @@ export function ReportViewerShell({
   // instead of silently rendering as a read-only viewer forever.
   const { role, user } = useResilientSession();
   const isEditor = canBuild(role);
-  // Eyebrow: "Reports / <workspace>" — the active membership's name, same
-  // source the rail's workspace block reads.
-  const memberships = ((user as any)?.memberships ?? []) as Array<{ tenantId: string; tenantName: string }>;
-  const activeTenantId = (user as any)?.activeTenantId ?? (user as any)?.tenantId;
-  const tenantName = memberships.find((m) => m.tenantId === activeTenantId)?.tenantName ?? null;
   // Content locale (report i18n overrides) — a different axis from the
   // report's tenant-authored data than the UI chrome locale, but reusing
   // the same viewer-facing signal is the simplest thing that could be
@@ -81,6 +78,8 @@ export function ReportViewerShell({
   // should show it too.
   const { locale, t } = useT();
   const [params, setParams] = useState(initialParams);
+  // Where the Ask Curf panel docks: an element beside the report body (state, so the panel renders once it exists).
+  const [askHost, setAskHost] = useState<HTMLElement | null>(null);
   // Auto-refresh's interval callback reads this instead of closing over
   // `params` directly — keeps the timer itself stable (no reset on every
   // filter change) while still always applying the CURRENT filters, not
@@ -225,6 +224,14 @@ export function ReportViewerShell({
   })();
 
   const reportName = report.nameI18n?.[locale] ?? report.name;
+  // A report that opens with its own Title block already says its name in
+  // the document (and in the PDF); repeating it as the page's H1 printed the
+  // same words twice, one above the other. The header then keeps the name in
+  // its breadcrumb and leads with the receipt instead.
+  const firstBlock = report.pages[0]?.blocks[0];
+  const openingBlock = firstBlock ? localizeBlock(firstBlock, locale) : null;
+  const titleInDocument = openingBlock?.type === "title"
+    && openingBlock.config.text.trim().toLowerCase() === (reportName ?? "").trim().toLowerCase();
   // The page header's receipt: the primary query's data hash plus the rows
   // every query returned — the report-level version of a KPI card's receipt.
   const primaryProof = provenance?.[report.dataSources[0]?.id ?? ""];
@@ -293,7 +300,7 @@ export function ReportViewerShell({
             <div className="flex items-center gap-2 text-primary-ink">
               <Eye className="h-3.5 w-3.5" />
               <span className="font-medium">Previewing as</span>
-              <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11px]">{previewAsRole}</code>
+              <code className="rounded bg-background px-1.5 py-0.5 font-mono text-2xs">{previewAsRole}</code>
               <span className="text-muted-foreground">&mdash; role-gated blocks hidden as that reader would see them.</span>
             </div>
             <Button asChild size="sm" variant="outline" className="h-7 text-xs">
@@ -341,6 +348,9 @@ export function ReportViewerShell({
           </div>
         )}
       </div>
+      {/* Ask Curf docks in the slot beside the report (below): the report narrows to make room, so the chart stays in view. */}
+      <div className="flex items-start">
+      <div className="min-w-0 flex-1">
       <div className="mx-auto w-full max-w-[1264px] px-8 pb-12 pt-7">
         {/* Page header — the object's own title, its version and who
             published it, the run receipt, and the actions that belong to
@@ -348,16 +358,17 @@ export function ReportViewerShell({
             behind "more"). The top bar keeps only the global Ask field. */}
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
           <div className="min-w-0">
-            <div className="text-xs font-medium uppercase tracking-[.04em] text-muted-foreground">
-              <Link href="/reports" className="hover:text-foreground">Reports</Link>
-              {tenantName && <span> / {tenantName}</span>}
-            </div>
-            <h1 className="mt-1 text-[32px] font-semibold leading-[1.15] tracking-[-.015em] text-foreground [text-wrap:balance]">
-              {reportName}
-            </h1>
+            {/* Where this is (Reports / name, the workspace) is the top bar's job; it is not repeated here. */}
+            {titleInDocument ? (
+              <h1 className="sr-only">{reportName}</h1>
+            ) : (
+              <h1 className="text-[32px] font-semibold leading-[1.15] tracking-[-.015em] text-foreground [text-wrap:balance]">
+                {reportName}
+              </h1>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-muted-foreground">
               {version != null && (
-                <span className="rounded-sm border border-border px-1.5 py-px text-[11px] text-faint">v{version}</span>
+                <span className="rounded-sm border border-border px-1.5 py-px text-2xs text-faint">v{version}</span>
               )}
               {(author || publishedAt) && (
                 <span>{t("viewer.publishedBy")} {author ?? "—"}{publishedAt ? ` · ${publishedAt}` : ""}</span>
@@ -403,40 +414,57 @@ export function ReportViewerShell({
             {/* Ask Curf — conversational analysis over this report. Hidden
                 during snapshots since the chat would otherwise reason
                 against the frozen dataset. */}
-            {!replayedAt && AskCurfPanel && <AskCurfPanel reportId={reportId} currentParams={params} />}
+            {!replayedAt && AskCurfPanel && <AskCurfPanel reportId={reportId} currentParams={params} dockHost={askHost} />}
             <ShareButton reportId={reportId} />
             <ReportExportMenu reportId={reportId} params={params} />
             {isEditor && (
               <Button asChild size="sm" variant="outline">
                 <Link href={`/reports/${reportId}/edit`}>
-                  <Pencil className="mr-1.5 h-4 w-4" /> Edit
+                  <Pencil className="mr-1.5 h-4 w-4" /> {t("action.edit")}
                 </Link>
               </Button>
             )}
-            {isEditor && (
-              // Editor tools that shouldn't crowd the header: AI-proposed
-              // Operate actions (not on a frozen snapshot), publishing to
-              // the marketplace, refining from comments. A popover rather
-              // than a menu so each tool's own dialog can open from inside.
-              <Popover.Root>
-                <Popover.Trigger asChild>
-                  <Button size="sm" variant="outline" className="w-8 px-0" title={t("viewer.moreTools")} aria-label={t("viewer.moreTools")}>
-                    <MoreHorizontal className="h-4 w-4" />
+            {/* The report's other modes for every reader (Story, History),
+                then editor tools that shouldn't crowd the header: AI-proposed
+                Operate actions (not on a frozen snapshot), publishing to the
+                marketplace, refining from comments. A popover rather than a
+                menu so each tool's own dialog can open from inside. */}
+            <Popover.Root>
+              <Popover.Trigger asChild>
+                <Button size="sm" variant="outline" className="w-8 px-0" title={t("viewer.moreTools")} aria-label={t("viewer.moreTools")}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  align="end"
+                  sideOffset={6}
+                  className="z-50 flex w-60 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                >
+                  {/* Story Mode is Business and up; its page shows the upgrade card below that. */}
+                  {STORY_MODE && (
+                    <Button asChild size="sm" variant="ghost" className="w-full justify-start gap-2 font-normal">
+                      <Link href={`/reports/${reportId}/story`} target="_blank">
+                        <Presentation className="h-4 w-4 text-muted-foreground" /> {t("designerToolbar.story")}
+                      </Link>
+                    </Button>
+                  )}
+                  <Button asChild size="sm" variant="ghost" className="w-full justify-start gap-2 font-normal">
+                    <Link href={`/reports/${reportId}/history`}>
+                      <History className="h-4 w-4 text-muted-foreground" /> {t("reportHistory.breadcrumb")}
+                    </Link>
                   </Button>
-                </Popover.Trigger>
-                <Popover.Portal>
-                  <Popover.Content
-                    align="end"
-                    sideOffset={6}
-                    className="z-50 flex w-60 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-                  >
-                    {!replayedAt && SuggestOperateActionsButton && <SuggestOperateActionsButton reportId={reportId} />}
-                    {PublishToMarketplaceButton && <PublishToMarketplaceButton reportId={reportId} reportName={report.name ?? "Untitled"} />}
-                    <RegenerateButton reportId={reportId} />
-                  </Popover.Content>
-                </Popover.Portal>
-              </Popover.Root>
-            )}
+                  {isEditor && (
+                    <>
+                      <div className="my-0.5 h-px bg-border" aria-hidden="true" />
+                      {!replayedAt && SuggestOperateActionsButton && <SuggestOperateActionsButton reportId={reportId} />}
+                      {PublishToMarketplaceButton && <PublishToMarketplaceButton reportId={reportId} reportName={report.name ?? "Untitled"} />}
+                      <RegenerateButton reportId={reportId} />
+                    </>
+                  )}
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
           </div>
         </div>
 
@@ -494,6 +522,9 @@ export function ReportViewerShell({
             />
           </DrillThroughContext.Provider>
         </div>
+      </div>
+      </div>
+      <div ref={setAskHost} className="sticky top-0 flex-none self-start" />
       </div>
       <DrillPanel state={drill.state} onClose={drill.close} />
       {/* Self-serve onboarding pill. Shows once per browser; user dismisses

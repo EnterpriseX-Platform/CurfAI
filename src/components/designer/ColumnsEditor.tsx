@@ -74,7 +74,7 @@ export function ColumnsEditor({
 function FieldTiny({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid gap-0.5">
-      <Label className="text-[10px]">{label}</Label>
+      <Label className="text-2xs">{label}</Label>
       {children}
     </div>
   );
@@ -195,7 +195,7 @@ function ColumnRow({
               if the formula doesn't compile or evaluate. */}
           {col.type === "formula" && (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2.5">
-              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                 <Sigma className="h-3 w-3" /> {t("columnsEditor.formula")}
               </div>
               <textarea
@@ -217,7 +217,7 @@ function ColumnRow({
                   </SelectContent>
                 </Select>
               </FieldTiny>
-              <p className="text-[10px] leading-snug text-muted-foreground">
+              <p className="text-2xs leading-snug text-muted-foreground">
                 {refPre}<code className="font-mono">spend</code>{refPost} {t("columnsEditor.formulaHelpers")}{" "}
                 <code className="font-mono">SUM(col)</code>, <code className="font-mono">AVG(col)</code>,{" "}
                 <code className="font-mono">MIN/MAX/COUNT</code>, <code className="font-mono">IF(cond, a, b)</code>,{" "}
@@ -237,14 +237,14 @@ function ColumnRow({
                 type="button"
                 onClick={() => setOpen((v) => !v)}
                 className={cn(
-                  "flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors",
+                  "flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-2xs font-medium transition-colors",
                   cfActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                 {t("columnsEditor.conditional")}
                 {cfActive && (
-                  <span className="ml-1 rounded-full bg-primary/10 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider text-primary">
+                  <span className="ml-1 rounded-full bg-primary/10 px-1.5 py-0 text-2xs font-semibold uppercase tracking-wider text-primary">
                     {t("columnsEditor.on")}
                   </span>
                 )}

@@ -23,7 +23,7 @@ import { requireAdmin } from "@/lib/auth";
 import { PATCH } from "./route";
 
 const patch = (body: unknown) =>
-  PATCH(new NextRequest("http://localhost:3100/api/admin/users/u-victim/role", { method: "PATCH", body: JSON.stringify(body) }), { params: { id: "u-victim" } });
+  PATCH(new NextRequest("http://localhost:3100/api/admin/users/u-victim/role", { method: "PATCH", body: JSON.stringify(body) }), { params: Promise.resolve({ id: "u-victim" }) });
 
 beforeEach(() => {
   vi.clearAllMocks();

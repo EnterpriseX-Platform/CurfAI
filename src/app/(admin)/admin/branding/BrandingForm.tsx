@@ -151,14 +151,14 @@ export function BrandingForm({ initial }: { initial: Brand }) {
                     }
                   />
                 </div>
-                <span className="text-[11px] leading-snug text-muted-foreground">
+                <span className="text-2xs leading-snug text-muted-foreground">
                   {t(`admin.branding.chartStyle.${preset.slug}Desc`)}
                 </span>
                 {/* Style sets form, theme sets colour — so the exhibit look
                     needs both halves. Without this the pairing is invisible and
                     Enterprise reads as "Classic with fewer gridlines". */}
                 {preset.slug === "enterprise" && brand.defaultTheme !== "boardroom" && (
-                  <span className="text-[11px] leading-snug text-primary">
+                  <span className="text-2xs leading-snug text-primary">
                     {t("admin.branding.chartStyle.pairsWith")}
                   </span>
                 )}
@@ -215,7 +215,7 @@ export function BrandingForm({ initial }: { initial: Brand }) {
                 {t("admin.branding.clearAll")}
               </Button>
             )}
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               {t("admin.branding.colorsCount").replace("{n}", String((brand.customPalette ?? []).length))}
             </span>
           </div>

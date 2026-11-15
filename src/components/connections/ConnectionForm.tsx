@@ -30,6 +30,7 @@ import {
 } from "./types";
 import { buildConnectionPayload, isConnectionKindValid, type ConnectionFormFields } from "./formLogic";
 import { eeClient } from "@/ee/client";
+import { KindChooser } from "./KindChooser";
 import { useT } from "@/lib/i18n/LocaleContext";
 
 /** Every connector kind, in kind-picker order. Default for `allowedKinds`. */
@@ -46,7 +47,7 @@ type TestResultState = { pending?: boolean; ok?: boolean; status?: number; durat
 const SELECT_1 = <span className="font-mono">SELECT 1</span>;
 
 export function ConnectionForm({
-  editing, onSaved, roleOptions = NO_ROLE_OPTIONS, onRoleOptionsChange, currentTier, allowedKinds, onSaveAsQuery,
+  editing, onSaved, roleOptions = NO_ROLE_OPTIONS, onRoleOptionsChange, currentTier, allowedKinds, onSaveAsQuery, chooseKind,
 }: {
   editing: EditingConnection | null;
   onSaved: () => void;
@@ -60,8 +61,12 @@ export function ConnectionForm({
   allowedKinds?: DataSourceKind[];
   /** Drawer-only: offered after a successful REST test to add the request as a report query. */
   onSaveAsQuery?: (spec: { connectionId: string; method: string; path: string; body: string }) => void;
+  /** Adding only: start with a "what are you connecting?" step, then the form for the type picked. */
+  chooseKind?: boolean;
 }) {
   const kinds = allowedKinds ?? ALL_KINDS;
+  const [picked, setPicked] = useState(false);
+  const choosing = !!chooseKind && !editing && !picked;
   const { push } = useToast();
   const { t } = useT();
   // "Password (leave blank to keep the existing one)" and friends, for any
@@ -145,8 +150,9 @@ export function ConnectionForm({
   const [engineBaseUrl, setEngineBaseUrl] = useState(editing?.engine && !editing.engine.usesPlatformEngine ? editing.engine.baseUrl : "");
   const [engineAudience, setEngineAudience] = useState(editing?.engine?.audience ?? "");
   const [visibility, setVisibility] = useState<VisibilityWire>(editing?.visibility ?? { mode: "tenant" });
-  // REST only — see DataSource.readOnly's doc comment in schema.prisma.
-  const [readOnly, setReadOnly] = useState<boolean>(editing?.readOnly ?? false);
+  // REST only — see DataSource.readOnly's doc comment in schema.prisma. A new source starts read-only (GET queries
+  // only); allowing writes is a choice. An existing source keeps what it stored.
+  const [readOnly, setReadOnly] = useState<boolean>(editing?.readOnly ?? true);
   const [testMethod, setTestMethod] = useState<"POST" | "GET">("POST");
   const [testPath, setTestPath] = useState("/");
   const [testBody, setTestBody] = useState("{}");
@@ -270,6 +276,7 @@ export function ConnectionForm({
         setSftpHost(""); setSftpUsername(""); setSftpPassword(""); setSftpPrivateKey(""); setSftpPassphrase(""); setSftpRemotePath("");
         setEngineBaseUrl(""); setEngineAudience("");
       }
+      setPicked(false);
       onSaved();
     } finally {
       setSubmitting(false);
@@ -489,9 +496,28 @@ export function ConnectionForm({
   // so we delegate to a dedicated subform when that kind is selected. The
   // parent still owns the kind picker so users discover the option in the
   // same place they pick REST or SQLite.
+  const changeType = chooseKind && !editing ? (
+    <button type="button" onClick={() => setPicked(false)} className="justify-self-start text-xs text-primary hover:text-primary-ink hover:underline" data-testid="kind-change">
+      ← {t("connectionForm.choose.change")}
+    </button>
+  ) : null;
+
+  if (choosing) {
+    return (
+      <KindChooser
+        currentTier={currentTier}
+        available={(k) => (k === "hubspot" ? kinds.includes("rest") && !!eeClient.connectors?.hubspotBaseUrl
+          : k === "zendesk" ? kinds.includes("rest") && !!eeClient.connectors?.zendeskBaseUrl
+          : kinds.includes(k))}
+        onPick={(k) => { setKind(k); setTestResult(null); setPicked(true); }}
+      />
+    );
+  }
+
   if (kind === "excel" && !editing) {
     return (
       <div className="grid gap-3 rounded-lg border bg-card p-5 shadow-xs">
+        {changeType}
         <div className="grid grid-cols-[140px_1fr] gap-3">
           <F label={t("connections.kindHeader")}>
             <Select value={kind} onValueChange={(v) => setKind(v as DataSourceKind)}>
@@ -505,13 +531,14 @@ export function ConnectionForm({
           </F>
           <div />
         </div>
-        <ExcelUploadForm onSaved={onSaved} roleOptions={localRoleOptions} onRoleOptionsChange={handleRoleOptionsChange} />
+        <ExcelUploadForm onSaved={() => { setPicked(false); onSaved(); }} roleOptions={localRoleOptions} onRoleOptionsChange={handleRoleOptionsChange} />
       </div>
     );
   }
 
   return (
     <div className="grid gap-3 rounded-lg border bg-card p-5 shadow-xs">
+      {changeType}
       <div className="grid grid-cols-[140px_1fr] gap-3">
         <F label={t("connections.kindHeader")}>
           <Select value={kind} onValueChange={(v) => setKind(v as PickerKind)} disabled={!!editing}>
@@ -623,7 +650,7 @@ export function ConnectionForm({
             />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testRequest")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testRequest")}</p>
             <div className="grid grid-cols-[120px_1fr] gap-2">
               <F label={t("dataDrawer.method")}>
                 <Select value={testMethod} onValueChange={(v) => setTestMethod(v as any)}>
@@ -672,7 +699,7 @@ export function ConnectionForm({
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> {t("connectionForm.saveAsQuery")}
                 </Button>
-                <span className="text-[11px] text-muted-foreground">{t("connectionForm.saveAsQueryHint")}</span>
+                <span className="text-2xs text-muted-foreground">{t("connectionForm.saveAsQueryHint")}</span>
               </div>
             )}
           </div>
@@ -692,7 +719,7 @@ export function ConnectionForm({
             {fill(t("connectionForm.hsHelp"), { url: <span className="font-mono">{eeClient.connectors?.hubspotBaseUrl}</span> })}
           </p>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">{t("connectionForm.hsTestHint")}</p>
             <div>
               <Button
@@ -734,7 +761,7 @@ export function ConnectionForm({
             })}
           </p>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">{t("connectionForm.zdTestHint")}</p>
             <div>
               <Button
@@ -790,7 +817,7 @@ export function ConnectionForm({
             </F>
           </div>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
               {fill(t("connectionForm.dbTestHint"), { sql: SELECT_1, target: <span className="font-mono">{pgSchema || "public"}</span> })}
               {editing && pgPassword.length === 0 && editing.pg?.hasPassword ? ` ${t("connectionForm.usingStoredPassword")}` : ""}
@@ -847,7 +874,7 @@ export function ConnectionForm({
             <div />
           </div>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
               {fill(t("connectionForm.dbTestHint"), {
                 sql: SELECT_1,
@@ -883,7 +910,7 @@ export function ConnectionForm({
             ? t("connectionForm.bqCredsKeep").replace("{key}", editing.bq?.clientEmail || t("connectionForm.bqExistingKey"))
             : t("connectionForm.bqCreds")}>
             <textarea
-              className="min-h-[180px] rounded-md border border-input bg-background p-2 font-mono text-[11px]"
+              className="min-h-[180px] rounded-md border border-input bg-background p-2 font-mono text-2xs"
               value={bqCredentialsJson}
               onChange={(e) => setBqCredentialsJson(e.target.value)}
               placeholder={editing && editing.bq?.hasCredentials
@@ -900,7 +927,7 @@ export function ConnectionForm({
             />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
               {fill(t("connectionForm.bqTestHint"), {
                 sql: SELECT_1,
@@ -963,7 +990,7 @@ export function ConnectionForm({
             <>
               <F label={keepLabel(editing && editing.sftp?.hasPrivateKey, t("connectionForm.privateKey"))}>
                 <textarea
-                  className="min-h-[120px] rounded-md border border-input bg-background p-2 font-mono text-[11px]"
+                  className="min-h-[120px] rounded-md border border-input bg-background p-2 font-mono text-2xs"
                   value={sftpPrivateKey}
                   onChange={(e) => setSftpPrivateKey(e.target.value)}
                   placeholder={editing && editing.sftp?.hasPrivateKey ? t("connectionForm.alreadySet") : "-----BEGIN OPENSSH PRIVATE KEY-----\n…"}
@@ -976,7 +1003,7 @@ export function ConnectionForm({
             </>
           )}
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">{t("connectionForm.sftpTestHint")}</p>
             <div>
               <Button
@@ -1046,7 +1073,7 @@ export function ConnectionForm({
             <Input value={sfRole} onChange={(e) => setSfRole(e.target.value)} placeholder="SYSADMIN" />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">
               {fill(t("connectionForm.sfTestHint"), {
                 sql: SELECT_1,
@@ -1071,7 +1098,7 @@ export function ConnectionForm({
             <Input value={connection} onChange={(e) => setConnection(e.target.value)} placeholder="C:\\\\path\\\\to\\\\warehouse.db" />
           </F>
           <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectionForm.testConnection")}</p>
             <p className="text-xs text-muted-foreground">{fill(t("connectionForm.sqliteTestHint"), { sql: SELECT_1 })}</p>
             <div>
               <Button size="sm" variant="outline" onClick={testSqlite} disabled={!connection} type="button">
@@ -1298,7 +1325,7 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
               <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-2">
                 <div>
                   <div className="text-sm font-medium">{sheet.name}</div>
-                  <div className="text-[11px] text-muted-foreground">
+                  <div className="text-2xs text-muted-foreground">
                     {t("connectionForm.sheetSummary")
                       .replace("{sheet}", sheet.originalSheetName)
                       .replace("{rows}", sheet.rowCount.toLocaleString())
@@ -1323,7 +1350,7 @@ function ExcelUploadForm({ onSaved, roleOptions, onRoleOptionsChange }: { onSave
                       <tr key={c.name} className="border-t">
                         <td className="px-3 py-1.5 font-mono">{c.name}</td>
                         <td className="px-3 py-1.5">
-                          <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium">
+                          <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-2xs font-medium">
                             {c.type}
                           </span>
                         </td>
@@ -1384,7 +1411,7 @@ function VisibilityPicker({
 
   return (
     <div className="grid gap-2 rounded-md border border-dashed border-border/80 p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connections.visibilityHeader")}</p>
+      <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connections.visibilityHeader")}</p>
 
       <div className="grid gap-1.5 text-sm">
         <label className="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted/40">
@@ -1463,7 +1490,7 @@ function TestResult({ result, rest }: { result: TestResultState | null; rest?: b
   return (
     <div className={result.ok ? "rounded-md border border-success/40 bg-success/5 p-2 text-xs" : "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"}>
       <div className="mb-1 font-medium">{headline}</div>
-      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/80">{result.error ?? result.preview ?? ""}</pre>
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-2xs text-foreground/80">{result.error ?? result.preview ?? ""}</pre>
     </div>
   );
 }

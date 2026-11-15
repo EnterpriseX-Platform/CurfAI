@@ -20,8 +20,7 @@ on:
   schedule:
     - cron: '0 4 * * *'
 
-# Least-privilege default — only the gitleaks job overrides this (it posts
-# a PR comment on a detected leak, everything else here only scans).
+# Least-privilege default — every job here only scans.
 permissions:
   contents: read
 
@@ -93,21 +92,19 @@ jobs:
   gitleaks:
     name: Gitleaks (secret scan)
     runs-on: ubuntu-latest
-    # Job-level permissions REPLACE the workflow default above, not merge
-    # with it — pull-requests:write is what gitleaks-action actually needs
-    # to comment on a PR when it finds a leak.
-    permissions:
-      contents: read
-      pull-requests: write
+    # The gitleaks CLI itself (MIT), not gitleaks-action: the action needs a
+    # paid GITLEAKS_LICENSE on an organisation's repo, so it failed every run
+    # on the public Community repo. A finding fails the job; the log names it.
     steps:
       - uses: actions/checkout@v4
         with:
           # gitleaks needs full history to scan past commits, not just the
           # PR diff — a leaked key two commits ago is still a leaked key.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan history for secrets
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git --redact --verbose --exit-code 1 .
 
   snyk:
     name: Snyk SCA

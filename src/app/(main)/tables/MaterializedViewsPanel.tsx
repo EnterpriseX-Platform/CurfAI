@@ -174,7 +174,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
           </span>
           <div>
             <h2 className="text-sm font-semibold">{t("materializedViews.heading")}</h2>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("materializedViews.subtitle")}
             </p>
           </div>
@@ -197,14 +197,14 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
           {creating && (
             <form onSubmit={create} className="grid gap-2 rounded-md border border-dashed border-border bg-muted/20 p-3">
               {prefillBanner && (
-                <div className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[11px] text-warning  ">
+                <div className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-2xs text-warning  ">
                   <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
                   <span>{prefillBanner}</span>
                 </div>
               )}
               <div className="grid gap-2 md:grid-cols-2">
                 <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("common.name")}</span>
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("common.name")}</span>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -215,7 +215,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("materializedViews.sourceConnectionLabel")}</span>
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("materializedViews.sourceConnectionLabel")}</span>
                   <select
                     value={dataSourceId}
                     onChange={(e) => setDataSourceId(e.target.value)}
@@ -229,7 +229,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                 </label>
               </div>
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("materializedViews.sqlLabel")}</span>
+                <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("materializedViews.sqlLabel")}</span>
                 <textarea
                   value={sql}
                   onChange={(e) => setSql(e.target.value)}
@@ -241,7 +241,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
               </label>
               <div className="grid gap-2 md:grid-cols-3">
                 <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("materializedViews.cronLabel")}</span>
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("materializedViews.cronLabel")}</span>
                   <input
                     value={cron}
                     onChange={(e) => setCron(e.target.value)}
@@ -262,7 +262,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                   <button
                     type="submit"
                     disabled={busy === "create" || !name.trim() || !sql.trim() || !dataSourceId}
-                    className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2.5 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   >
                     {busy === "create" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                     {t("action.create")}
@@ -270,7 +270,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                   <button
                     type="button"
                     onClick={() => { setCreating(false); setName(""); setSql(""); }}
-                    className="h-8 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted"
+                    className="h-8 rounded-md px-2 text-2xs text-muted-foreground hover:bg-muted"
                   >
                     {t("action.cancel")}
                   </button>
@@ -295,7 +295,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
 
           {items === null && <p className="text-xs text-muted-foreground">{t("materializedViews.loading")}</p>}
           {items !== null && items.length === 0 && !creating && (
-            <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-3 text-center text-[11px] text-muted-foreground">
+            <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-3 text-center text-2xs text-muted-foreground">
               {t("materializedViews.emptyState")}
             </p>
           )}
@@ -308,23 +308,23 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                       <Database className="h-3 w-3 text-muted-foreground" />
                       <code className="font-mono font-medium">{mv.name}</code>
                       <span className={
-                        "rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
+                        "rounded-full px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider " +
                         (mv.lastStatus === "ok" ? "bg-success/10 text-success" :
                          mv.lastStatus === "failed" ? "bg-destructive/10 text-destructive" :
                          "bg-muted text-muted-foreground")
                       }>
                         {mv.lastStatus ?? t("materializedViews.neverRun")}
                       </span>
-                      {!mv.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] uppercase text-muted-foreground">{t("materializedViews.pausedBadge")}</span>}
+                      {!mv.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs uppercase text-muted-foreground">{t("materializedViews.pausedBadge")}</span>}
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <div className="mt-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
                       {mv.lastRunAt
                         ? `${new Date(mv.lastRunAt).toLocaleString()} · ${t("materializedViews.lastRunSummary").replace("{rows}", mv.lastRowCount?.toLocaleString() ?? "—").replace("{ms}", String(mv.lastDurationMs ?? 0))}`
                         : t("materializedViews.cronDisplay").replace("{cron}", mv.cron ?? t("materializedViews.manualOnlyDisplay"))}
                     </div>
                     {mv.lastError && (
-                      <p className="mt-1 truncate font-mono text-[10px] text-destructive" title={mv.lastError}>
+                      <p className="mt-1 truncate font-mono text-2xs text-destructive" title={mv.lastError}>
                         {mv.lastError.slice(0, 100)}
                       </p>
                     )}
@@ -334,7 +334,7 @@ export function MaterializedViewsPanel({ connections }: { connections: Connectio
                       type="button"
                       onClick={() => refresh(mv.id)}
                       disabled={!!busy}
-                      className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-[11px] hover:bg-muted disabled:opacity-50"
+                      className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-2xs hover:bg-muted disabled:opacity-50"
                     >
                       {busy === `refresh-${mv.id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
                       {t("action.refresh")}

@@ -90,3 +90,11 @@ describe("humanizeLlmError — canSwitchModel (drives the Master Builder 'switch
     expect(humanizeLlmError("fetch failed: ECONNREFUSED").canSwitchModel).toBe(false);
   });
 });
+
+describe("a busy trial model", () => {
+  it("is told as busy with a way out, not as a failure to retry blindly", () => {
+    const r = humanizeLlmError("TRIAL_MODEL_BUSY: the model's host is busy right now.", "en");
+    expect(r.message).toMatch(/trial model is busy/i);
+    expect(r.canSwitchModel).toBe(false);
+  });
+});

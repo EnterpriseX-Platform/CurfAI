@@ -8,6 +8,8 @@ import { provisionStarterPack } from "@/lib/tenant/provision";
 import { ee } from "@/ee";
 import { ensureLimit } from "@/lib/rateLimit";
 import { clientIp } from "@/lib/security/clientIp";
+import { appBase } from "@/lib/http/appBase";
+import { emailVerificationRequired, sendVerificationEmail } from "@/lib/emailVerification";
 
 export const dynamic = "force-dynamic";
 
@@ -66,7 +68,7 @@ export async function POST(req: NextRequest) {
   // so an unbounded loop is both an abuse vector and a resource-exhaustion
   // risk, not just an inconvenience.
   const ip = clientIp(req);
-  const limited = ensureLimit("signup", `ip:${ip}`, 5, 5 * 60_000);
+  const limited = await ensureLimit("signup", `ip:${ip}`, 5, 5 * 60_000);
   if (limited) return limited;
 
   const body = await req.json().catch(() => null);
@@ -124,9 +126,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Keycloak is the only sign-in: the password goes to Keycloak (held only for this call) and Curf keeps an account row with
+  // no hash. Done before anything is written here, so a Keycloak that is down or an address it already has creates nothing.
+  const keycloakOnly = !!ee.identity?.only();
+  let keycloakId: string | null = null;
+  if (keycloakOnly && ee.identity) {
+    const kc = await ee.identity.accounts.signUp({ email: parsed.data.email, name: parsed.data.name ?? null, password: parsed.data.password, emailVerified: !!inviteRequestId });
+    if (!kc.ok) {
+      if (kc.reason === "exists") return NextResponse.json({ error: "An account with that email already exists. Log in instead." }, { status: 409 });
+      if (kc.reason === "password_policy") return NextResponse.json({ error: "Choose a password of at least 12 characters that is not your email address." }, { status: 400 });
+      return NextResponse.json({ error: "Sign-up is unavailable for a moment. Try again shortly." }, { status: 503 });
+    }
+    keycloakId = kc.id;
+  }
+
   const baseSlug = slugify(parsed.data.workspace) || slugify(parsed.data.email.split("@")[1] ?? "workspace");
   const slug = await resolveUniqueSlug(baseSlug);
-  const passwordHash = await bcrypt.hash(parsed.data.password, 10);
+  let userWritten = false;
+  const passwordHash = keycloakOnly ? null : await bcrypt.hash(parsed.data.password, 10);
 
   try {
     // Auto-generate the per-tenant HMAC webhook signing secret. 32 random
@@ -156,8 +173,14 @@ export async function POST(req: NextRequest) {
         email: parsed.data.email,
         name: parsed.data.name ?? null,
         passwordHash,
+        ...(keycloakId ? { keycloakSub: keycloakId, identityMigratedAt: new Date() } : {}),
+        // The waitlist invite was mailed to this address and the signup email
+        // must match it (checked above), so using the invite already proves
+        // the address. Anyone else confirms through the mailed link below.
+        emailVerifiedAt: inviteRequestId ? new Date() : null,
       },
     });
+    userWritten = true;
     await prisma.membership.create({
       data: { userId: user.id, tenantId: tenant.id, role: "admin" },
     });
@@ -217,13 +240,32 @@ export async function POST(req: NextRequest) {
       console.warn("[signup] starter pack threw (continuing without it):", e?.message ?? e);
     }
 
+    // Where the platform can send mail, a new account must confirm its
+    // address before it can sign in with a password (lib/emailVerification.ts);
+    // the page then shows "check your inbox" instead of signing straight in.
+    //   verified     — already proven (waitlist invite)
+    //   sent|failed  — a link was mailed (or could not be); confirm first
+    //   not_required — no mail transport here, sign in as before
+    let emailVerification: "verified" | "sent" | "failed" | "not_required" = "not_required";
+    if (user.emailVerifiedAt) emailVerification = "verified";
+    else if (keycloakOnly && ee.identity) {
+      // Keycloak's own mail: confirm the address (the realm will not sign an unconfirmed address in).
+      emailVerification = await ee.identity.accounts.mail(user.email, ["VERIFY_EMAIL"]);
+    } else if (emailVerificationRequired()) {
+      emailVerification = await sendVerificationEmail({ user, origin: appBase(req) });
+    }
+
     return NextResponse.json({
       ok: true,
       tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name },
       user: { id: user.id, email: user.email },
       provisioned,
+      emailVerification,
+      ...(keycloakOnly ? { identity: "keycloak" } : {}),
     });
   } catch (e: any) {
+    // The Keycloak user made for this sign-up would otherwise keep the address claimed with no Curf account behind it.
+    if (keycloakId && !userWritten) await ee.identity?.accounts.discard(keycloakId);
     if (e?.code === "P2002") {
       // Race with another signup for the same email between the check above
       // and this insert — same outcome, same message.

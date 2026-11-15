@@ -22,6 +22,7 @@
  */
 import { prisma } from "@/lib/db";
 import type { Tier } from "@/lib/billing";
+import { capValue, entitlementActive, parseLimitOverrides } from "@/lib/entitlements";
 import { lakeFileSize } from "./storage";
 
 export type LakeQuota = {
@@ -40,14 +41,16 @@ const QUOTAS: Record<Tier, { maxBytes: number | null; maxTables: number | null }
 export async function getQuotaForTenant(tenantId: string): Promise<LakeQuota> {
   const t = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { tier: true },
+    select: { tier: true, entitlement: { select: { limitsJson: true, validUntil: true } } },
   });
   const tier = (t?.tier ?? "community") as Tier;
   // An unrecognised tier string still falls back to the smallest cap — that
   // is the safe direction for a value that shouldn't exist. Every REAL tier
   // now has a row, which is what this fallback was silently masking.
   const q = QUOTAS[tier] ?? QUOTAS.community;
-  return { ...q, tier };
+  // An operator's override of this workspace's caps (lib/entitlements.ts), for as long as it lasts.
+  const o = entitlementActive(t?.entitlement) ? parseLimitOverrides(t!.entitlement!.limitsJson) : {};
+  return { maxBytes: capValue(o.lakeBytes, q.maxBytes), maxTables: capValue(o.lakeTables, q.maxTables), tier };
 }
 
 export type LakeUsage = {

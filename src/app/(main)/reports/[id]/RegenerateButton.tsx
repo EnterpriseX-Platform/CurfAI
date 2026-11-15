@@ -147,7 +147,7 @@ export function RegenerateButton({ reportId }: { reportId: string }) {
               </p>
 
               <div>
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Unresolved comments ({unresolved.length})
                 </p>
                 <div className="max-h-56 overflow-y-auto rounded-md border bg-card">
@@ -163,8 +163,8 @@ export function RegenerateButton({ reportId }: { reportId: string }) {
                     unresolved.map((c) => (
                       <div key={c.id} className="border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
                         <div className="text-muted-foreground">
-                          <span className="font-mono text-[10px]">{c.blockId.slice(0, 8)}</span>
-                          {c.cellKey && <span className="ml-1 font-mono text-[10px] text-muted-foreground/70">cell={c.cellKey}</span>}
+                          <span className="font-mono text-2xs">{c.blockId.slice(0, 8)}</span>
+                          {c.cellKey && <span className="ml-1 font-mono text-2xs text-muted-foreground/70">cell={c.cellKey}</span>}
                           <span className="ml-2">{c.authorName || c.authorEmail || "anon"}</span>
                           <span className="ml-2 text-muted-foreground/70">{new Date(c.createdAt).toLocaleString()}</span>
                         </div>
@@ -176,7 +176,7 @@ export function RegenerateButton({ reportId }: { reportId: string }) {
               </div>
 
               <div>
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Extra direction (optional)
                 </p>
                 <textarea

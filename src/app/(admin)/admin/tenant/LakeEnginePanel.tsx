@@ -122,7 +122,7 @@ export function LakeEnginePanel() {
     <section className="mb-8 rounded-lg border bg-card p-5 shadow-xs">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
             <Database className="mr-1 inline h-3 w-3 -translate-y-px" />
             {t("admin.lakeEngine.title")}
           </p>
@@ -170,7 +170,7 @@ export function LakeEnginePanel() {
       </div>
 
       {status.migratedAt && (
-        <p className="mt-3 text-[11px] text-muted-foreground">
+        <p className="mt-3 text-2xs text-muted-foreground">
           {t("admin.lakeEngine.lastMigrated").replace("{date}", new Date(status.migratedAt).toLocaleString())}
         </p>
       )}
@@ -212,7 +212,7 @@ export function LakeEnginePanel() {
                           : <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />}
                         <div className="min-w-0 flex-1">
                           <p>{f.message}</p>
-                          <code className="mt-0.5 block break-all rounded bg-background p-1 font-mono text-[10px] text-muted-foreground">{f.snippet}</code>
+                          <code className="mt-0.5 block break-all rounded bg-background p-1 font-mono text-2xs text-muted-foreground">{f.snippet}</code>
                         </div>
                       </li>
                     ))}
@@ -244,7 +244,7 @@ export function LakeEnginePanel() {
           </div>
 
           {!canMigrate && errorCount > 0 && (
-            <p className="mt-2 text-[11px] text-destructive">
+            <p className="mt-2 text-2xs text-destructive">
               {(errorCount === 1 ? t("admin.lakeEngine.fixErrorsSingular") : t("admin.lakeEngine.fixErrorsPlural")).replace("{n}", String(errorCount))}
             </p>
           )}
@@ -300,15 +300,15 @@ function EngineCard({ id, active, title, subtitle, bullets, tier, onMigrate, dis
         <div className="flex items-center gap-2">
           <Cpu className="h-4 w-4 text-muted-foreground" />
           <p className="text-sm font-semibold">{title}</p>
-          {active && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">{t("admin.lakeEngine.activeBadge")}</span>}
+          {active && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider text-primary">{t("admin.lakeEngine.activeBadge")}</span>}
           {disabled && (
-            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{disabledBadge ?? t("admin.lakeEngine.notInstalledBadge")}</span>
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{disabledBadge ?? t("admin.lakeEngine.notInstalledBadge")}</span>
           )}
         </div>
-        {tier && !active && <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">{tier}</span>}
+        {tier && !active && <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider text-warning">{tier}</span>}
       </div>
-      <p className="mb-2 text-[11px] text-muted-foreground">{subtitle}</p>
-      <ul className="mb-3 space-y-0.5 text-[11px] text-muted-foreground">
+      <p className="mb-2 text-2xs text-muted-foreground">{subtitle}</p>
+      <ul className="mb-3 space-y-0.5 text-2xs text-muted-foreground">
         {bullets.map((bullet, i) => (
           <li key={i} className="flex items-start gap-1">
             <Check className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />

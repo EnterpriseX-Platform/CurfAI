@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getSession, getUserRoles } from "@/lib/auth";
+import { ee } from "@/ee";
 import { canSeeDataSource } from "@/lib/datasourceAcl";
 import { DashboardViewer } from "./DashboardViewer";
 import { prefetchDashboardPayload } from "./payload";
@@ -17,7 +18,8 @@ import { prefetchDashboardPayload } from "./payload";
  */
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage({ params }: { params: { slug: string } }) {
+export default async function DashboardPage(props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const session = await getSession();
   if (!session) redirect(`/login?callbackUrl=/dashboards/${encodeURIComponent(params.slug)}`);
   const user = session.user as any;
@@ -39,6 +41,7 @@ export default async function DashboardPage({ params }: { params: { slug: string
     redirect("/dashboards");
   }
 
+  ee.home?.noteView(user, "dashboard", dashboard.id);
   const payload = await prefetchDashboardPayload(dashboard, { id: user.id, isAdmin, roles: userRoles });
   return <DashboardViewer dashboard={payload} isAdmin={isAdmin} />;
 }

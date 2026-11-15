@@ -27,7 +27,7 @@ import { useT } from "@/lib/i18n/LocaleContext";
 import { useDrillThrough } from "@/components/providers/drill-through-context";
 import {
   shouldAnimateCountUp, tierFor, type Tier,
-  KpiCardFrame, KpiLabel, KpiValue, KpiDelta, KpiPlan, KpiReceipt,
+  KpiCardFrame, KpiLabel, KpiValue, KpiDelta, KpiPlan, KpiReceipt, planProgress,
 } from "./kpiCard";
 
 // Re-exported so existing imports (kpiCountUp.test.ts) keep working — the
@@ -129,9 +129,10 @@ export function Sparkline({
   const observed = pts.slice(0, observedEnd + 1);
   const forecastPts = forecastCount > 0 && !replaying ? pts.slice(splitIdx) : [];
   const ghost = replaying && end < n - 1 ? pts.slice(end) : [];
-  const rising = values[end] >= values[0];
-  const good = rising === (positive === "up");
-  const stroke = good ? goodColor : badColor;
+  // A line that ends where it began is neither good nor bad: neutral ink.
+  const flat = values[end] === values[0];
+  const good = (values[end] > values[0]) === (positive === "up");
+  const stroke = flat ? "hsl(var(--muted-foreground))" : good ? goodColor : badColor;
   const toPath = (p: readonly (readonly [number, number])[]) =>
     p.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   const d = toPath(observed);
@@ -156,7 +157,7 @@ export function Sparkline({
           {ghost.length > 1 && (
             <path d={toPath(ghost)} fill="none" stroke="hsl(var(--border))" strokeWidth={1.5} strokeDasharray="3 3" strokeLinejoin="round" />
           )}
-          {area && <path d={area} fill={toRgba(stroke, 0.1)} stroke="none" />}
+          {area && <path d={area} fill={flat ? "hsl(var(--muted-foreground) / 0.1)" : toRgba(stroke, 0.1)} stroke="none" />}
           <path d={d} fill="none" stroke={stroke} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
           {forecastPts.length > 1 && (
             // Fixed forecast accent, not the actual/predicted-good/bad stroke —
@@ -445,7 +446,7 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
       )}
 
       {shareBase != null && Number.isFinite(shareBase) && shareBase !== 0 && Number.isFinite(value) && !point && (
-        <p className="text-[11px] text-muted-foreground" data-kpi-share>
+        <p className="text-2xs text-muted-foreground" data-kpi-share>
           {t("kpi.shareOf")
             .replace("{pct}", `${Math.round((value / shareBase) * 100)}%`)
             .replace("{label}", shareOfLabel ?? shareOfField ?? "")}
@@ -454,7 +455,14 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
 
       {vsPlan && (
         <KpiPlan state={vsPlan.state} text={vsPlan.text} planFormatted={planFormatted}
+          progress={planProgress(value, plan, sparkPositive)}
           words={{ ahead: t("kpi.plan.ahead"), behind: t("kpi.plan.behind"), on: t("kpi.plan.on"), plan: t("kpi.plan.value") }} />
+      )}
+
+      {cfg.metricKey && tier !== "tiny" && !point && (
+        <p className="line-clamp-2 text-2xs text-muted-foreground" data-kpi-metric={cfg.metricKey} title={cfg.metricDefinition || undefined}>
+          {t("kpi.definedMetric")}{cfg.metricScope ? ` · ${cfg.metricScope}` : ""}
+        </p>
       )}
 
       {showSpark && sparkForRender.length > 1 && (
@@ -482,7 +490,7 @@ function KpiBlockInner({ block, dataset, provenance, print, report, params, repo
                 aria-label={t("kpi.replay")}
                 className="block h-3 w-full cursor-pointer accent-primary"
               />
-              <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground">
+              <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-2xs text-muted-foreground">
                 <span className="tabular-nums">{fmtDay(history[0].at)}</span>
                 <span className="rounded-sm bg-primary-soft px-1.5 py-px font-medium text-primary-ink">
                   {t("kpi.asOf")} {fmtDay(point.at)}

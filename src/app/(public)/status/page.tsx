@@ -18,6 +18,8 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { t } from "@/lib/i18n/dict";
+import { serverLocale } from "@/lib/i18n/serverLocale";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -45,20 +47,22 @@ async function loadRuns(): Promise<CanaryRun[]> {
   }
 }
 
-function formatRelative(iso: string): string {
+function formatRelative(iso: string, tr: (key: string) => string): string {
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return iso;
   const ageMs = Date.now() - t;
   const m = Math.floor(ageMs / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
+  if (m < 1) return tr("status.justNow");
+  if (m < 60) return tr("status.minutesAgo").replace("{n}", String(m));
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return tr("status.hoursAgo").replace("{n}", String(h));
   const d = Math.floor(h / 24);
-  return `${d}d ago`;
+  return tr("status.daysAgo").replace("{n}", String(d));
 }
 
 export default async function StatusPage() {
+  const locale = await serverLocale();
+  const tr = (key: string) => t(locale, key);
   const runs = await loadRuns();
   const total = runs.length;
   const passes = runs.filter((r) => r.ok).length;
@@ -67,44 +71,42 @@ export default async function StatusPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="text-3xl font-semibold tracking-tight">Curf status</h1>
+      <h1 className="text-3xl font-semibold tracking-tight">{tr("status.title")}</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Synthetic canary runs the critical path (plan → apply → regenerate →
-        export PDF → teardown) every 10 minutes. The last 100 results are
-        shown below.
+        {tr("status.intro")}
       </p>
 
       <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-xs uppercase text-muted-foreground">Status</div>
+          <div className="text-xs uppercase text-muted-foreground">{tr("status.status")}</div>
           <div className="mt-1 text-2xl font-semibold">
-            {last == null ? "Unknown" : last.ok ? "Operational" : "Degraded"}
+            {tr(last == null ? "status.unknown" : last.ok ? "status.operational" : "status.degraded")}
           </div>
           {last && (
             <div className="mt-1 text-xs text-muted-foreground">
-              last check {formatRelative(last.timestamp)}
+              {tr("status.lastCheck").replace("{when}", formatRelative(last.timestamp, tr))}
             </div>
           )}
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-xs uppercase text-muted-foreground">100-run uptime</div>
+          <div className="text-xs uppercase text-muted-foreground">{tr("status.uptime")}</div>
           <div className="mt-1 text-2xl font-semibold">
             {uptime == null ? "—" : `${uptime.toFixed(1)}%`}
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {total > 0 ? `${passes} / ${total} runs passed` : "no runs recorded yet"}
+            {total > 0 ? tr("status.runsPassed").replace("{passes}", String(passes)).replace("{total}", String(total)) : tr("status.noRunsYet")}
           </div>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-xs uppercase text-muted-foreground">Last failure</div>
+          <div className="text-xs uppercase text-muted-foreground">{tr("status.lastFailure")}</div>
           <div className="mt-1 text-sm">
             {(() => {
               const lastFail = [...runs].reverse().find((r) => !r.ok);
-              if (!lastFail) return <span className="text-muted-foreground">none in window</span>;
+              if (!lastFail) return <span className="text-muted-foreground">{tr("status.noneInWindow")}</span>;
               return (
                 <>
-                  <div>{lastFail.failedStep ?? "unknown step"}</div>
-                  <div className="text-xs text-muted-foreground">{formatRelative(lastFail.timestamp)}</div>
+                  <div>{lastFail.failedStep ?? tr("status.unknownStep")}</div>
+                  <div className="text-xs text-muted-foreground">{formatRelative(lastFail.timestamp, tr)}</div>
                 </>
               );
             })()}
@@ -113,12 +115,10 @@ export default async function StatusPage() {
       </div>
 
       <div className="mt-10">
-        <h2 className="text-sm font-medium text-muted-foreground">Last 100 runs</h2>
+        <h2 className="text-sm font-medium text-muted-foreground">{tr("status.last100")}</h2>
         {total === 0 ? (
           <div className="mt-4 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No canary runs recorded yet. Set <code>CANARY_BASE_URL</code> and
-            <code className="ml-1">CANARY_API_KEY</code> in CI to activate, then
-            wire <code>CANARY_RESULTS_URL</code> to the writer endpoint.
+            {tr("status.empty")}
           </div>
         ) : (
           <div className="mt-3 flex items-end gap-[3px]">
@@ -128,7 +128,7 @@ export default async function StatusPage() {
                 className="h-8 w-2 rounded-sm"
                 title={`${new Date(r.timestamp).toISOString()} — ${r.ok ? "PASS" : `FAIL (${r.failedStep ?? "unknown"})`} — ${r.durationMs}ms`}
                 style={{
-                  backgroundColor: r.ok ? "#10b981" /* emerald-500 */ : "#f43f5e" /* rose-500 */,
+                  backgroundColor: r.ok ? "hsl(var(--success))" : "hsl(var(--destructive))",
                   opacity: r.ok ? 1 : 0.85,
                 }}
               />

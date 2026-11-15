@@ -41,7 +41,8 @@ export class StagedUploadError extends Error {
   }
 }
 
-function tenantDir(tenantId: string): string {
+/** Where this workspace's staged uploads live (exported for the workspace purge, lib/lifecycle/purge.ts). */
+export function tenantDir(tenantId: string): string {
   return path.join(lakeRoot(), "uploads", tenantId.replace(/[^A-Za-z0-9_-]/g, "_"));
 }
 

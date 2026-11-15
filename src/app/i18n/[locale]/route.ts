@@ -10,62 +10,29 @@
  * so a new address. Any other version (a page opened before a deploy) gets
  * today's words, not kept.
  *
- * Compressed here: Next compresses pages and static files but not a route
- * handler's response, and Thai is 758 KB as it stands (116 KB in Brotli).
- * Each language is compressed once per encoding and kept.
+ * Production pages link the compressed file the build writes instead
+ * (lib/i18n/messageFiles.ts); this route serves `next dev`, words changed
+ * since the build, and a language switch on a page opened before a deploy.
+ * It answers uncompressed: Next doesn't compress a route handler's response,
+ * and since 15.5.29 it drops a route handler's own Content-Encoding, so a
+ * body compressed here reaches the browser as bytes it can't read.
  */
 import { NextRequest } from "next/server";
-import { promisify } from "node:util";
-import { brotliCompress, constants, gzip } from "node:zlib";
-import { DICT, LOCALES, messagesVersion, type Locale } from "@/lib/i18n/dict";
-import { MESSAGES_GLOBAL } from "@/lib/i18n/messageStore";
+import { LOCALES, messagesVersion, type Locale } from "@/lib/i18n/dict";
+import { messagesScript } from "@/lib/i18n/messageFiles";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type Encoding = "br" | "gzip" | "identity";
-
-const brotli = promisify(brotliCompress);
-const gz = promisify(gzip);
-const bodies = new Map<string, Promise<Buffer>>();
-
-function scriptFor(locale: Locale): Buffer {
-  return Buffer.from(`(self.${MESSAGES_GLOBAL}=self.${MESSAGES_GLOBAL}||{})[${JSON.stringify(locale)}]=${JSON.stringify(DICT[locale])};`, "utf8");
-}
-
-function bodyFor(locale: Locale, encoding: Encoding): Promise<Buffer> {
-  const key = `${locale}:${encoding}`;
-  let body = bodies.get(key);
-  if (!body) {
-    const raw = scriptFor(locale);
-    body = encoding === "br"
-      ? brotli(raw, { params: { [constants.BROTLI_PARAM_QUALITY]: 9, [constants.BROTLI_PARAM_SIZE_HINT]: raw.length } })
-      : encoding === "gzip" ? gz(raw, { level: 9 }) : Promise.resolve(raw);
-    bodies.set(key, body);
-    // A failed compression isn't kept: the next request tries again.
-    body.catch(() => bodies.delete(key));
-  }
-  return body;
-}
-
-function encodingFor(accept: string | null): Encoding {
-  const a = (accept ?? "").toLowerCase();
-  return /\bbr\b/.test(a) ? "br" : /\bgzip\b/.test(a) ? "gzip" : "identity";
-}
-
-export async function GET(req: NextRequest, { params }: { params: { locale: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ locale: string }> }) {
+  const params = await props.params;
   if (!(LOCALES as readonly string[]).includes(params.locale)) return new Response("Not found", { status: 404 });
   const locale = params.locale as Locale;
   const current = req.nextUrl.searchParams.get("v") === messagesVersion(locale);
-  let encoding = encodingFor(req.headers.get("accept-encoding"));
-  const body = await bodyFor(locale, encoding).catch(() => { encoding = "identity"; return bodyFor(locale, "identity"); });
-  return new Response(new Uint8Array(body), {
+  return new Response(messagesScript(locale), {
     headers: {
       "Content-Type": "text/javascript; charset=utf-8",
-      "Content-Length": String(body.length),
       "Cache-Control": current ? "public, max-age=31536000, immutable" : "no-cache",
-      Vary: "Accept-Encoding",
-      ...(encoding === "identity" ? {} : { "Content-Encoding": encoding }),
     },
   });
 }

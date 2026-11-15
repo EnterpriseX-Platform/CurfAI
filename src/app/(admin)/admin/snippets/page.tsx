@@ -11,6 +11,9 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { SnippetsManager } from "./SnippetsManager";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { serverLocale } from "@/lib/i18n/serverLocale";
+import { t } from "@/lib/i18n/dict";
+
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +33,10 @@ export default async function SnippetsPage() {
     updatedAt: s.updatedAt instanceof Date ? s.updatedAt.toISOString() : s.updatedAt,
   }));
 
+  const locale = await serverLocale();
   return (
-    <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
-      <PageHeader title={<>Saved snippets</>} description={<>Reusable SQL and REST fragments. Available in the Designer via the query editor's "Insert snippet" picker.</>} />
+    <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
+      <PageHeader title={t(locale, "adminPages.snippets.title")} description={t(locale, "adminPages.snippets.subtitle")} />
 
       <SnippetsManager initial={initial} />
     </div>

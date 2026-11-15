@@ -80,7 +80,7 @@ export function DeleteWorkspacePanel({
 
   return (
     <section className="mb-8 rounded-lg border border-destructive/30 bg-destructive/5 p-5 shadow-xs">
-      <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-destructive">
+      <p className="mb-1 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-destructive">
         <AlertTriangle className="h-3.5 w-3.5" /> {t("adminTenant.dangerZone")}
       </p>
       <p className="mb-3 text-sm text-muted-foreground">

@@ -12,6 +12,7 @@ import { requireUser, requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { generateSigningSecret, EVENT_REGISTRY, knownEventIds } from "@/lib/webhooks";
 import { featureGate } from "@/lib/featureGate";
+import { storeWebhookSecret, webhookSecretPreview } from "@/lib/webhooks/secret";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,7 +30,7 @@ function safeProject(w: any) {
     payloadFormat: w.payloadFormat ?? "auto",
     // Show only first 8 chars of the secret so the admin can identify
     // the row after rotation without exposing the full key.
-    signingSecretPreview: w.signingSecret ? w.signingSecret.slice(0, 8) + "…" : null,
+    signingSecretPreview: webhookSecretPreview(w.signingSecret),
     createdAt: w.createdAt,
   };
 }
@@ -88,7 +89,8 @@ export async function POST(req: NextRequest) {
       name: parsed.data.name.trim(),
       url: parsed.data.url.trim(),
       events: validEvents.join(","),
-      signingSecret,
+      // Stored encrypted (lib/webhooks/secret.ts); the plain value is shown once, below.
+      signingSecret: storeWebhookSecret(signingSecret),
       payloadFormat: parsed.data.payloadFormat ?? "auto",
       enabled: true,
       createdById: user.id,

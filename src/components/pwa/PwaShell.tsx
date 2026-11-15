@@ -27,6 +27,8 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const INSTALL_DISMISSED_KEY = "curf.pwa.install-dismissed";
+const VISITS_KEY = "curf.pwa.visits";
+const VISIT_COUNTED_KEY = "curf.pwa.visit-counted";
 
 export function PwaShell() {
   const { t } = useT();
@@ -80,9 +82,22 @@ export function PwaShell() {
   // 2. Install prompt handling.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (typeof localStorage !== "undefined" && localStorage.getItem(INSTALL_DISMISSED_KEY)) {
-      setInstallDismissed(true);
-    }
+    // Offer the install card only where it pays off — a phone or tablet
+    // (coarse pointer) — and only from the second visit on. On desktop it
+    // opened over the content of every first page a visitor saw.
+    let visits = 0;
+    try {
+      if (localStorage.getItem(INSTALL_DISMISSED_KEY)) setInstallDismissed(true);
+      if (!sessionStorage.getItem(VISIT_COUNTED_KEY)) {
+        visits = Number(localStorage.getItem(VISITS_KEY) ?? "0") + 1;
+        localStorage.setItem(VISITS_KEY, String(visits));
+        sessionStorage.setItem(VISIT_COUNTED_KEY, "1");
+      } else {
+        visits = Number(localStorage.getItem(VISITS_KEY) ?? "1");
+      }
+    } catch { /* storage blocked: treat as a first visit */ }
+    const touch = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+    if (!touch || visits < 2) setInstallDismissed(true);
     function onBeforeInstall(ev: Event) {
       ev.preventDefault(); // stash, don't show the default mini-bar
       setInstallEvent(ev as BeforeInstallPromptEvent);

@@ -3,7 +3,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * The page header every top-level surface shares: an optional eyebrow, the
- * 32px title, a one-line mono description, and the actions that belong to
+ * 32px title, a short sans description (mono is for provenance — hashes,
+ * run times, counts — not sentences), and the actions that belong to
  * the page on the right — the same shape the Reports, Operate and Knowledge
  * pages set. One component rather than a copy per page, so a change to the
  * type scale lands everywhere at once.
@@ -34,7 +35,7 @@ export function PageHeader({
           {title}
         </h1>
         {description && (
-          <p className="mt-1 max-w-3xl break-words font-mono text-xs leading-relaxed text-muted-foreground">{description}</p>
+          <p className="mt-1.5 max-w-3xl break-words text-sm leading-relaxed text-muted-foreground">{description}</p>
         )}
       </div>
       {/* Not shrink-0 — same reasoning as the title block's min-width

@@ -90,6 +90,10 @@ export function computeMicroCost(opts: {
     }
   }
   if (!rate) return null;
+  return costAt(rate, opts);
+}
+
+function costAt(rate: ModelRate, opts: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreateTokens?: number }): number {
   const cacheRead = rate.cacheReadPer1M ?? rate.inputPer1M;
   const cacheCreate = rate.cacheCreatePer1M ?? rate.inputPer1M * 1.25;
   const usd =
@@ -109,25 +113,22 @@ export function computeMicroCost(opts: {
  * practice this fallback only fires between a model launch and the
  * next deploy.
  */
-export function computeMicroCostMetered(opts: Parameters<typeof computeMicroCost>[0]): number {
+export function computeMicroCostMetered(opts: Parameters<typeof computeMicroCost>[0], rate?: ModelRate | null): number {
+  // A platform model a platform admin priced (a self-hosted host has no list price) is metered at that rate.
+  if (rate) return costAt(rate, opts);
   const exact = computeMicroCost(opts);
   if (exact != null) return exact;
   const table = RATES[opts.provider] ?? {};
   const dearest = Object.values(table).sort((a, b) => b.outputPer1M - a.outputPer1M)[0] ?? RATES.anthropic["claude-sonnet-4-6"];
   console.warn(`[llm] no list price for ${opts.provider}/${opts.model}; metering at ${dearest.outputPer1M}/1M output`);
-  const usd =
-    (opts.inputTokens / 1_000_000) * dearest.inputPer1M +
-    (opts.outputTokens / 1_000_000) * dearest.outputPer1M +
-    ((opts.cacheReadTokens ?? 0) / 1_000_000) * (dearest.cacheReadPer1M ?? dearest.inputPer1M) +
-    ((opts.cacheCreateTokens ?? 0) / 1_000_000) * (dearest.cacheCreatePer1M ?? dearest.inputPer1M * 1.25);
-  return Math.round(usd * 1_000_000);
+  return costAt(dearest, opts);
 }
 
 export function formatMicroUsd(microUsd: number | null | undefined): string {
   if (microUsd == null) return "—";
   const usd = microUsd / 1_000_000;
   if (usd === 0) return "$0";
-  if (usd < 0.001) return `$${(usd * 100).toFixed(4)}¢`;
+  if (usd < 0.001) return `${(usd * 100).toFixed(4)}¢`;
   if (usd < 0.01) return `${(usd * 100).toFixed(2)}¢`;
   if (usd < 1) return `$${usd.toFixed(3)}`;
   if (usd < 100) return `$${usd.toFixed(2)}`;

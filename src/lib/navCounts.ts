@@ -12,6 +12,8 @@
  * calls land in the same tick, the Sidebar sees one event and makes one
  * request.
  */
+import type { NavApp } from "@/lib/nav/systems";
+
 const EVENT = "curf:nav-counts-refresh";
 
 /** How long one answer serves every Sidebar mount — the route keeps its own copy as long. */
@@ -32,6 +34,10 @@ export type NavCounts = {
   dataQuality?: number;
   /** Deep Ask answers finished but not yet opened. */
   askUnread?: number;
+  /** Master Builder plans and builds the caller started that are still running. */
+  buildRunning?: number;
+  /** Not a count: the workspace's published apps, for the rail's Apps system. */
+  apps?: NavApp[];
 };
 
 type Entry = { at: number; counts?: NavCounts; pending?: Promise<NavCounts | null> };

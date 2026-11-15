@@ -18,7 +18,7 @@
  */
 import type { LlmDriver, LlmRequest, LlmResponse, DriverContext } from "../types";
 import { guardedFetch } from "@/lib/security/ssrfGuard";
-import { isFatalProviderError, isTransientHttpStatus, parseRetryAfter, streamingEnabled } from "../resilience";
+import { isFatalProviderError, isTransientHttpStatus, parseRetryAfter, streamingEnabled, wallCeilingMs } from "../resilience";
 
 /**
  * Reasoning-off switch, only where the host is known to accept one — an
@@ -29,7 +29,10 @@ import { isFatalProviderError, isTransientHttpStatus, parseRetryAfter, streaming
  * exception within the same family — verified live, kimi-k2.7-code 400s
  * on the `thinking` field itself ("model does not support thinking"), not
  * on its value, because those builds never think at all and don't expose
- * the switch. OpenAI o-series: `reasoning_effort`. Anything else: no field.
+ * the switch. OpenAI o-series: `reasoning_effort`. Qwen3+ (vLLM / SGLang
+ * serve it, e.g. Athena): `chat_template_kwargs.enable_thinking` — verified
+ * live, without it qwen-3.8-27b spent the 800-token Ask budget thinking and
+ * returned no answer for a third of the questions. Anything else: no field.
  */
 export function reasoningFieldsFor(
   providerId: "openai" | "openai-compatible",
@@ -41,6 +44,9 @@ export function reasoningFieldsFor(
   }
   if (providerId === "openai" && /^o\d/.test(model)) {
     return { reasoning_effort: "low" };
+  }
+  if (/qwen/i.test(model)) {
+    return { chat_template_kwargs: { enable_thinking: false } };
   }
   return {};
 }
@@ -60,7 +66,7 @@ export function idleTimeoutMs(): number {
 }
 
 export type ChatCompletion = {
-  choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>;
+  choices?: Array<{ message?: { content?: string; reasoning_content?: string; reasoning?: string }; finish_reason?: string }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
   model?: string;
   /** ms from the start of the read until the first content or reasoning token. */
@@ -112,8 +118,9 @@ export async function readChatStream(
     const d = ch.delta;
     if (d) {
       if (typeof d.content === "string" && d.content) content += d.content;
-      if (typeof d.reasoning_content === "string" && d.reasoning_content) reasoning += d.reasoning_content;
-      if (firstTokenMs === undefined && (d.content || d.reasoning_content)) firstTokenMs = Date.now() - started;
+      const think = typeof d.reasoning_content === "string" ? d.reasoning_content : typeof d.reasoning === "string" ? d.reasoning : "";
+      if (think) reasoning += think;
+      if (firstTokenMs === undefined && (d.content || think)) firstTokenMs = Date.now() - started;
     }
   };
 
@@ -162,13 +169,20 @@ export function openaiCompatibleCall(
     const t0 = Date.now();
     const baseUrl = (ctx.baseUrl ?? defaultBaseUrl).replace(/\/+$/, "");
 
-    const messages: Array<{ role: string; content: string }> = [];
-    if (req.system) messages.push({ role: "system", content: req.system });
-    for (const m of req.messages) messages.push({ role: m.role, content: m.content });
+    // Every system instruction goes into ONE leading system message, the way
+    // the Anthropic driver joins them: chat templates on self-hosted servers
+    // (Qwen on vLLM, verified live 2026-10-24) 400 with "System message must
+    // be at the beginning" on a system turn anywhere else.
+    const systemParts: string[] = req.system ? [req.system] : [];
+    const turns: Array<{ role: string; content: string }> = [];
+    for (const m of req.messages) {
+      if (m.role === "system") systemParts.push(m.content);
+      else turns.push({ role: m.role, content: m.content });
+    }
 
-    // OpenAI JSON mode requires the literal word "json" in the user
-    // turn. We patch in a one-line system reminder if responseFormat
-    // is json. Cheap insurance against accidental 400s.
+    // OpenAI JSON mode requires the literal word "json" in the messages.
+    // We add a one-line system reminder if responseFormat is json. Cheap
+    // insurance against accidental 400s.
     //
     // When the caller asked for no reasoning (fast, Q&A-shaped kinds — see
     // isFastKind), also say so in words: a host without a `thinking`
@@ -181,13 +195,13 @@ export function openaiCompatibleCall(
     let response_format: any = undefined;
     if (req.responseFormat === "json") {
       response_format = { type: "json_object" };
-      messages.push({
-        role: "system",
-        content: req.reasoning === "off"
-          ? "Respond with a single valid JSON object. Answer directly — do not use extended step-by-step reasoning or chain-of-thought."
-          : "Respond with a single valid JSON object.",
-      });
+      systemParts.push(req.reasoning === "off"
+        ? "Respond with a single valid JSON object. Answer directly — do not use extended step-by-step reasoning or chain-of-thought."
+        : "Respond with a single valid JSON object.");
     }
+    const messages = systemParts.length
+      ? [{ role: "system", content: systemParts.join("\n\n") }, ...turns]
+      : turns;
 
     // The Kimi line pins temperature per model AND per mode — verified
     // live: kimi-k3 400s with "only 1 is allowed", kimi-k2.6 with
@@ -215,7 +229,7 @@ export function openaiCompatibleCall(
     // A caller with evidence that its path is slow (see LlmRequest.timeoutMs)
     // can raise this for itself without changing what a stuck request costs
     // everyone else. Clamped so a bad value can't hang a request forever.
-    const REQUEST_TIMEOUT_MS = Math.min(Math.max(req.timeoutMs ?? 90_000, 5_000), 300_000);
+    const REQUEST_TIMEOUT_MS = Math.min(Math.max(req.timeoutMs ?? 90_000, 5_000), wallCeilingMs());
     const stream = streamingEnabled();
     const IDLE_MS = idleTimeoutMs();
     const controller = new AbortController();
@@ -295,7 +309,7 @@ export function openaiCompatibleCall(
       const durationMs = Date.now() - t0;
       const text = (j.choices?.[0]?.message?.content ?? "").trim();
       const finishReason = j.choices?.[0]?.finish_reason;
-      const reasoningChars = j.choices?.[0]?.message?.reasoning_content?.length ?? 0;
+      const reasoningChars = (j.choices?.[0]?.message?.reasoning_content ?? j.choices?.[0]?.message?.reasoning)?.length ?? 0;
 
       // Some OpenAI-compatible reasoning ("thinking") models return their
       // chain-of-thought in a separate reasoning_content field and count it

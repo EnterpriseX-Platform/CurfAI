@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 export function AiNotice({ short = false, className }: { short?: boolean; className?: string }) {
   const { t } = useT();
   return (
-    <p className={cn("m-0 inline-flex items-start gap-1.5 text-[11px] leading-snug text-faint", className)}>
+    <p className={cn("m-0 inline-flex items-start gap-1.5 text-2xs leading-snug text-faint", className)}>
       <Sparkles className="mt-px h-3 w-3 shrink-0" aria-hidden />
       <span>{t(short ? "ai.notice.short" : "ai.notice")}</span>
     </p>

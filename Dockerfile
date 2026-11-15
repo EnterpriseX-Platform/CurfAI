@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma
+# postinstall patches Next's vendored react-dom (scripts/patch-react-render-ping.mjs).
+COPY scripts/patch-react-render-ping.mjs ./scripts/
 RUN npm ci
 RUN npx prisma generate \
  && npm rebuild better-sqlite3

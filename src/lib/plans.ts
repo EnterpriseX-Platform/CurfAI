@@ -41,6 +41,19 @@ export const UPGRADE_URL = EDITION === "community" ? "https://curf.ai/pricing/" 
  */
 export const TRIAL_DAYS = 14;
 
+/**
+ * Stripe subscription statuses that keep a paid tier: running, in its trial,
+ * or a failed renewal still inside Stripe's retry window (past_due — the
+ * admins are emailed and shown a banner). Every other status — incomplete
+ * (first payment not made), incomplete_expired, paused (trial ended with no
+ * card), unpaid, canceled — is not paid for and must not unlock a tier.
+ */
+export const PAID_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set(["active", "trialing", "past_due"]);
+
+export function subscriptionKeepsPaidTier(status: string | null | undefined): boolean {
+  return !!status && PAID_SUBSCRIPTION_STATUSES.has(status);
+}
+
 /** Whether a workspace still qualifies for the free trial at checkout. */
 export function trialEligible(tenant: { stripeSubscriptionId: string | null; stripeStatus: string | null }): boolean {
   return !tenant.stripeSubscriptionId && !tenant.stripeStatus;
@@ -66,6 +79,13 @@ export type PlanFeatures = {
    *  Enforced in lib/llm/index.ts against LlmTokenUsage; a workspace on
    *  its own key is not metered. Infinity = unmetered. */
   aiCredits: { base: number; perEditor: number; perViewer: number };
+  /** New Master Builder builds a workspace may start per calendar month (a build that failed or is still a
+   *  draft does not count; iterating on an existing build is never counted). Enforced by
+   *  requireMasterBuildQuota in lib/billing.ts. Infinity = unlimited. */
+  masterBuildsPerMonth: number;
+  /** Scheduled agent briefs a workspace may keep (lib/briefs/): each one runs a Deep Ask on a schedule, so each costs credits
+   *  every time. Enforced by requireAgentBriefQuota in lib/billing.ts. 0 = none. Infinity = unlimited. */
+  agentBriefsMax: number;
   /** People who receive assignments without a Curf seat (executive journey
    *  P3) — free up to this many per workspace (CEO decision 2026-09-24);
    *  beyond it they need a viewer seat. Infinity = unlimited. */
@@ -127,6 +147,8 @@ export const PLANS: Plan[] = [
       apps: 0,
       watchersMax: 0,
       aiCredits: { base: 100, perEditor: 0, perViewer: 0 },
+      masterBuildsPerMonth: 2,
+      agentBriefsMax: 0,
       seatlessPeople: 0,
       lineMessages: 0,
       shareLinksMax: 3,
@@ -153,6 +175,8 @@ export const PLANS: Plan[] = [
       apps: 3,
       watchersMax: 10,
       aiCredits: { base: 0, perEditor: 500, perViewer: 50 },
+      masterBuildsPerMonth: Infinity,
+      agentBriefsMax: 3,
       seatlessPeople: 25,
       lineMessages: 0,
       shareLinksMax: 50,
@@ -179,6 +203,8 @@ export const PLANS: Plan[] = [
       apps: Infinity,
       watchersMax: Infinity,
       aiCredits: { base: 0, perEditor: 2000, perViewer: 100 },
+      masterBuildsPerMonth: Infinity,
+      agentBriefsMax: 20,
       seatlessPeople: 100,
       lineMessages: 2000,
       shareLinksMax: Infinity,
@@ -206,6 +232,8 @@ export const PLANS: Plan[] = [
       apps: Infinity,
       watchersMax: Infinity,
       aiCredits: { base: Infinity, perEditor: 0, perViewer: 0 },
+      masterBuildsPerMonth: Infinity,
+      agentBriefsMax: Infinity,
       seatlessPeople: Infinity,
       lineMessages: 10000,
       shareLinksMax: Infinity,
@@ -264,6 +292,48 @@ export function monthlyPriceUsd(plan: Plan, seats: SeatCounts): number {
   if (!plan.seats) return 0;
   const b = billableSeats(plan, seats);
   return b.editors * plan.seats.editorUsd + b.viewers * plan.seats.viewerUsd;
+}
+
+// ---------------------------------------------------------------------------
+// Currencies and billing intervals (docs/THAI_BILLING.md)
+// ---------------------------------------------------------------------------
+
+export type Currency = "usd" | "thb";
+export type Interval = "month" | "year";
+export const CURRENCIES: readonly Currency[] = ["usd", "thb"];
+
+/** An annual plan costs ten months: two are free. */
+export const ANNUAL_MONTHS = 10;
+
+/**
+ * Fixed Thai baht list prices, per seat per month, EXCLUDING VAT (a Thai company is quoted the price before the 7%, which the tax
+ * invoice adds). They are set, not converted from USD at a daily rate, so a price doesn't move with the exchange rate. The Stripe
+ * baht prices (STRIPE_PRICE_<TIER>_<KIND>_THB[_ANNUAL]) must hold the same amounts.
+ */
+export const THB_SEAT_PRICES: Partial<Record<Tier, { editor: number; viewer: number }>> = {
+  growth: { editor: 1_690, viewer: 320 },
+  business: { editor: 3_490, viewer: 520 },
+};
+
+/** A plan's per-seat monthly prices in a currency (major units), or null when it isn't sold per seat in that currency. */
+export function seatPrices(plan: Plan, currency: Currency): { editor: number; viewer: number } | null {
+  if (!plan.seats) return null;
+  if (currency === "usd") return { editor: plan.seats.editorUsd, viewer: plan.seats.viewerUsd };
+  return THB_SEAT_PRICES[plan.tier] ?? null;
+}
+
+/** What these seats cost for one billing period on this plan, in major units of the currency (null when not sold in it). */
+export function periodPrice(plan: Plan, seats: SeatCounts, currency: Currency, interval: Interval): number | null {
+  const p = seatPrices(plan, currency);
+  if (!p) return null;
+  const b = billableSeats(plan, seats);
+  const monthly = b.editors * p.editor + b.viewers * p.viewer;
+  return interval === "year" ? monthly * ANNUAL_MONTHS : monthly;
+}
+
+/** The env var holding a seat price id for a currency and interval: STRIPE_PRICE_GROWTH_EDITOR, ..._EDITOR_THB, ..._EDITOR_ANNUAL, ..._EDITOR_THB_ANNUAL. */
+export function priceEnvVar(base: string, currency: Currency, interval: Interval): string {
+  return base + (currency === "thb" ? "_THB" : "") + (interval === "year" ? "_ANNUAL" : "");
 }
 
 /** The workspace's pooled monthly AI-credit allowance on this plan. */

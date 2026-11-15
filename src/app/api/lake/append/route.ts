@@ -21,6 +21,7 @@ import { appendRows } from "@/lib/lake/tables";
 import { checkWriteAllowed } from "@/lib/lake/quota";
 import { lakeFileSize } from "@/lib/lake/storage";
 import { bustLakeCacheForTenant } from "@/lib/lake/bust";
+import { tenantIsOpen } from "@/lib/tenantGuard";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -53,6 +54,8 @@ export async function POST(req: NextRequest) {
   try { tokenOk = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(tokenRow.hashedSecret)); }
   catch { tokenOk = false; }
   if (!tokenOk) return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+  // A closed workspace's push key reads as a revoked one: the same 401, nothing written.
+  if (!(await tenantIsOpen(tokenRow.tenantId))) return NextResponse.json({ error: "Invalid token" }, { status: 401 });
 
   // 2. Parse body. Accept either an array or a single object (which we
   //    coerce to a one-element array). Reject anything else.

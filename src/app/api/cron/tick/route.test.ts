@@ -9,7 +9,7 @@
  *
  * The real deliveryViewer() runs here against a stubbed Membership row.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/db", () => ({
@@ -37,6 +37,7 @@ vi.mock("@/lib/cron/lakeTicks", () => ({
 }));
 vi.mock("@/lib/cron/opsTicks", () => ({
   tickAuditRetention: vi.fn(), tickAiUsageThreshold: vi.fn(), tickSecurityAlerts: vi.fn(),
+  tickWebhookSecrets: vi.fn(), tickLifecycle: vi.fn(),
 }));
 vi.mock("@/ee", () => ({ ee: {} }));
 
@@ -125,5 +126,37 @@ describe("cron tick — a scheduled delivery renders as its creator", () => {
     vi.mocked(prisma.schedule.findMany).mockResolvedValue([delivery("pdf")] as any);
     await tick();
     expect(vi.mocked(renderPdf).mock.calls[0][0]).toMatchObject({ viewer: ANONYMOUS_VIEWER });
+  });
+});
+
+describe("cron tick — with a job queue configured", () => {
+  const post = (query = "") => POST(new NextRequest(`http://localhost:3100/api/cron/tick${query}`, {
+    method: "POST", headers: { "x-cron-secret": "cron-secret" },
+  }));
+  afterEach(() => { delete process.env.CURF_REDIS_QUEUE_URL; delete process.env.CURF_JOBS; });
+
+  it("hands over to the workers: nothing runs in the request, so the same schedule can't fire twice", async () => {
+    process.env.CURF_REDIS_QUEUE_URL = "redis://queue.invalid:6379";
+    vi.mocked(prisma.schedule.findMany).mockResolvedValue([delivery("csv")] as any);
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, fired: 0, mode: "queue" });
+    expect(vi.mocked(prisma.schedule.findMany)).not.toHaveBeenCalled();
+    expect(vi.mocked(renderCsv)).not.toHaveBeenCalled();
+  });
+
+  it("?force=1 still runs a tick in the request: the operator's manual trigger", async () => {
+    process.env.CURF_REDIS_QUEUE_URL = "redis://queue.invalid:6379";
+    vi.mocked(prisma.schedule.findMany).mockResolvedValue([delivery("csv")] as any);
+    await post("?force=1");
+    expect(vi.mocked(renderCsv)).toHaveBeenCalledTimes(1);
+  });
+
+  it("CURF_JOBS=off keeps the tick even with a queue configured", async () => {
+    process.env.CURF_REDIS_QUEUE_URL = "redis://queue.invalid:6379";
+    process.env.CURF_JOBS = "off";
+    vi.mocked(prisma.schedule.findMany).mockResolvedValue([delivery("csv")] as any);
+    await post("?force=1");
+    expect(vi.mocked(prisma.schedule.findMany)).toHaveBeenCalled();
   });
 });

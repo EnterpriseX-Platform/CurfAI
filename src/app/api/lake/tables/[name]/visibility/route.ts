@@ -24,7 +24,8 @@ const BodySchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("owner_only") }),
 ]);
 
-export async function POST(req: NextRequest, { params }: { params: { name: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   // Deliberately not lakeTableFor(): an admin may open up a table they can't

@@ -19,7 +19,8 @@ export const runtime = "nodejs";
 const SLOW_QUERY_MS = 2000;
 const WINDOW_MS = 7 * 86_400_000;
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);

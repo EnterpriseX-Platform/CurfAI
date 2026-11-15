@@ -24,7 +24,8 @@ export const dynamic = "force-dynamic";
  * ever writes there, but we don't want a malformed connection string to
  * cause us to overwrite something else.
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 

@@ -89,7 +89,7 @@ export function OrganizationPanel() {
     <section className="rounded-lg border bg-card p-5 shadow-xs">
       <div className="mb-4 flex items-center gap-2">
         <Building2 className="h-4 w-4 text-primary" />
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("admin.organizationPanel.heading")}
         </p>
       </div>

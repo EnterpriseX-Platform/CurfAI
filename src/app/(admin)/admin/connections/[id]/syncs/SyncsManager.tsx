@@ -185,18 +185,18 @@ function JobRow({
           <div className="flex items-center gap-2">
             <span className="font-mono text-xs text-muted-foreground">{job.scheduleCron}</span>
             {!job.enabled && (
-              <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning">
+              <span className="rounded-full bg-warning/10 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wider text-warning">
                 {t("dashboardViewer.paused")}
               </span>
             )}
             {isLeased && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-ink">
+              <span className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 text-2xs font-semibold uppercase tracking-wider text-primary-ink">
                 <Loader2 className="h-2.5 w-2.5 animate-spin" />
                 {t("admin.lineage.freshnessRunning")}
               </span>
             )}
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
             <span>
               <span className="font-semibold text-foreground">{job.objects.length}</span> {job.objects.length === 1 ? t("admin.syncs.objectSingular") : t("admin.syncs.objectPlural")}: <span className="font-mono">{job.objects.join(", ") || "—"}</span>
             </span>
@@ -240,7 +240,7 @@ function JobRow({
       {job.objects.length > 0 && (
         <div className="border-t border-border bg-muted/20">
           <table className="w-full text-xs">
-            <thead className="text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+            <thead className="text-left text-2xs uppercase tracking-wider text-muted-foreground">
               <tr>
                 <th className="px-5 py-2 font-medium">{t("admin.syncs.colObject")}</th>
                 <th className="px-3 py-2 font-medium">{t("admin.syncs.colStatus")}</th>
@@ -320,7 +320,7 @@ function LogExpander({ jobId, t }: { jobId: string; t: (key: string) => string }
 
   return (
     <div className="border-t border-border bg-muted/10 px-5 py-3">
-      <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{t("admin.syncs.recentRunsHeading")}</h4>
+      <h4 className="mb-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("admin.syncs.recentRunsHeading")}</h4>
       {loading && runs === null && (
         <p className="text-xs text-muted-foreground">{t("admin.webhooks.loading")}</p>
       )}
@@ -339,7 +339,7 @@ function LogExpander({ jobId, t }: { jobId: string; t: (key: string) => string }
               <span className="w-24 shrink-0 text-muted-foreground">
                 {r.rowsRead}→{r.rowsWritten}
               </span>
-              <span className="flex-1 truncate font-mono text-[11px] text-destructive">
+              <span className="flex-1 truncate font-mono text-2xs text-destructive">
                 {r.errorMessage ?? ""}
               </span>
             </li>

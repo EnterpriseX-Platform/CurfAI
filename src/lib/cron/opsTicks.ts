@@ -6,6 +6,8 @@
 import { prisma } from "@/lib/db";
 import { cronMatches } from "@/lib/cron/cronMatches";
 import { ee } from "@/ee";
+import { OPEN_TENANT } from "@/lib/tenantStatus";
+import { closedTenantIds } from "@/lib/tenantGuard";
 import type { FiredItem } from "./types";
 
 // Daily audit-log retention sweep. Runs at 03:00 UTC (one hour after
@@ -31,6 +33,39 @@ export async function tickAuditRetention(fired: FiredItem[], now: Date, force: b
   }
 }
 
+// Webhook signing secrets that were stored in plain (before 2026-11) are re-saved
+// encrypted, a few hundred rows a pass, until none are left (lib/webhooks/secret.ts).
+export async function tickWebhookSecrets(fired: FiredItem[]): Promise<void> {
+  try {
+    const { encryptLegacyWebhookSecrets } = await import("@/lib/webhooks/secret");
+    const r = await encryptLegacyWebhookSecrets();
+    if (r.encrypted > 0) {
+      fired.push({ id: "webhook-secrets", kind: "webhook_secrets", status: "ok", narrative: `encrypted ${r.encrypted} webhook signing secret${r.encrypted === 1 ? "" : "s"}` });
+    }
+  } catch (e: any) {
+    console.warn("[cron] webhook secret encryption failed:", e?.message);
+  }
+}
+
+// Customer lifecycle (lib/lifecycle/): purge a workspace whose deletion grace period has ended (one per pass, so a
+// big purge never starves the rest of the tick), remove workspace exports past their date, and drop the audit trail
+// of workspaces purged long enough ago. Not time-gated: each is cheap when nothing is due.
+export async function tickLifecycle(fired: FiredItem[], now: Date): Promise<void> {
+  try {
+    const { sweepPurges, purgeAuditAfterRetention } = await import("@/lib/lifecycle/purge");
+    const { sweepWorkspaceExports } = await import("@/lib/lifecycle/export");
+    const purged = await sweepPurges(now);
+    for (const id of purged.purged) fired.push({ id, kind: "workspace_purge", status: "ok", narrative: "workspace purged after its grace period" });
+    for (const id of purged.failed) fired.push({ id, kind: "workspace_purge", status: "error", narrative: "workspace purge incomplete; will retry on the next tick" });
+    const x = await sweepWorkspaceExports(now);
+    if (x.expired > 0) fired.push({ id: "workspace-exports", kind: "workspace_export_expiry", status: "ok", narrative: `removed ${x.expired} expired export${x.expired === 1 ? "" : "s"}` });
+    // Once a day is plenty for the audit trail of purged workspaces.
+    if (now.getUTCHours() === 4 && now.getUTCMinutes() < 5) await purgeAuditAfterRetention(now);
+  } catch (e: any) {
+    console.warn("[cron] lifecycle sweep failed:", e?.message);
+  }
+}
+
 // AI-spend threshold check — every 15 minutes, scan rolling 24h LLM
 // cost per tenant against `llmCostThresholdMicroUsd`. Fires the
 // `ai.usage.threshold` webhook when crossed, with a 24h debounce on
@@ -49,7 +84,9 @@ export async function tickAiUsageThreshold(fired: FiredItem[], now: Date, force:
     }).catch(() => [] as any[]);
     // Pull tenants in one batch and join in memory — keeps the cron
     // tick under one round-trip per shape.
+    // Open workspaces only: a closed one gets no webhook and no write.
     const tenants = await prisma.tenant.findMany({
+      where: OPEN_TENANT,
       select: { id: true, llmCostThresholdMicroUsd: true, llmCostLastNotifyAt: true },
     });
     const byTenant = new Map(grouped.map((g: any) => [g.tenantId, g._sum?.microCostUsd ?? 0]));
@@ -118,8 +155,11 @@ export async function tickSecurityAlerts(fired: FiredItem[], now: Date, force: b
       }),
     ]).catch(() => [[], []] as [any[], any[]]);
     const prevCounts = new Map(previous.map((p: any) => [`${p.tenantId}:${p.userEmail}`, p._count._all as number]));
+    // A closed workspace is told nothing (webhook, email, Operate item): leave its failed sign-ins out after the grouping.
+    const closed = new Set(await closedTenantIds());
     for (const c of current as any[]) {
       if (!c.userEmail) continue;
+      if (closed.has(c.tenantId)) continue;
       const prevCount = prevCounts.get(`${c.tenantId}:${c.userEmail}`) ?? 0;
       if (!shouldAlertOnFailedLogins(c._count._all, prevCount)) continue;
       void emitWebhook({

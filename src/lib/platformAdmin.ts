@@ -14,6 +14,11 @@
  */
 import type { CurfSessionUser } from "@/lib/auth";
 
+/** How many operators the allowlist names. A change that needs a second operator can only wait for one when this is 2 or more. */
+export function platformAdminCount(): number {
+  return new Set((process.env.CURF_PLATFORM_ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)).size;
+}
+
 export function isPlatformAdmin(emailOrUser: string | CurfSessionUser | null | undefined): boolean {
   const email = typeof emailOrUser === "string" ? emailOrUser : emailOrUser?.email;
   if (!email) return false;

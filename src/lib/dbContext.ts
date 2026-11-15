@@ -28,7 +28,9 @@
  * only way to drop the filter is to call withSystemDbContext in code.
  */
 import type { AsyncLocalStorage } from "node:async_hooks";
-import { requestAsyncStorage } from "next/dist/client/components/request-async-storage.external";
+// Next 15 keeps the per-request store in workUnitAsyncStorage (Next 14 called
+// it requestAsyncStorage); a request's workspace binding rides on that store.
+import { workUnitAsyncStorage } from "next/dist/server/app-render/work-unit-async-storage.external";
 
 export type DbContext = { tenantId: string; userId: string; role: string };
 
@@ -50,7 +52,7 @@ const scopes: Scopes = ALS
 
 function requestStore(): Record<symbol, unknown> | undefined {
   try {
-    return requestAsyncStorage.getStore() as unknown as Record<symbol, unknown> | undefined;
+    return workUnitAsyncStorage.getStore() as unknown as Record<symbol, unknown> | undefined;
   } catch {
     return undefined;
   }

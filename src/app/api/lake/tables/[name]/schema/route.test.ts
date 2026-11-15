@@ -45,7 +45,7 @@ function post(body: unknown) {
     new NextRequest("http://localhost:3100/api/lake/tables/people/schema", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     }),
-    { params: { name: "people" } },
+    { params: Promise.resolve({ name: "people" }) },
   );
 }
 

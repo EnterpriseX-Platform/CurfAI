@@ -175,7 +175,7 @@ export function TypedConversionSection({
           {t("tableManage.typedConv.review")}
         </button>
       </header>
-      <p className="mt-1 text-[11px] text-muted-foreground">{t("tableManage.typedConv.hint")}</p>
+      <p className="mt-1 text-2xs text-muted-foreground">{t("tableManage.typedConv.hint")}</p>
 
       <Dialog open={open} onOpenChange={(o) => { if (phase !== "applying") setOpen(o); }}>
         <DialogContent className="sm:max-w-xl" aria-describedby={undefined}>
@@ -238,8 +238,8 @@ export function TypedConversionSection({
                             />
                             <span className="min-w-0 flex-1">
                               <span className="flex flex-wrap items-center gap-1.5">
-                                <code className="font-mono text-[11px] font-semibold">{c.name}</code>
-                                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                <code className="font-mono text-2xs font-semibold">{c.name}</code>
+                                <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
                                   {t(TYPE_KEY[c.proposedType])}
                                 </span>
                               </span>
@@ -254,7 +254,7 @@ export function TypedConversionSection({
                                 <span className="mt-1 flex flex-wrap items-center gap-1 text-muted-foreground">
                                   {t("tableManage.typedConv.examples")}
                                   {c.sampleLossyValues.slice(0, MAX_EXAMPLES).map((v, i) => (
-                                    <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{trunc(v)}</code>
+                                    <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-2xs">{trunc(v)}</code>
                                   ))}
                                 </span>
                               )}
@@ -271,7 +271,7 @@ export function TypedConversionSection({
                     <summary className="cursor-pointer select-none">{t("tableManage.typedConv.whyNot")}</summary>
                     <ul className="mt-1.5 space-y-1 pl-3">
                       {preview.skippedColumns.map((s) => (
-                        <li key={s.name}><code className="font-mono text-[10px]">{s.name}</code> — {s.reason}</li>
+                        <li key={s.name}><code className="font-mono text-2xs">{s.name}</code> — {s.reason}</li>
                       ))}
                     </ul>
                   </details>

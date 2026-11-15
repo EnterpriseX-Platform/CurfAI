@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser, requireAdmin, tenantWhere, getUserRoles, blockScopedApiKey } from "@/lib/auth";
+import { validSlotKeys } from "@/lib/dashboards/validSlotKeys";
 import { recordAudit } from "@/lib/audit";
 import { writeVisibility, canSeeDataSource, type Visibility } from "@/lib/datasourceAcl";
 import { requireDashboardQuota, withSerializableRetry, QuotaBlockedError } from "@/lib/billing";
@@ -108,12 +109,8 @@ export async function POST(req: NextRequest) {
 
   // Verify every report id is in the same tenant. Don't 404 on the first
   // missing one — return all so the UI can highlight which were dropped.
-  const reportRows = await prisma.report.findMany({
-    where: { id: { in: parsed.data.reportIds }, tenantId: user.tenantId },
-    select: { id: true },
-  });
-  const validIds = new Set(reportRows.map((r) => r.id));
-  const orderedIds = parsed.data.reportIds.filter((id) => validIds.has(id));
+  // A card is a whole report or one block of one ("<reportId>#<blockId>", lib/dashboards/slotKey.ts).
+  const orderedIds = await validSlotKeys(user.tenantId, parsed.data.reportIds);
   if (orderedIds.length === 0) {
     return NextResponse.json({ error: "None of the supplied report IDs belong to this tenant." }, { status: 400 });
   }

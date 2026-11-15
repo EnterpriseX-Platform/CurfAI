@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { ensureLimit } from "@/lib/rateLimit";
 import { clientIp } from "@/lib/security/clientIp";
 import { appBase } from "@/lib/http/appBase";
+import { ee } from "@/ee";
 
 /**
  * POST /api/forgot — start a password reset.
@@ -29,7 +30,7 @@ function hashToken(t: string): string {
 
 export async function POST(req: NextRequest) {
   const ip = clientIp(req);
-  const limited = ensureLimit("forgot", `ip:${ip}`, 10, 5 * 60_000);
+  const limited = await ensureLimit("forgot", `ip:${ip}`, 10, 5 * 60_000);
   if (limited) return limited;
 
   const body = await req.json().catch(() => null);
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  const emailLimited = ensureLimit("forgot-email", `email:${parsed.data.email.toLowerCase()}`, 3, 15 * 60_000);
+  const emailLimited = await ensureLimit("forgot-email", `email:${parsed.data.email.toLowerCase()}`, 3, 15 * 60_000);
   if (emailLimited) return NextResponse.json({ ok: true }); // still don't leak existence
 
   // email is globally unique now — deterministic, not "whichever row
@@ -48,6 +49,13 @@ export async function POST(req: NextRequest) {
     where: { email: parsed.data.email },
     select: { id: true, email: true, name: true },
   });
+
+  if (user && ee.identity?.only()) {
+    // Keycloak holds the password: it mails the link and takes the new one. The same answer as below for an address it doesn't
+    // know, and the send is not awaited so the response time doesn't tell the two apart either.
+    void ee.identity.accounts.mail(user.email, ["UPDATE_PASSWORD"]).catch(() => null);
+    return NextResponse.json({ ok: true });
+  }
 
   if (user) {
     // PasswordResetToken still hangs off one tenantId (it's an audit

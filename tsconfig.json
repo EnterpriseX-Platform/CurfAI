@@ -35,7 +35,9 @@
     "tests/**/*.ts",
     "tests/**/*.tsx",
     "prisma/**/*.ts",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    ".next-semantic/types/**/*.ts",
+    ".next-alt/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

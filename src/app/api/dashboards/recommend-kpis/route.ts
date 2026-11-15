@@ -5,7 +5,7 @@ import { requireAdminOrEditor, tenantWhere } from "@/lib/auth";
 import { canSeeDataSource } from "@/lib/datasourceAcl";
 import { exportViewer } from "@/lib/reporting/exportCaller";
 import { callLLM } from "@/lib/llm";
-import { introspectTables } from "@/app/api/reports/generate/route";
+import { introspectTables } from "@/lib/reporting/introspectTables";
 import { TopKpiDefSchema } from "@/lib/reporting/schema";
 import { DUCKDB_LAKE_DIALECT_ONE_LINER } from "@/lib/reporting/duckdbDialect";
 

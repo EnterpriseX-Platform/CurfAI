@@ -61,6 +61,13 @@ export function resolveRetention(config: RetentionConfig, kind: string): Retenti
   return null;
 }
 
+/** Delete one tenant's audit rows of one kind created before `cutoff`. */
+export async function deleteAuditRowsOlderThan(tenantId: string, kind: string, cutoff: Date): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ n: bigint | number }>>`
+    SELECT curf_audit_retention_delete(${tenantId}, ${kind}, (${cutoff.toISOString()}::timestamptz AT TIME ZONE 'UTC')) AS n`;
+  return Number(rows[0]?.n ?? 0);
+}
+
 /**
  * Sweep one tenant. Returns counts of {scanned, deleted} per kind.
  * Errors are caught per-kind so a malformed config or one bad delete
@@ -111,12 +118,14 @@ export async function sweepTenantAuditLog(tenantId: string): Promise<{
     if (!rule) continue;
     const cutoff = new Date(Date.now() - rule.days * 24 * 60 * 60 * 1000);
     try {
-      const r = await prisma.auditEvent.deleteMany({
-        where: { tenantId, kind, createdAt: { lt: cutoff } },
-      });
-      if (r.count > 0) {
-        byKind.push({ kind, deleted: r.count, days: rule.days, pattern: rule.pattern });
-        totalDeleted += r.count;
+      // Through the database function, not deleteMany: once the roles are
+      // split (prisma/rls/split_owner_role.sql) the app role may not DELETE
+      // from AuditEvent at all, and the function refuses a cutoff inside the
+      // last 24 hours (migration 20261112130000_audit_event_append_only).
+      const count = await deleteAuditRowsOlderThan(tenantId, kind, cutoff);
+      if (count > 0) {
+        byKind.push({ kind, deleted: count, days: rule.days, pattern: rule.pattern });
+        totalDeleted += count;
       }
     } catch {
       // Skip this kind — maybe a rare DB error; the next sweep will

@@ -90,7 +90,7 @@ export function ConditionalEditor({
     <div className="space-y-3 rounded-md border border-border bg-muted/30 p-2.5">
       {/* Heatmap ramp picker */}
       <div className="grid gap-1">
-        <Label className="text-[10px]">{t("conditionalEditor.heatmapShading")}</Label>
+        <Label className="text-2xs">{t("conditionalEditor.heatmapShading")}</Label>
         <div className="flex flex-wrap gap-1">
           {HEATMAP_OPTIONS.map((opt) => {
             const active = (cf.heatmap ?? "off") === opt.slug;
@@ -100,7 +100,7 @@ export function ConditionalEditor({
                 type="button"
                 onClick={() => patch({ heatmap: opt.slug })}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] transition-colors",
+                  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-2xs transition-colors",
                   active ? "border-primary bg-primary/5 text-foreground" : "border-border bg-background text-muted-foreground hover:bg-muted",
                 )}
               >
@@ -119,8 +119,8 @@ export function ConditionalEditor({
       {/* Data bar toggle */}
       <div className="flex items-center justify-between rounded-md border border-border bg-background px-2.5 py-1.5">
         <div>
-          <Label className="text-[11px]">{t("conditionalEditor.dataBar")}</Label>
-          <p className="text-[10px] text-muted-foreground">{t("conditionalEditor.dataBarHint")}</p>
+          <Label className="text-2xs">{t("conditionalEditor.dataBar")}</Label>
+          <p className="text-2xs text-muted-foreground">{t("conditionalEditor.dataBarHint")}</p>
         </div>
         <input
           type="checkbox"
@@ -133,10 +133,10 @@ export function ConditionalEditor({
       {/* Rules list */}
       <div className="grid gap-1.5">
         <div className="flex items-center justify-between">
-          <Label className="text-[10px]">{t("conditionalEditor.rules")} <span className="text-muted-foreground/70">{t("conditionalEditor.firstMatchWins")}</span></Label>
+          <Label className="text-2xs">{t("conditionalEditor.rules")} <span className="text-muted-foreground/70">{t("conditionalEditor.firstMatchWins")}</span></Label>
         </div>
         {(cf.rules ?? []).length === 0 && (
-          <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md border border-dashed border-border/60 bg-background px-2.5 py-2 text-2xs text-muted-foreground">
             {t("conditionalEditor.noRules")}
           </p>
         )}
@@ -178,7 +178,7 @@ export function ConditionalEditor({
               />
               {r.op === "between" && (
                 <>
-                  <span className="text-[10px] text-muted-foreground">…</span>
+                  <span className="text-2xs text-muted-foreground">…</span>
                   <Input
                     type="number"
                     value={r.value2 ?? ""}
@@ -204,7 +204,7 @@ export function ConditionalEditor({
             />
             {/* Row 3: icon kind grid */}
             <div className="grid gap-1">
-              <Label className="text-[10px] text-muted-foreground">{t("common.icon")}</Label>
+              <Label className="text-2xs text-muted-foreground">{t("common.icon")}</Label>
               <IconKindGrid
                 value={r.iconKind}
                 variant={r.variant}

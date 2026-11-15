@@ -74,7 +74,7 @@ beforeEach(() => {
 
 describe("report diff page — both runs read as the viewer", () => {
   it("a query from a source the viewer can't see diffs as empty; a hidden block's query isn't diffed at all", async () => {
-    await DiffPage({ params: { id: "r1" }, searchParams: { from: "run-old", to: "run-new" } });
+    await DiffPage({ params: Promise.resolve({ id: "r1" }), searchParams: Promise.resolve({ from: "run-old", to: "run-new" }) });
     const [from, to] = vi.mocked(diffDatasets).mock.calls[0];
     expect(from).toEqual({ q: [{ v: 100 }], qRestricted: [] });
     expect(to).toEqual({ q: [{ v: 120 }], qRestricted: [] });

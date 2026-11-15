@@ -15,6 +15,12 @@ const config: Config = {
       screens: { "2xl": "1400px" },
     },
     extend: {
+      // The small end of the type scale. 11px is the floor for UI text
+      // (labels, meta, chips); nothing smaller — Thai tone marks stop being
+      // legible below it. Thai readers get +1px through globals.css.
+      fontSize: {
+        "2xs": ["0.6875rem", { lineHeight: "1rem" }],
+      },
       fontFamily: {
         // Instrument Sans carries UI and display alike (display weight is
         // the component's job, e.g. KPI values at 600). It has no Thai

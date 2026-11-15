@@ -110,7 +110,7 @@ export function EmbedButton({ reportId, blockId }: { reportId: string; blockId: 
                       type="button"
                       onClick={() => setTtlDays(o.d)}
                       className={
-                        "rounded-md border px-2 py-1.5 text-[11px] transition-colors " +
+                        "rounded-md border px-2 py-1.5 text-2xs transition-colors " +
                         (ttlDays === o.d
                           ? "border-primary bg-primary/10 text-primary"
                           : "border-border text-muted-foreground hover:bg-muted")
@@ -151,7 +151,7 @@ export function EmbedButton({ reportId, blockId }: { reportId: string; blockId: 
                     copied={copied === "url"}
                     onCopy={() => copy(result.url, "url")}
                   />
-                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                  <div className="flex items-center justify-between gap-2 text-2xs">
                     <a
                       href={result.url}
                       target="_blank"
@@ -190,13 +190,13 @@ function SnippetField({ label, value, copied, onCopy }: {
 }) {
   return (
     <label className="block">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       <div className="relative mt-1">
         <textarea
           value={value}
           readOnly
           rows={3}
-          className="block w-full resize-none rounded-md border border-border bg-muted/30 p-2 pr-9 font-mono text-[11px] leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="block w-full resize-none rounded-md border border-border bg-muted/30 p-2 pr-9 font-mono text-2xs leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <button
           type="button"

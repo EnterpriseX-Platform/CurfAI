@@ -25,6 +25,7 @@ import { prisma } from "@/lib/db";
 import { knownEventIds, getEvent } from "./events";
 import { formatPayload, type PayloadFormat } from "./formatters";
 import { assertPublicHttpUrl } from "@/lib/security/ssrfGuard";
+import { readWebhookSecret } from "./secret";
 
 const PAYLOAD_CAP_BYTES = 4096;
 const TRY_TIMEOUT_MS = 8000;
@@ -70,6 +71,13 @@ export async function emitWebhook(opts: EmitOptions): Promise<void> {
   const eventMeta = getEvent(opts.event);
 
   for (const w of matched) {
+    // Stored encrypted (lib/webhooks/secret.ts); a secret that can't be read — a changed CURF_SECRET_KEY — means this
+    // subscriber can't be signed for, so it is skipped and said so, never sent unsigned.
+    const signingSecret = readWebhookSecret(w.signingSecret);
+    if (!signingSecret) {
+      console.warn(`[webhooks] webhook ${w.id}: signing secret can't be read; delivery skipped (rotate it)`);
+      continue;
+    }
     const payloadJson = formatPayload({
       format: w.payloadFormat as PayloadFormat,
       url: w.url,
@@ -82,7 +90,7 @@ export async function emitWebhook(opts: EmitOptions): Promise<void> {
         tenantId: opts.tenantId,
         webhookId: w.id,
         url: w.url,
-        signingSecret: w.signingSecret,
+        signingSecret,
         event: opts.event,
         payloadJson,
         cappedJson,

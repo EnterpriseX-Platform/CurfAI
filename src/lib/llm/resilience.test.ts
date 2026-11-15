@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { abortableSleep, acquireSlot, backoffMs, isFatalProviderError, isRetryable, isTransientHttpStatus, laneState, parseRetryAfter } from "./resilience";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { LlmBusyError, laneAdmitsLongJob, abortableSleep, acquireSlot, backoffMs, isFatalProviderError, isRetryable, isTransientHttpStatus, laneState, parseRetryAfter, wallCeilingMs, effectiveTimeoutMs } from "./resilience";
 
 describe("limiter", () => {
   it("lets only `max` through at once and hands slots out FIFO", async () => {
@@ -99,5 +99,67 @@ describe("fatal provider errors", () => {
     expect(isFatalProviderError("HTTP 429: Too many requests, slow down")).toBe(false);
     expect(isFatalProviderError("Request timed out after 90s")).toBe(false);
     expect(isFatalProviderError(undefined)).toBe(false);
+  });
+});
+
+describe("wallCeilingMs", () => {
+  const was = process.env.CURF_LLM_WALL_MAX_MS;
+  afterEach(() => { if (was === undefined) delete process.env.CURF_LLM_WALL_MAX_MS; else process.env.CURF_LLM_WALL_MAX_MS = was; });
+  it("is the ingress's 300s unless raised, and raising it lets a long answer have its time", () => {
+    delete process.env.CURF_LLM_WALL_MAX_MS;
+    expect(wallCeilingMs()).toBe(300_000);
+    expect(effectiveTimeoutMs({ maxTokens: 20_000 })).toBe(300_000);
+    process.env.CURF_LLM_WALL_MAX_MS = "600000";
+    expect(effectiveTimeoutMs({ maxTokens: 20_000 })).toBe(560_000);
+    process.env.CURF_LLM_WALL_MAX_MS = "1000";
+    expect(wallCeilingMs()).toBe(300_000);
+  });
+});
+
+describe("a queue limit on a shared host", () => {
+  it("refuses at once a call that finds the queue at its cap, and lets the ones already waiting through", async () => {
+    const a = await acquireSlot("q1", 1);
+    const w1 = acquireSlot("q1", 1, undefined, { maxQueue: 1 });
+    await expect(acquireSlot("q1", 1, undefined, { maxQueue: 1 })).rejects.toBeInstanceOf(LlmBusyError);
+    expect(laneState("q1").queued).toBe(1);
+    a();
+    (await w1)();
+    expect(laneState("q1")).toEqual({ active: 0, queued: 0 });
+  });
+
+  it("refuses a call that waited longer than the limit, and frees its place", async () => {
+    vi.useFakeTimers();
+    const a = await acquireSlot("q2", 1);
+    const w = acquireSlot("q2", 1, undefined, { maxWaitMs: 5_000 });
+    const failed = expect(w).rejects.toBeInstanceOf(LlmBusyError);
+    await vi.advanceTimersByTimeAsync(5_001);
+    await failed;
+    expect(laneState("q2").queued).toBe(0);
+    vi.useRealTimers();
+    a();
+  });
+
+  it("does not time out a call that got its slot in time", async () => {
+    vi.useFakeTimers();
+    const a = await acquireSlot("q3", 1);
+    const w = acquireSlot("q3", 1, undefined, { maxWaitMs: 5_000 });
+    a();
+    const b = await w;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(laneState("q3")).toEqual({ active: 1, queued: 0 });
+    b();
+    vi.useRealTimers();
+  });
+
+  it("admits a long job until the lane is full and a third of the cap is waiting; no limit admits always", async () => {
+    const limit = { maxQueue: 6 };
+    expect(laneAdmitsLongJob("q4", 1, limit)).toBe(true);
+    const a = await acquireSlot("q4", 1);
+    const w1 = acquireSlot("q4", 1);
+    expect(laneAdmitsLongJob("q4", 1, limit)).toBe(true);
+    const w2 = acquireSlot("q4", 1);
+    expect(laneAdmitsLongJob("q4", 1, limit)).toBe(false);
+    expect(laneAdmitsLongJob("q4", 1, {})).toBe(true);
+    a(); (await w1)(); (await w2)();
   });
 });

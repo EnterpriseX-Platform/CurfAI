@@ -19,7 +19,7 @@ import type { LlmResponse } from "./types";
 
 // ── Concurrency limiter ──────────────────────────────────────────────
 
-type Waiter = { resolve: (release: () => void) => void; reject: (e: unknown) => void; signal?: AbortSignal; onAbort?: () => void };
+type Waiter = { resolve: (release: () => void) => void; reject: (e: unknown) => void; signal?: AbortSignal; onAbort?: () => void; timer?: ReturnType<typeof setTimeout> };
 type Lane = { active: number; queue: Waiter[] };
 const lanes = new Map<string, Lane>();
 
@@ -31,13 +31,41 @@ export function llmConcurrency(): number {
     : 3;
 }
 
+/** The lane (one per provider endpoint) a call to `driverId` at `baseUrl` waits in. */
+export function laneKey(driverId: string, baseUrl: string | null | undefined): string {
+  return `${driverId}|${baseUrl ?? ""}`;
+}
+
+/**
+ * How long a call may queue for a slot on a shared trial host: past `maxQueue` waiters, or `maxWaitMs` of waiting, it
+ * is refused with an LlmBusyError instead of waiting behind other workspaces' long jobs. Null/absent = no limit.
+ */
+export type LaneLimit = { maxQueue?: number | null; maxWaitMs?: number | null };
+
+/** A call refused because its model's host is too busy (the marker is what routes and run logs recognise). */
+export const TRIAL_MODEL_BUSY = "TRIAL_MODEL_BUSY";
+export class LlmBusyError extends Error {
+  constructor() { super(`${TRIAL_MODEL_BUSY}: the model's host is busy right now.`); this.name = "LlmBusyError"; }
+}
+
+/**
+ * Whether a new long job (a build, a deep research) should start on this lane now. A long job holds a slot for
+ * minutes to hours, so it is refused while the queue behind the slots is already a third of the cap: the cap itself
+ * is kept for short calls, which would otherwise wait behind it.
+ */
+export function laneAdmitsLongJob(key: string, max: number, limit: LaneLimit): boolean {
+  if (max <= 0 || limit.maxQueue == null) return true;
+  const { active, queued } = laneState(key);
+  return !(active >= max && queued >= Math.max(1, Math.ceil(limit.maxQueue / 3)));
+}
+
 /**
  * Wait for a free slot on `key` (an endpoint: provider + base URL) and
  * return the function that gives it back. FIFO, so a long Master Builder
  * build cannot starve a short caption forever behind later arrivals.
  * A caller's abort signal leaves the queue immediately.
  */
-export function acquireSlot(key: string, max: number, signal?: AbortSignal): Promise<() => void> {
+export function acquireSlot(key: string, max: number, signal?: AbortSignal, limit?: LaneLimit): Promise<() => void> {
   if (max <= 0) return Promise.resolve(() => {});
   let lane = lanes.get(key);
   if (!lane) { lane = { active: 0, queue: [] }; lanes.set(key, lane); }
@@ -56,19 +84,32 @@ export function acquireSlot(key: string, max: number, signal?: AbortSignal): Pro
     l.active += 1;
     return Promise.resolve(release());
   }
+  if (limit?.maxQueue != null && l.queue.length >= limit.maxQueue) return Promise.reject(new LlmBusyError());
   return new Promise<() => void>((resolve, reject) => {
     const w: Waiter = {
       resolve: () => resolve(release()),
       reject,
       signal,
     };
+    const leave = () => {
+      const i = l.queue.indexOf(w);
+      if (i >= 0) l.queue.splice(i, 1);
+    };
     if (signal) {
       w.onAbort = () => {
-        const i = l.queue.indexOf(w);
-        if (i >= 0) l.queue.splice(i, 1);
+        if (w.timer) clearTimeout(w.timer);
+        leave();
         reject(new Error("Cancelled"));
       };
       signal.addEventListener("abort", w.onAbort, { once: true });
+    }
+    if (limit?.maxWaitMs != null && limit.maxWaitMs > 0) {
+      w.timer = setTimeout(() => {
+        if (l.queue.indexOf(w) < 0) return; // already served
+        leave();
+        if (w.signal && w.onAbort) w.signal.removeEventListener("abort", w.onAbort);
+        reject(new LlmBusyError());
+      }, limit.maxWaitMs);
     }
     l.queue.push(w);
   });
@@ -77,6 +118,7 @@ export function acquireSlot(key: string, max: number, signal?: AbortSignal): Pro
 function pump(l: Lane, max: number): void {
   while (l.active < max && l.queue.length > 0) {
     const w = l.queue.shift()!;
+    if (w.timer) clearTimeout(w.timer);
     if (w.signal && w.onAbort) w.signal.removeEventListener("abort", w.onAbort);
     l.active += 1;
     w.resolve(() => {});
@@ -162,10 +204,16 @@ export function streamingEnabled(): boolean {
  * whole token budget (at 35 tok/s), up to the 300s the ingress allows.
  * Without streaming nothing tells a stall from slow work: unchanged.
  */
+/** The longest one request may run (CURF_LLM_WALL_MAX_MS, default 300s: what the hosted ingress allows). A self-hosted model that writes ~23 tok/s needs more for a 9000-token answer. */
+export function wallCeilingMs(): number {
+  const n = Math.floor(Number(process.env.CURF_LLM_WALL_MAX_MS));
+  return Number.isFinite(n) && n >= 60_000 ? Math.min(n, 1_800_000) : 300_000;
+}
+
 export function effectiveTimeoutMs(req: { timeoutMs?: number; maxTokens?: number }): number {
   const base = req.timeoutMs ?? 90_000;
   if (!streamingEnabled()) return base;
-  return Math.min(300_000, Math.max(base, Math.round((req.maxTokens ?? 0) * 28)));
+  return Math.min(wallCeilingMs(), Math.max(base, Math.round((req.maxTokens ?? 0) * 28)));
 }
 
 /**

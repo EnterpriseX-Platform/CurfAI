@@ -276,7 +276,7 @@ export function ViewWizard({ dataSourceId, connections, start, roles, attributeN
                       current ? "bg-primary-soft text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground",
                     )}
                   >
-                    <span className={cn("flex h-5 w-5 items-center justify-center rounded-full text-[11px]", current ? "bg-primary text-primary-foreground" : done ? "bg-success/15 text-success" : "bg-muted")} aria-hidden="true">
+                    <span className={cn("flex h-5 w-5 items-center justify-center rounded-full text-2xs", current ? "bg-primary text-primary-foreground" : done ? "bg-success/15 text-success" : "bg-muted")} aria-hidden="true">
                       {done ? <Check className="h-3 w-3" /> : i + 1}
                     </span>
                     {stepLabel(s)}

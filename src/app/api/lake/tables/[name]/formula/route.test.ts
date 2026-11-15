@@ -32,7 +32,7 @@ import { FormulaError } from "@/lib/lake/formula/parse";
 import { POST } from "./route";
 
 const post = (body: unknown) =>
-  POST(new NextRequest("http://localhost/api/lake/tables/people/formula", { method: "POST", body: JSON.stringify(body) }), { params: { name: "people" } });
+  POST(new NextRequest("http://localhost/api/lake/tables/people/formula", { method: "POST", body: JSON.stringify(body) }), { params: Promise.resolve({ name: "people" }) });
 
 beforeEach(() => {
   vi.clearAllMocks();

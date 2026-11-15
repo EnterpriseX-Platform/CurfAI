@@ -28,7 +28,8 @@ const BodySchema = z.object({
   unredactedForRoles: z.array(z.string().min(1)).max(20).optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { name: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

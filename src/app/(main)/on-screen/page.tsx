@@ -23,12 +23,12 @@ export default async function OnScreenPage() {
   const isAdmin = user?.role === "admin";
   const tier = await loadTenantTier(user.tenantId);
 
-  const cookieLocale = cookies().get("rd_locale")?.value;
+  const cookieLocale = (await cookies()).get("rd_locale")?.value;
   const locale = (cookieLocale && (LOCALES as readonly string[]).includes(cookieLocale) ? cookieLocale : "en") as Locale;
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.onScreen") }]}>
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "nav.onScreen")} description={t(locale, "onScreen.subtitle")} />
 
         <OnScreenManager isAdmin={isAdmin} currentTier={tier} />

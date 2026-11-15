@@ -5,11 +5,14 @@
  *
  * Sits alongside the proof shield and show-your-work icons. Opens a chat
  * panel grounded in this block's data. Questions are answered by POSTing
- * to /api/reports/:id/ask with { blockId, question }.
+ * to /api/reports/:id/ask with { blockId, question }. "Continue in Ask"
+ * carries the report and the last question into the one Ask chat
+ * (/ask?report=…), where the answer can take in the whole report and more.
  */
 import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Sparkles, Send, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Sparkles, Send, Loader2, ArrowUpRight } from "lucide-react";
 import { useT } from "@/lib/i18n/LocaleContext";
 import { AiNotice } from "@/components/common/AiNotice";
 
@@ -28,7 +31,7 @@ export function AskButton({
   params?: Record<string, unknown>;
   suggestions?: string[];
 }) {
-  const { locale } = useT();
+  const { t, locale } = useT();
   const [open, setOpen] = React.useState(false);
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [input, setInput] = React.useState("");
@@ -53,24 +56,26 @@ export function AskButton({
         body: JSON.stringify({ blockId, question: q, params: params ?? {}, locale }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "Failed");
+      if (!res.ok) throw new Error(json.error ?? res.status);
       setMessages((m) => [...m, { role: "assistant", text: json.answer.text, citations: json.answer.citations }]);
     } catch (e: any) {
-      setMessages((m) => [...m, { role: "assistant", text: `Something went wrong: ${e.message ?? e}` }]);
+      setMessages((m) => [...m, { role: "assistant", text: t("askBlock.failed").replace("{error}", String(e?.message ?? e)) }]);
     } finally {
       setLoading(false);
     }
   }
 
-  const defaultSuggestions = suggestions.length > 0 ? suggestions : defaultPromptsFor(blockType);
+  const defaultSuggestions = suggestions.length > 0 ? suggestions : defaultPromptsFor(blockType).map((k) => t(k));
+  const lastQuestion = [...messages].reverse().find((m) => m.role === "user")?.text;
+  const continueHref = `/ask?report=${encodeURIComponent(reportId)}${lastQuestion ? `&q=${encodeURIComponent(lastQuestion)}` : ""}`;
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label="Ask about this block"
-          title="Ask — grounded Q&A on this block"
+          aria-label={t("askBlock.open")}
+          title={t("askBlock.openHint")}
           className="no-print inline-flex h-5 w-5 items-center justify-center rounded-md text-primary/80 opacity-0 transition-all hover:bg-primary/10 hover:text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
         >
           <Sparkles className="h-3.5 w-3.5" />
@@ -85,9 +90,9 @@ export function AskButton({
         >
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            <div className="flex-1 text-sm font-medium">Ask this block</div>
+            <div className="flex-1 text-sm font-medium">{t("askBlock.title")}</div>
             <div className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-ink">
-              Grounded
+              {t("askBlock.grounded")}
             </div>
           </div>
 
@@ -95,7 +100,7 @@ export function AskButton({
             {messages.length === 0 && !loading && (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  Answers are grounded in this block&apos;s rows. Try one of these, or type your own.
+                  {t("askBlock.intro")}
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {defaultSuggestions.map((s) => (
@@ -132,7 +137,7 @@ export function AskButton({
             ))}
             {loading && (
               <div className="mr-6 inline-flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" /> Thinking…
+                <Loader2 className="h-3 w-3 animate-spin" /> {t("askBlock.thinking")}
               </div>
             )}
           </div>
@@ -145,22 +150,28 @@ export function AskButton({
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about this block…"
+              placeholder={t("askBlock.placeholder")}
+              aria-label={t("askBlock.placeholder")}
               className="flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
             />
             <button
               type="submit"
               disabled={!input.trim() || loading}
               className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary text-white transition-colors hover:bg-primary disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label="Send"
+              aria-label={t("askBlock.send")}
             >
               <Send className="h-3.5 w-3.5" />
             </button>
           </form>
 
-          <div className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
-            Answers come from the rows behind this block only — no external data.
-            <AiNotice short className="mt-0.5 text-[10px]" />
+          <div className="flex items-start gap-3 border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
+            <div className="min-w-0 flex-1">
+              {t("askBlock.footer")}
+              <AiNotice short className="mt-0.5 text-[10px]" />
+            </div>
+            <Link href={continueHref} className="inline-flex shrink-0 items-center gap-1 pt-0.5 text-[11px] font-medium text-primary-ink hover:underline">
+              {t("askBlock.continue")} <ArrowUpRight className="h-3 w-3" />
+            </Link>
           </div>
         </Popover.Content>
       </Popover.Portal>
@@ -168,8 +179,9 @@ export function AskButton({
   );
 }
 
-function defaultPromptsFor(t: "kpi" | "table" | "chart"): string[] {
-  if (t === "kpi") return ["Summarize this number", "Is this good?"];
-  if (t === "chart") return ["What's the trend?", "Why did it move?", "What's the highest point?"];
-  return ["Top 3 rows", "Total", "Average"];
+/** Starter questions per block kind, as dictionary keys. */
+function defaultPromptsFor(kind: "kpi" | "table" | "chart"): string[] {
+  if (kind === "kpi") return ["askBlock.seed.kpiSummary", "askBlock.seed.kpiGood"];
+  if (kind === "chart") return ["askBlock.seed.chartTrend", "askBlock.seed.chartWhy", "askBlock.seed.chartHigh"];
+  return ["askBlock.seed.tableTop", "askBlock.seed.tableTotal", "askBlock.seed.tableAverage"];
 }

@@ -7,7 +7,7 @@ import { Providers } from "./providers";
 import { cn } from "@/lib/utils";
 import { PwaShell } from "@/components/pwa/PwaShell";
 import { LOCALES, messagesVersion, type Locale } from "@/lib/i18n/dict";
-import { messagesSrc } from "@/lib/i18n/messageStore";
+import { messagesSrcFor } from "@/lib/i18n/messageFiles";
 import { readSession } from "@/lib/auth";
 import { savedDatePrefs } from "@/lib/i18n/userLocale";
 import type { Era } from "@/lib/i18n/formatDate";
@@ -77,7 +77,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Read the locale cookie server-side so the LocaleProvider's initial state
   // matches between server and client → no hydration mismatch in the
   // LanguageSwitcher or any locale-dependent copy.
-  const cookieLocale = cookies().get("rd_locale")?.value;
+  const cookieLocale = (await cookies()).get("rd_locale")?.value;
   let initialLocale: Locale | undefined =
     cookieLocale && (LOCALES as readonly string[]).includes(cookieLocale)
       ? (cookieLocale as Locale)
@@ -95,7 +95,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Same for the year style of Thai dates (rd_era). Always seeded once —
   // Buddhist era when nothing was chosen — so this lookup runs once per
   // device, not on every page.
-  const cookieEra = cookies().get("rd_era")?.value;
+  const cookieEra = (await cookies()).get("rd_era")?.value;
   let initialEra: Era = cookieEra === "ce" ? "ce" : "be";
   let seedLocaleCookie = false;
   let seedEraCookie = false;
@@ -117,7 +117,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang={locale} className={cn(sans.variable, mono.variable, prompt.variable)} suppressHydrationWarning>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-        <Script src={messagesSrc(locale, versions[locale])} strategy="beforeInteractive" />
+        <Script src={messagesSrcFor(locale)} strategy="beforeInteractive" />
         <Providers initialLocale={initialLocale} messageVersions={versions} seedLocaleCookie={seedLocaleCookie} initialEra={initialEra} seedEraCookie={seedEraCookie} session={session}>
           {children}
           {/* PwaShell registers the service worker, listens for the

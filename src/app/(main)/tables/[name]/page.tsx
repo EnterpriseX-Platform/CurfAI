@@ -16,6 +16,8 @@ import { AppShell } from "@/components/layout/AppShell";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { getTable, typedColumnsEnabled } from "@/lib/lake/tables";
 import { canReadTable, previewRowsFor, columnsFor } from "@/lib/lake/readableRows";
+import { profilePreview, filledPercent } from "@/lib/lake/previewProfile";
+import { suggestChecks } from "@/lib/lake/suggestChecks";
 import { mergeGovernanceMetadata, parseSchemaJson } from "@/lib/lake/schemaGovernance";
 import { exportViewer } from "@/lib/reporting/exportCaller";
 import { refineManualOrigin } from "@/lib/lake/originLabel";
@@ -26,13 +28,14 @@ import { Database, Globe, Webhook, FileSpreadsheet, ArrowRight, AlertTriangle, S
 import { DeleteTableButton } from "./DeleteTableButton";
 import { AutoGenerateButton } from "./AutoGenerateButton";
 import { TableManagePanel } from "./TableManagePanel";
+import { SuggestedChecks, type SuggestedCheckItem } from "./SuggestedChecks";
 import { SpreadsheetView } from "./SpreadsheetView";
 import { AddColumnButton } from "./AddColumnButton";
 import { canEditLakeColumns } from "@/lib/roles";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -45,8 +48,9 @@ const SOURCE_ICONS = {
   manual:    Database,
 } as const;
 
-export default async function TableDetailPage({ params }: { params: { name: string } }) {
-  const locale = readLocale();
+export default async function TableDetailPage(props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
+  const locale = await readLocale();
   const user = await requireUser();
   if (!user) redirect("/login?next=/tables");
 
@@ -67,6 +71,8 @@ export default async function TableDetailPage({ params }: { params: { name: stri
   const meta = await getTable(user.tenantId, row.name);
   const preview = (await previewRowsFor(row, viewer, 50)) ?? [];
   const Icon = (SOURCE_ICONS as any)[row.sourceKind] ?? Database;
+  // The first rows the reader may see, read for how filled and varied each column is.
+  const profile = profilePreview(preview as Array<Record<string, unknown>>, Array.from(new Set((preview as Array<Record<string, unknown>>).flatMap((r) => Object.keys(r)))));
   const sourceConfig = safeParse(row.sourceConfigJson) ?? {};
   const originDetail = refineManualOrigin(row.sourceKind, sourceConfig)?.detail;
   const freshnessIssue = await freshnessIssueForOne(user.tenantId, row.name, row.sourceKind, sourceConfig);
@@ -93,6 +99,33 @@ export default async function TableDetailPage({ params }: { params: { name: stri
   // reach it through ee.lineage rather than importing lib/lineage.ts
   // directly, and skip it entirely in Community rather than claiming
   // "not used in any report yet" for a table we never actually checked.
+  // Governed metrics whose query names this table: only published ones, in this workspace, and only if the reader may see
+  // the table's rows at all (a metric's SQL is a window onto its tables). Metrics and data-quality checks are paid, so
+  // both come through ee and are simply absent in Community.
+  const readByMetrics = readable && ee.metrics?.readingTable
+    ? await ee.metrics.readingTable(user.tenantId, row.name).catch(() => [] as Array<{ slug: string; label: string }>)
+    : [];
+  const existingChecks = ee.dataQuality
+    ? await ee.dataQuality.tableChecks(user.tenantId, row.name).catch(() => [] as Array<{ kind: string; configJson: string }>)
+    : [];
+  // Checks worth adding, from the column profile above; only an admin can create one (the checks route's rule).
+  const suggestedChecks: SuggestedCheckItem[] = [];
+  if (readable && user.role === "admin" && ee.dataQuality) {
+    for (const s of suggestChecks(schema.map((c: any) => c.name), profile, row.rowCount, existingChecks as any[])) {
+      const column = "column" in s ? s.column : "";
+      const label = t(locale, `suggestedChecks.${s.kind}`).replace("{column}", column).replace("{min}", "min" in s ? s.min.toLocaleString() : "");
+      suggestedChecks.push({
+        key: `${s.kind}:${column}`,
+        label,
+        body: {
+          name: `${row.name}: ${s.kind}${column ? ` ${column}` : ""}`,
+          kind: s.kind,
+          tableName: row.name,
+          configJson: JSON.stringify("min" in s ? { min: s.min } : { column }),
+        },
+      });
+    }
+  }
   let usedByReports: Array<{ id: string; label: string }> = [];
   if (EDITION !== "community") {
     try {
@@ -101,13 +134,24 @@ export default async function TableDetailPage({ params }: { params: { name: stri
   }
 
   // Who may change the table's columns: the schema route's rule (lib/roles.ts).
+  // What stops working if the table goes: the confirmation names it (lineage impact).
+  const checkCount = existingChecks.length;
+  const deleteConfirm = [
+    t(locale, "tableDetail.deleteConfirm").replace("{name}", row.name),
+    readByMetrics.length + usedByReports.length + checkCount > 0
+      ? t(locale, "tableDetail.deleteImpact")
+          .replace("{metrics}", String(readByMetrics.length))
+          .replace("{reports}", String(usedByReports.length))
+          .replace("{checks}", String(checkCount))
+      : "",
+  ].filter(Boolean).join("\n\n");
   const canEditColumns = readable && canEditLakeColumns(user.role);
   const editorColumns = schema.map((c: any) => ({ name: c.name, type: c.type, formula: c.formula ?? null }));
   const sheetHref = `/tables/${encodeURIComponent(row.name)}?view=sheet`;
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.tables"), href: "/tables" }, { label: row.name }]}>
-      <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader
           // The source kind is information, so it stays — as the eyebrow,
           // not a roundel beside the title.
@@ -124,7 +168,10 @@ export default async function TableDetailPage({ params }: { params: { name: stri
                 full dashboard (KPIs + charts + table + caption) from this
                 table in one click. "Use in a report" is the manual
                 fallback for users who want a blank canvas. */}
-            <AutoGenerateButton tableName={row.name} />
+            <AutoGenerateButton
+              tableName={row.name}
+              sensitiveColumns={catalog.filter((c: any) => c.sensitivity).map((c: any) => String(c.name))}
+            />
             {readable && (
               <Link
                 href={sheetHref}
@@ -154,7 +201,7 @@ export default async function TableDetailPage({ params }: { params: { name: stri
               availableRoles={availableRoles}
               typedConversionEnabled={typedColumnsEnabled()}
             />
-            <DeleteTableButton name={row.name} />
+            <DeleteTableButton name={row.name} confirmText={deleteConfirm} />
           </>}
         />
 
@@ -182,11 +229,13 @@ export default async function TableDetailPage({ params }: { params: { name: stri
             <p className="text-xs text-muted-foreground">{t(locale, "tableDetail.noColumnsYet")}</p>
           ) : (
             <table className="w-full text-xs">
-              <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <thead className="text-2xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="pb-2 text-left font-medium">{t(locale, "tableDetail.colHeaderColumn")}</th>
                   <th className="pb-2 text-left font-medium">{t(locale, "tableDetail.colHeaderType")}</th>
                   <th className="pb-2 text-left font-medium">{t(locale, "tableDetail.colHeaderSample")}</th>
+                  <th className="pb-2 text-right font-medium" title={t(locale, "tableDetail.profileNote").replace("{n}", String(preview.length))}>{t(locale, "tableDetail.colHeaderFilled")}</th>
+                  <th className="pb-2 text-right font-medium" title={t(locale, "tableDetail.profileNote").replace("{n}", String(preview.length))}>{t(locale, "tableDetail.colHeaderDistinct")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -198,20 +247,50 @@ export default async function TableDetailPage({ params }: { params: { name: stri
                           <SquareFunction className="h-3.5 w-3.5 shrink-0" />{c.name}
                         </span>
                       ) : c.name}
-                      {c.formula && <div className="max-w-[28rem] truncate text-[11px] text-primary-ink/80">= {c.formula}</div>}
+                      {c.formula && <div className="max-w-[28rem] truncate text-2xs text-primary-ink/80">= {c.formula}</div>}
                     </td>
                     <td className="py-1.5 text-muted-foreground">
                       {c.formula ? t(locale, "tableDetail.formulaType").replace("{type}", c.type) : c.type}
                     </td>
-                    <td className="py-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                    <td className="py-1.5 truncate font-mono text-2xs text-muted-foreground">
                       {c.sample == null ? <span className="italic">{t(locale, "tableDetail.nullLabel")}</span> : String(c.sample).slice(0, 60)}
                     </td>
+                    <td className="py-1.5 text-right font-mono text-2xs text-muted-foreground" data-testid="col-filled">{readable ? filledPercent(profile.get(c.name)) : "–"}</td>
+                    <td className="py-1.5 text-right font-mono text-2xs text-muted-foreground">{readable && profile.get(c.name) && preview.length > 0 ? profile.get(c.name)!.distinct : "–"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </section>
+
+        {suggestedChecks.length > 0 && (
+          <section className="mb-6 rounded-lg border border-border bg-card p-5 shadow-xs" data-testid="suggested-checks-section">
+            <h2 className="text-sm font-semibold">{t(locale, "suggestedChecks.heading")}</h2>
+            <p className="mb-2 text-xs text-muted-foreground">{t(locale, "suggestedChecks.note").replace("{n}", String(preview.length))}</p>
+            <SuggestedChecks
+              items={suggestedChecks}
+              addLabel={t(locale, "suggestedChecks.add")}
+              addedLabel={t(locale, "suggestedChecks.added")}
+              errorLabel={t(locale, "suggestedChecks.error")}
+            />
+          </section>
+        )}
+
+        {readByMetrics.length > 0 && (
+          <section className="mb-6 rounded-lg border border-border bg-card p-5 shadow-xs" data-testid="read-by-metrics">
+            <h2 className="mb-3 text-sm font-semibold">{t(locale, "tableDetail.readByMetrics")}</h2>
+            <ul className="flex flex-wrap gap-2">
+              {readByMetrics.map((m) => (
+                <li key={m.slug}>
+                  <Link href="/metrics" className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground/90 hover:bg-accent hover:underline" title={m.slug}>
+                    {m.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {EDITION !== "community" && (
           <section className="mb-6 rounded-lg border border-border bg-card p-5 shadow-xs">
@@ -237,14 +316,14 @@ export default async function TableDetailPage({ params }: { params: { name: stri
 
         <section className="rounded-lg border border-border bg-card shadow-xs">
           <header className="border-b border-border px-5 py-3">
-            <h2 className="text-sm font-semibold">{t(locale, "tableDetail.previewHeading")} <span className="text-[10px] font-normal text-muted-foreground">{t(locale, "tableDetail.previewFirstN").replace("{n}", String(preview.length))}</span></h2>
+            <h2 className="text-sm font-semibold">{t(locale, "tableDetail.previewHeading")} <span className="text-2xs font-normal text-muted-foreground">{t(locale, "tableDetail.previewFirstN").replace("{n}", String(preview.length))}</span></h2>
           </header>
           {preview.length === 0 ? (
             <p className="px-5 py-8 text-center text-xs text-muted-foreground">{t(locale, "tableDetail.noRowsYet")}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
-                <thead className="bg-muted/40 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <thead className="bg-muted/40 text-2xs uppercase tracking-wider text-muted-foreground">
                   <tr>
                     {schema.map((c: any) => (
                       <th key={c.name} className={`px-3 py-2 text-left font-medium ${c.formula ? "bg-primary-soft text-primary-ink" : ""}`}>{c.name}</th>
@@ -255,7 +334,7 @@ export default async function TableDetailPage({ params }: { params: { name: stri
                   {preview.map((r, i) => (
                     <tr key={i} className="border-t border-border">
                       {schema.map((c: any) => (
-                        <td key={c.name} className={`px-3 py-1.5 align-top font-mono text-[11px] ${c.formula ? "bg-primary-soft/60" : ""}`}>
+                        <td key={c.name} className={`px-3 py-1.5 align-top font-mono text-2xs ${c.formula ? "bg-primary-soft/60" : ""}`}>
                           {fmtCell((r as any)[c.name])}
                         </td>
                       ))}

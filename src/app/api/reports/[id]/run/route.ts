@@ -9,7 +9,8 @@ import { runReportForApi } from "@/lib/reporting/runForApi";
  * Core run/rate-limit/history logic lives in runForApi() — shared with
  * GET /api/v1/reports/[id]/data so the two entry points can't drift again.
  */
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);

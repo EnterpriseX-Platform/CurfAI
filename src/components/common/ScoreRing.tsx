@@ -28,7 +28,7 @@ export function ScoreRing({ value, size = 44 }: { value: number; size?: number }
         transform="rotate(-90 18 18)"
         style={{ transition: "stroke-dashoffset 300ms ease" }}
       />
-      <text x="18" y="19.5" textAnchor="middle" dominantBaseline="middle" className="fill-foreground text-[10px] font-semibold tabular-nums">
+      <text x="18" y="19.5" textAnchor="middle" dominantBaseline="middle" className="fill-foreground text-2xs font-semibold tabular-nums">
         {clamped}
       </text>
     </svg>

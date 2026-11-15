@@ -47,10 +47,10 @@ test.describe("New-user onboarding (Round 32)", () => {
     await page.waitForLoadState("networkidle");
     await expect(page).toHaveURL(/\/reports(\?|$)/);
     // Page header — confirms server-side render reached the Reports route.
-    await expect(page.getByRole("heading", { name: /^Reports$/i }).first()).toBeVisible({ timeout: 10_000 });
-    // Admin sees a "New report" CTA (the canCreate path in EmptyState +
-    // the AppShell action button both render this label).
-    await expect(page.getByRole("button", { name: /New report/i }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^Reports( and dashboards)?$/i }).first()).toBeVisible({ timeout: 10_000 });
+    // Admin sees the create CTA: the top bar's "New" menu (older layouts
+    // labelled it "New report").
+    await expect(page.getByRole("button", { name: /^New( report)?$/i }).first()).toBeVisible();
   });
 
   test("/tables renders for a new admin with upload affordance", async ({ page }) => {
@@ -59,9 +59,8 @@ test.describe("New-user onboarding (Round 32)", () => {
     await page.waitForLoadState("networkidle");
     await expect(page).toHaveURL(/\/tables(\?|$)/);
     // Page header — confirms server-side render reached the Tables route.
-    // The /tables h1 is "Curf Tables" (the brand prefix is intentional —
-    // distinguishes it from "Tables" in the catalog view).
-    await expect(page.getByRole("heading", { name: /Curf Tables/i }).first()).toBeVisible({ timeout: 10_000 });
+    // The /tables h1 is "Tables" (it was "Curf Tables" before the console redesign).
+    await expect(page.getByRole("heading", { name: /^(Curf )?Tables$/i }).first()).toBeVisible({ timeout: 10_000 });
     // The Upload affordance renders unconditionally above the list — its
     // primary "Upload" button is a dependable anchor for "page rendered".
     await expect(page.getByRole("button", { name: /^Upload$/i }).first()).toBeVisible();

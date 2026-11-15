@@ -45,7 +45,7 @@ const KIND_ICON: Record<CatalogKind, typeof Database> = {
 export type LocalPaletteItem = { id: string; label: string; hint?: string; onSelect: () => void };
 
 export function CommandPalette({
-  open, onClose, localItems = [], onAsk, askLabel,
+  open, onClose, localItems = [], localNeedsQuery = false, onAsk, askLabel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -56,6 +56,12 @@ export function CommandPalette({
    * omits the prop and behaves exactly as it always has.
    */
   localItems?: LocalPaletteItem[];
+  /**
+   * List the local items only once something is typed — for a long list
+   * (AppShell's every section of every system) that would bury the empty
+   * palette. The app viewer's few tabs omit it and stay browsable.
+   */
+  localNeedsQuery?: boolean;
   /**
    * Phase 12 (uplift) — when set, the bottom "Ask Curf" row calls this
    * with the typed query instead of navigating to /ask. The app viewer
@@ -113,7 +119,9 @@ export function CommandPalette({
   // fast jump), and narrow down by a simple label match once typing
   // starts, the same "above catalog results" ordering throughout.
   const q = query.trim().toLowerCase();
-  const filteredLocal = q ? localItems.filter((li) => li.label.toLowerCase().includes(q)) : localItems;
+  const filteredLocal = q
+    ? localItems.filter((li) => li.label.toLowerCase().includes(q) || li.hint?.toLowerCase().includes(q))
+    : localNeedsQuery ? [] : localItems;
   const localCount = filteredLocal.length;
   const askRowIndex = query.trim() ? localCount + results.length : -1;
   const rowCount = localCount + results.length + (askRowIndex >= 0 ? 1 : 0);
@@ -164,7 +172,7 @@ export function CommandPalette({
             className="h-12 w-full min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
           />
           {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />}
-          <kbd className="hidden shrink-0 rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-[11px] text-faint sm:inline-block">esc</kbd>
+          <kbd className="hidden shrink-0 rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-2xs text-faint sm:inline-block">esc</kbd>
         </div>
 
         <div className="max-h-[50vh] overflow-y-auto py-1.5">
@@ -218,7 +226,7 @@ export function CommandPalette({
                     <span className="block truncate text-xs text-muted-foreground">{r.description}</span>
                   )}
                 </span>
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
                   {t(KIND_LABEL_KEYS[r.kind])}
                 </span>
               </button>

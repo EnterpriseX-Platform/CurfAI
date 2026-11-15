@@ -11,6 +11,7 @@ import { localizeReport } from "@/lib/reporting/localize";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { CurfLogo } from "@/components/common/CurfLogo";
 import { hashInviteToken } from "@/lib/invites";
+import { tenantIsOpen } from "@/lib/tenantGuard";
 
 /**
  * Auth-free public view of a report, unlocked by a PublicShareToken. The
@@ -23,7 +24,8 @@ import { hashInviteToken } from "@/lib/invites";
 
 export const dynamic = "force-dynamic";
 
-export default async function PublicSharePage({ params }: { params: { token: string } }) {
+export default async function PublicSharePage(props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   // The token is the credential and says whose report this is: look it up
   // across workspaces, then render as that workspace — also when the
   // visitor is signed in to a different one (row-level security, BE-TEN-03).
@@ -31,6 +33,8 @@ export default async function PublicSharePage({ params }: { params: { token: str
     where: { tokenHash: hashInviteToken(params.token) },
   }));
   if (!share) notFound();
+  // A suspended or pending-deletion workspace's link is as gone as a revoked one.
+  if (!(await tenantIsOpen(share.tenantId))) notFound();
   pinRequestDbContext({ tenantId: share.tenantId, userId: "public", role: "viewer" });
   if (share.expiresAt && new Date(share.expiresAt) < new Date()) {
     return (
@@ -51,7 +55,7 @@ export default async function PublicSharePage({ params }: { params: { token: str
   // Nobody is signed in here, so a block the author gated to a role isn't
   // shown, and neither are the rows of a query only such blocks use.
   const def = visibleReport(ReportSchema.parse(JSON.parse(report.definition)), ANONYMOUS_VIEWER);
-  const locale = serverLocale();
+  const locale = await serverLocale();
   const localized = localizeReport(def, locale);
   // Public shares don't accept parameters via URL (design choice - keeps the
   // share stable). Use each parameter's default.
@@ -63,12 +67,12 @@ export default async function PublicSharePage({ params }: { params: { token: str
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="border-b border-border bg-background">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-6 py-3">
           <Link href="/" className="flex items-center gap-2">
             <CurfLogo variant="lockup" size={20} />
           </Link>
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
             <Globe className="h-3 w-3" />
             <span>Public share</span>
             {share.expiresAt && (
@@ -96,7 +100,7 @@ export default async function PublicSharePage({ params }: { params: { token: str
         )}
         <ReportDocument report={localized} dataset={dataset} params={pvals} provenance={provenance} tenantCurrency={tenantRow?.currency ?? null} locale={locale} />
       </main>
-      <footer className="border-t border-border py-4 text-center text-[11px] text-muted-foreground">
+      <footer className="border-t border-border py-4 text-center text-2xs text-muted-foreground">
         Shared from <Link href="/" className="underline">Curf</Link>. Read-only public view.
       </footer>
     </div>

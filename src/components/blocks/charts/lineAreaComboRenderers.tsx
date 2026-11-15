@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { AXIS_PROPS, Y_AXIS_DOMAIN, Y_AXIS_WIDTH, TOOLTIP_STYLE, GRID_STROKE, LABEL_FILL, CURSOR_FILL, LEGEND_STYLE, DEEMPHASIS_FILL, formatValue, styleOf, gridPropsFor, type ChartRenderCtx, dateTick, dateLabel, seriesName, seriesTooltip } from "./shared";
 import { FORECAST_COLOR, buildForecastFields } from "./PredictionOverlay";
+import { PARTIAL_SUFFIX, partialUniqKey, splitPartialFields } from "./partialSeries";
 
 /** A Pareto row's ABC class: by the running share before it (A: the first 80%, B: the next 15%, C: the rest). */
 export function paretoClass(running: number, share: number): "A" | "B" | "C" {
@@ -36,17 +37,29 @@ export function renderLineChart(ctx: ChartRenderCtx): ReactElement {
   // buildForecastFields's docstring for why that corrupts a categorical
   // x-axis).
   const predictedKey = forecast ? `${yFields[0]}__predicted` : undefined;
-  const chartData = forecast ? buildForecastFields(data as any[], yFields[0]) : (data as any[]);
+  // The still-running last period's step is drawn dashed (see partialSeries.ts) —
+  // split after the forecast so its boundary row still has the actual value.
+  const partialIdx = ctx.partial?.index;
+  const chartData = splitPartialFields(forecast ? buildForecastFields(data as any[], yFields[0]) : (data as any[]), yFields, partialIdx);
   return (
     <LineChart data={chartData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }} onClick={handleClick}>
       {gridProps && <CartesianGrid {...gridProps} />}
       <XAxis dataKey={xField} {...AXIS_PROPS} tickFormatter={dateTick(ctx)} />
       <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} payloadUniqBy={partialIdx != null ? (partialUniqKey as any) : undefined} />
       {(showLegend ?? true) && <Legend wrapperStyle={LEGEND_STYLE} iconType="circle" iconSize={7} />}
       {renderReferenceLines()}
       {renderAnnotations()}
       {renderForecastDecor()}
+      {partialIdx != null && yFields.map((f, i) => (
+        <Line
+          key={f + PARTIAL_SUFFIX} type="monotone" dataKey={f + PARTIAL_SUFFIX} name={seriesName(f, ctx.cfg)}
+          stroke={palette[i % palette.length]} strokeOpacity={0.6} strokeWidth={style.line.strokeWidth} strokeLinecap={lineCap} strokeDasharray="5 4" connectNulls={false}
+          dot={style.line.dots ? { r: 3, fill: "#ffffff", stroke: palette[i % palette.length], strokeWidth: 1.5 } : false}
+          activeDot={{ r: 5, strokeWidth: 2, stroke: "#ffffff" }}
+          isAnimationActive={false} legendType="none"
+        />
+      ))}
       {yFields.map((f, i) => {
         const color = palette[i % palette.length];
         if (forecast && i === 0) {
@@ -107,7 +120,11 @@ export function renderAreaChart(ctx: ChartRenderCtx): ReactElement {
   const yTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
   const tooltipFormatter = seriesTooltip(ctx);
   const predictedKey = forecast ? `${yFields[0]}__predicted` : undefined;
-  const chartData = forecast ? buildForecastFields(data as any[], yFields[0]) : (data as any[]);
+  // A stacked area can't lose one point of one layer without the layers
+  // above it dropping, so only an unstacked chart dashes its running period;
+  // a stacked one still says so in the tooltip.
+  const partialIdx = stacked ? undefined : ctx.partial?.index;
+  const chartData = splitPartialFields(forecast ? buildForecastFields(data as any[], yFields[0]) : (data as any[]), yFields, partialIdx);
   return (
     <AreaChart data={chartData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }} onClick={handleClick}>
       <defs>
@@ -123,11 +140,19 @@ export function renderAreaChart(ctx: ChartRenderCtx): ReactElement {
       {gridProps && <CartesianGrid {...gridProps} />}
       <XAxis dataKey={xField} {...AXIS_PROPS} tickFormatter={dateTick(ctx)} />
       <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} payloadUniqBy={partialIdx != null ? (partialUniqKey as any) : undefined} />
       {(showLegend ?? true) && <Legend wrapperStyle={LEGEND_STYLE} iconType="circle" iconSize={7} />}
       {renderReferenceLines()}
       {renderAnnotations()}
       {renderForecastDecor()}
+      {partialIdx != null && yFields.map((f, i) => (
+        <Area
+          key={f + PARTIAL_SUFFIX} type="monotone" dataKey={f + PARTIAL_SUFFIX} name={seriesName(f, ctx.cfg)} connectNulls={false}
+          stroke={palette[i % palette.length]} strokeOpacity={0.6} strokeWidth={style.area.strokeWidth} strokeDasharray="5 4"
+          fill={style.area.filled ? `url(#area-${gid}-${i})` : "none"} fillOpacity={0.4}
+          isAnimationActive={false} legendType="none"
+        />
+      ))}
       {yFields.map((f, i) => {
         const color = palette[i % palette.length];
         if (forecast && i === 0) {
@@ -186,7 +211,11 @@ export function renderComboChart(ctx: ChartRenderCtx): ReactElement {
   const yTickFormatter = (v: number) => formatValue(v, fmt, currency, numOpts);
   const tooltipFormatter = seriesTooltip(ctx);
   const predictedKey = forecast ? `${yFields[0]}__predicted` : undefined;
-  const chartData = forecast ? buildForecastFields(data as any[], yFields[0]) : (data as any[]);
+  // Running last period: its line steps are dashed (split like the line
+  // chart), its bars lighter with a dashed outline (Cells below).
+  const partialIdx = ctx.partial?.index;
+  const partialLines = partialIdx != null ? yFields.filter((f) => lineFields?.includes(f)) : [];
+  const chartData = splitPartialFields(forecast ? buildForecastFields(data as any[], yFields[0]) : (data as any[]), partialLines, partialIdx);
   // sharedYAxis (a Pareto): the lines read the bars' axis — see ChartConfigSchema.
   const lineAxis = ctx.cfg?.sharedYAxis ? "left" : "right";
   // Pareto classes: bars by A/B/C from the running-share line before them.
@@ -207,7 +236,7 @@ export function renderComboChart(ctx: ChartRenderCtx): ReactElement {
       <XAxis dataKey={xField} {...AXIS_PROPS} tickFormatter={dateTick(ctx)} />
       <YAxis yAxisId="left"  {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} />
       <YAxis yAxisId="right" orientation="right" hide={lineAxis === "left"} {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={48} />
-      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} />
+      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} payloadUniqBy={partialLines.length > 0 ? (partialUniqKey as any) : undefined} />
       {(showLegend ?? true) && (abc
         ? <Legend wrapperStyle={LEGEND_STYLE} iconSize={7} payload={[
             ...(["A", "B", "C"] as const).map((k) => ({ value: ctx.text?.["abc" + k] ?? k, type: "square" as const, id: k, color: abcColor[k] })),
@@ -223,6 +252,16 @@ export function renderComboChart(ctx: ChartRenderCtx): ReactElement {
       {renderReferenceLines("left")}
       {renderAnnotations("left")}
       {renderForecastDecor(lineFields?.includes(yFields[0]) ? lineAxis : "left")}
+      {partialLines.map((f) => {
+        const color = palette[yFields.indexOf(f) % palette.length];
+        return (
+          <Line key={f + PARTIAL_SUFFIX} yAxisId={lineAxis} type="monotone" dataKey={f + PARTIAL_SUFFIX} name={seriesName(f, ctx.cfg)}
+            stroke={color} strokeOpacity={0.6} strokeWidth={style.line.strokeWidth} strokeLinecap={lineCap} strokeDasharray="5 4" connectNulls={false}
+            dot={style.line.dots ? { r: 3, fill: "#ffffff", stroke: color, strokeWidth: 1.5 } : false}
+            activeDot={{ r: 5, strokeWidth: 2, stroke: "#ffffff" }}
+            isAnimationActive={false} legendType="none" />
+        );
+      })}
       {yFields.map((f, i) => {
         const isLine = lineFields?.includes(f);
         const color = palette[i % palette.length];
@@ -263,14 +302,15 @@ export function renderComboChart(ctx: ChartRenderCtx): ReactElement {
             {abc && chartData.map((row: any, ri: number) => (
               <Cell key={ri} fill={abcColor[paretoClass(Number(row?.[abc.line]), Number(row?.[f]))]} />
             ))}
-            {!abc && hasForecastRows && chartData.map((row: any, ri: number) => {
+            {!abc && (hasForecastRows || partialIdx != null) && chartData.map((row: any, ri: number) => {
               const isForecastRow = !!row.__forecast;
+              const isPartialRow = ri === partialIdx && !isForecastRow;
               return (
                 <Cell key={ri}
                   fill={isForecastRow ? FORECAST_COLOR : `url(#combo-${gid}-${i})`}
-                  fillOpacity={isForecastRow ? 0.3 : 1}
-                  stroke={isForecastRow ? FORECAST_COLOR : undefined}
-                  strokeDasharray={isForecastRow ? "3 3" : undefined}
+                  fillOpacity={isForecastRow ? 0.3 : isPartialRow ? 0.4 : 1}
+                  stroke={isForecastRow ? FORECAST_COLOR : isPartialRow ? color : undefined}
+                  strokeDasharray={isForecastRow || isPartialRow ? "3 3" : undefined}
                 />
               );
             })}

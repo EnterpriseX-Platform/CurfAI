@@ -46,7 +46,7 @@ const DEFINITION = JSON.stringify({
 
 const mint = (blockId: string) => POST(
   new NextRequest("http://localhost:3100/api/reports/r1/embed-token", { method: "POST", body: JSON.stringify({ blockId }) }),
-  { params: { id: "r1" } },
+  { params: Promise.resolve({ id: "r1" }) },
 );
 
 beforeEach(() => {

@@ -35,13 +35,14 @@ const Schema = z.object({
   includeCellComments: z.boolean().default(true),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
   const scopeBlock = requireReportInScope(user, params.id);
   if (scopeBlock) return scopeBlock;
 
-  const limited = ensureLimit("regenerate", `t:${user.tenantId}`, 5, 60_000);
+  const limited = await ensureLimit("regenerate", `t:${user.tenantId}`, 5, 60_000);
   if (limited) return limited;
 
   const body = await req.json().catch(() => ({}));

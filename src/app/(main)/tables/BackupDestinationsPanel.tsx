@@ -205,7 +205,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
           </span>
           <div>
             <h2 className="text-sm font-semibold">{t("backupDest.heading")}</h2>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("backupDest.subtitle")}
             </p>
           </div>
@@ -229,7 +229,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
             <form onSubmit={create} className="grid gap-2 rounded-md border border-dashed border-border bg-muted/20 p-3">
               <div className="grid gap-2 md:grid-cols-2">
                 <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("common.name")}</span>
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("common.name")}</span>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -239,7 +239,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("backupDest.driverLabel")}</span>
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("backupDest.driverLabel")}</span>
                   <select
                     value={driverKey}
                     onChange={(e) => setDriverKey(e.target.value)}
@@ -251,11 +251,11 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                   </select>
                 </label>
               </div>
-              <p className="text-[10px] text-muted-foreground">{driver.hint}</p>
+              <p className="text-2xs text-muted-foreground">{driver.hint}</p>
 
               {driver.fields.map((f) => (
                 <label key={f.name} className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">
                     {f.label} {f.required && <span className="text-destructive">*</span>}
                   </span>
                   {f.type === "json" ? (
@@ -264,7 +264,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                       onChange={(e) => setField(f.name, e.target.value)}
                       placeholder={f.placeholder}
                       rows={2}
-                      className="mt-1 w-full rounded border border-border bg-background p-2 font-mono text-[11px]"
+                      className="mt-1 w-full rounded border border-border bg-background p-2 font-mono text-2xs"
                     />
                   ) : (
                     <input
@@ -273,7 +273,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                       onChange={(e) => setField(f.name, e.target.value)}
                       placeholder={f.placeholder}
                       required={f.required}
-                      className="mt-1 h-8 w-full rounded border border-border bg-background px-2 font-mono text-[11px]"
+                      className="mt-1 h-8 w-full rounded border border-border bg-background px-2 font-mono text-2xs"
                     />
                   )}
                 </label>
@@ -281,7 +281,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
 
               <div className="grid gap-2 md:grid-cols-2">
                 <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("backupDest.shipWhichLabel")}</span>
+                  <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("backupDest.shipWhichLabel")}</span>
                   <select
                     value={shipKinds}
                     onChange={(e) => setShipKinds(e.target.value)}
@@ -296,7 +296,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                   <button
                     type="submit"
                     disabled={busy === "create" || !name.trim()}
-                    className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2.5 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   >
                     {busy === "create" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                     {t("action.create")}
@@ -304,7 +304,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                   <button
                     type="button"
                     onClick={() => { setCreating(false); setName(""); setConfig({}); }}
-                    className="h-8 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted"
+                    className="h-8 rounded-md px-2 text-2xs text-muted-foreground hover:bg-muted"
                   >
                     {t("action.cancel")}
                   </button>
@@ -330,7 +330,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
 
           {items === null && <p className="text-xs text-muted-foreground">{t("backupDest.loading")}</p>}
           {items !== null && items.length === 0 && !creating && (
-            <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-3 text-center text-[11px] text-muted-foreground">
+            <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-3 text-center text-2xs text-muted-foreground">
               {t("backupDest.emptyState")}
             </p>
           )}
@@ -343,10 +343,10 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 text-xs">
                         <span className="font-semibold">{d.name}</span>
-                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">{d.driver}</span>
-                        {!d.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">{t("backupDest.pausedBadge")}</span>}
+                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs uppercase tracking-wider text-muted-foreground">{d.driver}</span>
+                        {!d.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs uppercase tracking-wider text-muted-foreground">{t("backupDest.pausedBadge")}</span>}
                         <span className={
-                          "rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
+                          "rounded-full px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider " +
                           (d.lastStatus === "ok" ? "bg-success/10 text-success" :
                            d.lastStatus === "failed" ? "bg-destructive/10 text-destructive" :
                            "bg-muted text-muted-foreground")
@@ -354,13 +354,13 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                           {d.lastStatus ?? t("backupDest.neverShipped")}
                         </span>
                       </div>
-                      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <div className="mt-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
                         <Clock className="h-3 w-3" />
                         {d.lastShipAt ? new Date(d.lastShipAt).toLocaleString() : t("backupDest.awaitingFirstSnapshot")}
                         <span>· {t("backupDest.shipsSuffix").replace("{kinds}", d.shipKinds.replace(",", " + "))}</span>
                       </div>
                       {d.lastError && (
-                        <p className="mt-1 truncate font-mono text-[10px] text-destructive" title={d.lastError}>
+                        <p className="mt-1 truncate font-mono text-2xs text-destructive" title={d.lastError}>
                           {d.lastError.slice(0, 120)}
                         </p>
                       )}
@@ -371,7 +371,7 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                           type="button"
                           onClick={() => test(d.id)}
                           disabled={!!busy}
-                          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-[11px] hover:bg-muted disabled:opacity-50"
+                          className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-2xs hover:bg-muted disabled:opacity-50"
                           title={t("backupDest.testTitle")}
                         >
                           {busy === `test-${d.id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Activity className="h-3 w-3" />}
@@ -406,10 +406,10 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
           {/* Recent shipments — audit trail */}
           {shipments && shipments.length > 0 && (
             <details className="rounded-md border border-border bg-background px-3 py-2">
-              <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground hover:text-foreground">
+              <summary className="cursor-pointer text-2xs font-semibold text-muted-foreground hover:text-foreground">
                 {t("backupDest.recentShipments").replace("{n}", String(shipments.length))}
               </summary>
-              <ul className="mt-2 max-h-56 divide-y divide-border overflow-y-auto text-[11px]">
+              <ul className="mt-2 max-h-56 divide-y divide-border overflow-y-auto text-2xs">
                 {shipments.map((s) => (
                   <li key={s.id} className="flex items-center justify-between gap-2 py-1.5">
                     <div className="min-w-0">
@@ -421,14 +421,14 @@ export function BackupDestinationsPanel({ canAdmin }: { canAdmin: boolean }) {
                         )}
                         <span className="truncate font-medium">{s.destinationName}</span>
                         {s.responseCode != null && (
-                          <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-mono text-muted-foreground">{s.responseCode}</span>
+                          <span className="rounded bg-muted px-1 py-0.5 text-2xs font-mono text-muted-foreground">{s.responseCode}</span>
                         )}
                       </div>
-                      <div className="text-[10px] text-muted-foreground">
+                      <div className="text-2xs text-muted-foreground">
                         {(s.bytesSent / 1024).toFixed(1)} KB · {s.durationMs}ms · {new Date(s.createdAt).toLocaleString()}
                       </div>
                       {s.error && (
-                        <p className="mt-0.5 truncate font-mono text-[10px] text-destructive" title={s.error}>{s.error.slice(0, 100)}</p>
+                        <p className="mt-0.5 truncate font-mono text-2xs text-destructive" title={s.error}>{s.error.slice(0, 100)}</p>
                       )}
                     </div>
                   </li>

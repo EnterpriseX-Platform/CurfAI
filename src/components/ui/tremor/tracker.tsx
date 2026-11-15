@@ -66,7 +66,7 @@ export function Tracker({
         ))}
       </div>
       {/* Footer summary — uptime-style summary line under the grid. */}
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="mt-1.5 flex items-center justify-between text-2xs text-muted-foreground">
         <span>{data.length} day{data.length === 1 ? "" : "s"}</span>
         <span className="flex items-center gap-3">
           <Legend color={COLORS.ok} label={`On time · ${counts.ok}`} />
@@ -78,7 +78,7 @@ export function Tracker({
       {/* Tooltip — appears above the hovered cell with date + detail. */}
       {hover !== null && data[hover] && (
         <div
-          className="pointer-events-none absolute -top-12 z-10 -translate-x-1/2 rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] text-popover-foreground shadow-md"
+          className="pointer-events-none absolute -top-12 z-10 -translate-x-1/2 rounded-md border border-border bg-popover px-2.5 py-1.5 text-2xs text-popover-foreground shadow-md"
           style={{ left: `${((hover + 0.5) / data.length) * 100}%` }}
         >
           <div className="font-medium">{data[hover].date}</div>

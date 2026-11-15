@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireAdmin, MEMBERSHIP_ROLES } from "@/lib/auth";
 import { withSystemDbContext } from "@/lib/dbContext";
 import { recordAudit } from "@/lib/audit";
-import { mintAndSendInvite } from "@/lib/invites";
+import { mintAndSendInvite, isPendingInvite } from "@/lib/invites";
 import { ee } from "@/ee";
 import { appBase } from "@/lib/http/appBase";
 
@@ -12,7 +12,7 @@ import { appBase } from "@/lib/http/appBase";
  * Admin user list + invite endpoint.
  *
  * GET  - list members of this workspace (via Membership), with pendingInvite
- *        flag for users that haven't accepted yet (passwordHash is null).
+ *        flag for users that haven't accepted yet (no password and no confirmed address).
  * POST - invite a user into this workspace.
  *          - Email has no account anywhere yet: create a User row WITHOUT a
  *            passwordHash + delegate to mintAndSendInvite() to mint a 7-day
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     try { roles = JSON.parse(m.rolesJson ?? "[]"); } catch { /* ignore */ }
     return {
       id: m.user.id, email: m.user.email, name: m.user.name, authRole: m.role, roles,
-      pendingInvite: !m.user.passwordHash,
+      pendingInvite: isPendingInvite(m.user),
     };
   });
   return NextResponse.json({ items });
@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
       data: {
         email: parsed.data.email,
         name: parsed.data.name ?? null,
-        // Deliberately no passwordHash - invitee sets it via /reset/[token].
+        // Deliberately no passwordHash - the invitee sets a password through /reset/[token], or in Keycloak when it is the only sign-in.
       },
     }));
   } catch (e: any) {

@@ -217,11 +217,11 @@ export function LlmProviderPanel() {
   if (status.migrationNeeded) {
     return (
       <section id="llm" className="mb-8 scroll-mt-20 rounded-lg border border-warning/40 bg-warning/5 p-5 shadow-xs">
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-warning">
+        <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-warning">
           <Cpu className="mr-1 inline h-3 w-3 -translate-y-px" /> LLM provider
         </p>
         <p className="text-sm text-warning">
-          Database migration required. Run <code className="rounded bg-warning/10 px-1.5 py-0.5 font-mono text-[12px]">npx prisma db push</code> in
+          Database migration required. Run <code className="rounded bg-warning/10 px-1.5 py-0.5 font-mono text-xs">npx prisma db push</code> in
           the project directory to add the LLM provider columns, then restart the dev server.
         </p>
       </section>
@@ -266,7 +266,7 @@ export function LlmProviderPanel() {
     <section id="llm" className="mb-8 scroll-mt-20 rounded-lg border bg-card p-5 shadow-xs">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
             <Cpu className="mr-1 inline h-3 w-3 -translate-y-px" />
             LLM provider
           </p>
@@ -319,7 +319,7 @@ export function LlmProviderPanel() {
               }
             >
               <div className="font-semibold">{d.label}</div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">
+              <div className="mt-0.5 text-2xs text-muted-foreground">
                 Default: <code className="font-mono">{d.defaultModel}</code>
               </div>
             </button>
@@ -328,7 +328,7 @@ export function LlmProviderPanel() {
       </div>
 
       {driver && (
-        <p className="mb-3 text-[11px] text-muted-foreground">{driver.credentialHint}</p>
+        <p className="mb-3 text-2xs text-muted-foreground">{driver.credentialHint}</p>
       )}
 
       {/* Existing key preview — only for the tab that's actually active;
@@ -366,7 +366,7 @@ export function LlmProviderPanel() {
           </Button>
         </div>
         {driver?.consoleUrl && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Get a key at <a href={driver.consoleUrl} target="_blank" rel="noreferrer"
               className="text-primary underline">{driver.consoleUrl.replace(/^https?:\/\//, "")}</a>.
             The key is AES-256-GCM encrypted before it touches the database.
@@ -394,11 +394,11 @@ export function LlmProviderPanel() {
           </Label>
           <div className="flex items-center gap-2">
             {(provider === "openai" || provider === "openai-compatible") && (
-              <Button type="button" variant="outline" size="sm" className="h-6 text-[10px] px-2" onClick={fetchModels} disabled={fetchingModels}>
+              <Button type="button" variant="outline" size="sm" className="h-6 text-2xs px-2" onClick={fetchModels} disabled={fetchingModels}>
                 {fetchingModels ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Fetch Models
               </Button>
             )}
-            <Button type="button" variant="outline" size="sm" className="h-6 text-[10px] px-2" onClick={testConnection} disabled={testingConnection}>
+            <Button type="button" variant="outline" size="sm" className="h-6 text-2xs px-2" onClick={testConnection} disabled={testingConnection}>
               {testingConnection ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Test Connection
             </Button>
           </div>
@@ -410,20 +410,20 @@ export function LlmProviderPanel() {
           placeholder={driver?.defaultModel ?? "model id"}
           className="font-mono text-xs"
         />
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           Leave blank to use the provider's default ({driver?.defaultModel ?? "—"}).
         </p>
         
         {fetchedModels && fetchedModels.length > 0 && (
           <div className="mt-2">
-            <p className="mb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Available Models:</p>
+            <p className="mb-1 text-2xs font-medium text-muted-foreground uppercase tracking-wider">Available Models:</p>
             <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto p-1 border rounded-md bg-muted/20">
               {fetchedModels.map(m => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => setModel(m)}
-                  className="rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-mono hover:bg-muted"
+                  className="rounded border border-border bg-background px-1.5 py-0.5 text-2xs font-mono hover:bg-muted"
                 >
                   {m}
                 </button>
@@ -445,7 +445,7 @@ export function LlmProviderPanel() {
           placeholder={model.trim() || driver?.defaultModel || "same as Model"}
           className="font-mono text-xs"
         />
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           Leave blank to use the Model above for everything. Set a non-reasoning model here when the Model above is a reasoning model (e.g. <span className="font-mono">kimi-k3</span> for Master Builder, <span className="font-mono">kimi-k2.6</span> here) — grounded answers don't need chain-of-thought, and a reasoning model spends its whole token budget thinking before it answers.
         </p>
       </div>
@@ -464,7 +464,7 @@ export function LlmProviderPanel() {
           />
           {driver.baseUrlSuggestions.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Quick-pick:</span>
+              <span className="text-2xs uppercase tracking-wider text-muted-foreground">Quick-pick:</span>
               {driver.baseUrlSuggestions.map((s) => (
                 <button
                   key={s.url}
@@ -474,7 +474,7 @@ export function LlmProviderPanel() {
                     if (!model && s.defaultModel) setModel(s.defaultModel);
                     setFetchedModels(null);
                   }}
-                  className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] hover:bg-muted"
+                  className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs hover:bg-muted"
                 >
                   {s.label}
                 </button>

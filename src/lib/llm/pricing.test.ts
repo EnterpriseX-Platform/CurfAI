@@ -31,4 +31,20 @@ describe("computeMicroCostMetered", () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it("meters a platform model at the rate a platform admin set, over the list price", () => {
+    // kimi-k2.6 lists at $0.95 in / $4 out; the admin's rate wins.
+    expect(computeMicroCostMetered({ provider: "openai-compatible", model: "kimi-k2.6", ...call }, { inputPer1M: 0.1, outputPer1M: 0.4 })).toBe(500_000);
+    // A self-hosted model with no list price, priced by the admin, is not charged at the dearest rate.
+    expect(computeMicroCostMetered({ provider: "openai-compatible", model: "qwen-3.8-27b", ...call }, { inputPer1M: 0.05, outputPer1M: 0.2 })).toBe(250_000);
+  });
+});
+
+describe("formatMicroUsd small amounts", () => {
+  it("writes a sub-cent amount in cents without a dollar sign", async () => {
+    const { formatMicroUsd } = await import("./pricing");
+    expect(formatMicroUsd(396)).toBe("0.0396¢");
+    expect(formatMicroUsd(5_000)).toBe("0.50¢");
+    expect(formatMicroUsd(96_000)).toBe("$0.096");
+  });
 });

@@ -437,7 +437,7 @@ function Pointer({ src, at }: { src: string; at: number }) {
   for (const line of lines) {
     if (at <= start + line.length) {
       return (
-        <pre className="font-mono text-[12px] leading-snug text-foreground">
+        <pre className="font-mono text-xs leading-snug text-foreground">
           {line}{"\n"}<span className="text-destructive">{" ".repeat(at - start)}^</span>
         </pre>
       );
@@ -462,11 +462,11 @@ function PreviewTable({ data, busy, resultLabel }: { data?: Preview; busy: boole
   return (
     <div className={`space-y-1.5 ${busy ? "opacity-60" : ""}`}>
       <div className="overflow-x-auto rounded-md border border-border">
-        <table className="min-w-full text-[12px]">
+        <table className="min-w-full text-xs">
           <thead>
             <tr className="bg-muted">
-              {data.uses.map((u) => <th key={u} className="whitespace-nowrap px-2.5 py-1.5 text-left font-mono text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">{u}</th>)}
-              <th className="whitespace-nowrap bg-primary-soft px-2.5 py-1.5 text-left font-mono text-[10.5px] font-medium uppercase tracking-wide text-primary-ink">{resultLabel}</th>
+              {data.uses.map((u) => <th key={u} className="whitespace-nowrap px-2.5 py-1.5 text-left font-mono text-2xs font-medium uppercase tracking-wide text-muted-foreground">{u}</th>)}
+              <th className="whitespace-nowrap bg-primary-soft px-2.5 py-1.5 text-left font-mono text-2xs font-medium uppercase tracking-wide text-primary-ink">{resultLabel}</th>
             </tr>
           </thead>
           <tbody>

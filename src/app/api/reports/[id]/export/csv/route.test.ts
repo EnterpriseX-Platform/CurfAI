@@ -49,7 +49,7 @@ const DEFINITION = JSON.stringify({
 
 const exportCsv = (query = "") => GET(
   new NextRequest(`http://localhost:3100/api/reports/r1/export/csv${query}`),
-  { params: { id: "r1" } },
+  { params: Promise.resolve({ id: "r1" }) },
 );
 
 beforeEach(() => {

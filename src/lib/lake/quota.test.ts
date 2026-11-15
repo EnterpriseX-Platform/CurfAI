@@ -42,3 +42,25 @@ describe("lake table cap", () => {
     expect(await checkWriteAllowed({ tenantId: "t1", estimatedBytes: 2000 })).toBeNull();
   });
 });
+
+describe("an operator's override of the lake caps (TenantEntitlement)", () => {
+  const future = new Date(Date.now() + 86_400_000 * 30);
+
+  it("raises the table cap above the plan's, for as long as the entitlement lasts", async () => {
+    lakeTable.findMany.mockResolvedValue(own(10));
+    tenant.findUnique.mockResolvedValue({ tier: "community", entitlement: { limitsJson: '{"lakeTables":50}', validUntil: future } });
+    expect(await checkWriteAllowed({ tenantId: "t1", newTable: true })).toBeNull();
+  });
+
+  it("'unlimited' removes the storage cap", async () => {
+    lakeTable.findMany.mockResolvedValue(own(1));
+    tenant.findUnique.mockResolvedValue({ tier: "community", entitlement: { limitsJson: '{"lakeBytes":"unlimited"}', validUntil: null } });
+    expect(await checkWriteAllowed({ tenantId: "t1", estimatedBytes: 10 * 1024 ** 3 })).toBeNull();
+  });
+
+  it("is ignored once it has ended: back to the plan's cap", async () => {
+    lakeTable.findMany.mockResolvedValue(own(10));
+    tenant.findUnique.mockResolvedValue({ tier: "community", entitlement: { limitsJson: '{"lakeTables":50}', validUntil: new Date(Date.now() - 1000) } });
+    expect(await checkWriteAllowed({ tenantId: "t1", newTable: true })).toMatch(/Lake table cap reached/);
+  });
+});

@@ -48,13 +48,13 @@ export function AutoCurfPublishedBanner() {
             Curf built this dashboard from your table — and a public link is ready to share.
           </p>
           <div className="mt-1 flex items-center gap-2">
-            <code className="block flex-1 truncate rounded border border-success/30 bg-background px-2 py-1 font-mono text-[11px]">
+            <code className="block flex-1 truncate rounded border border-success/30 bg-background px-2 py-1 font-mono text-2xs">
               {url}
             </code>
             <button
               type="button"
               onClick={copy}
-              className="inline-flex h-7 items-center gap-1 rounded-md bg-success/20 px-2 text-[11px] font-semibold text-success hover:bg-success/30"
+              className="inline-flex h-7 items-center gap-1 rounded-md bg-success/20 px-2 text-2xs font-semibold text-success hover:bg-success/30"
             >
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
               {copied ? "Copied" : "Copy"}
@@ -63,12 +63,12 @@ export function AutoCurfPublishedBanner() {
               href={url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-success/40 bg-background px-2 text-[11px] font-medium text-success hover:bg-success/10"
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-success/40 bg-background px-2 text-2xs font-medium text-success hover:bg-success/10"
             >
               <Globe className="h-3 w-3" /> Open <ExternalLink className="h-2.5 w-2.5 opacity-60" />
             </a>
           </div>
-          <p className="mt-1 text-[10px] text-success/80 ">
+          <p className="mt-1 text-2xs text-success/80 ">
             Anyone with the link can view — no Curf account required. Manage / unpublish in <a href="/admin/apps" className="underline">Admin → Public Apps</a>.
           </p>
         </div>

@@ -11,6 +11,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const closed = vi.hoisted(() => new Set<string>());
+vi.mock("@/lib/tenantGuard", () => ({ tenantIsOpen: async (id: string) => !closed.has(id), closedTenantIds: async () => [...closed], forgetTenantStatus: () => {} }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     app: { findFirst: vi.fn(async () => null) },
@@ -29,6 +31,7 @@ vi.mock("@/lib/reporting/runner", async (importOriginal) => {
 vi.mock("@/components/reports/ReportDocument", () => ({ ReportDocument: function ReportDocument() { return null; } }));
 
 import { prisma } from "@/lib/db";
+import { runReport } from "@/lib/reporting/runner";
 import { mintEmbedToken } from "@/lib/embed/token";
 import EmbedBlockPage from "./page";
 
@@ -46,11 +49,12 @@ const DEFINITION = JSON.stringify({
 });
 
 const open = (blockId: string, token?: string) =>
-  EmbedBlockPage({ params: { reportId: "r1", blockId }, searchParams: token ? { token } : {} }) as Promise<any>;
+  EmbedBlockPage({ params: Promise.resolve({ reportId: "r1", blockId }), searchParams: Promise.resolve(token ? { token } : {}) }) as Promise<any>;
 const tokenFor = (blockId: string) => mintEmbedToken({ tenantId: "t1", reportId: "r1", blockId });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  closed.clear();
   vi.mocked(prisma.report.findFirst).mockResolvedValue({ id: "r1", tenantId: "t1", definition: DEFINITION } as any);
 });
 
@@ -72,5 +76,21 @@ describe("single-block embed", () => {
     expect((await open("k_fin")).props.message).toBe("Block not found in this report.");
     const doc = (await open("k_open")).props.children[0].props;
     expect(Object.keys(doc.dataset)).toEqual(["q_headcount"]);
+  });
+
+  it("a closed workspace's embed token reads as a private block: nothing is loaded or run", async () => {
+    closed.add("t1");
+    const page = await open("k_open", tokenFor("k_open"));
+    expect(page.props.message).toBe("This block is private. Embed token required.");
+    expect(prisma.report.findFirst).not.toHaveBeenCalled();
+    expect(runReport).not.toHaveBeenCalled();
+  });
+
+  it("a closed workspace's published app no longer makes its blocks public", async () => {
+    closed.add("t1");
+    vi.mocked(prisma.app.findFirst).mockResolvedValue({ tenantId: "t1" } as any);
+    expect((await open("k_open")).props.message).toBe("This block is private. Embed token required.");
+    expect(prisma.report.findFirst).not.toHaveBeenCalled();
+    expect(runReport).not.toHaveBeenCalled();
   });
 });

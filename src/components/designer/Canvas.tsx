@@ -1,5 +1,5 @@
 "use client";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import GridLayout, { type Layout } from "react-grid-layout";
 import { GripVertical, MousePointerClick, Database, PlayCircle, LayoutTemplate } from "lucide-react";
 import { useT } from "@/lib/i18n/LocaleContext";
@@ -9,6 +9,7 @@ import { useDesignerStore } from "@/lib/reporting/store";
 import type { Block, Page } from "@/lib/reporting/schema";
 import type { Dataset } from "@/lib/reporting/interpolate";
 import { RenderBlock } from "@/components/reports/ReportDocument";
+import { localizeBlock, missingTranslation } from "@/lib/reporting/localize";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { CurrencyProvider } from "@/components/providers/CurrencyProvider";
 import { DateStyleProvider } from "@/components/providers/DateStyleProvider";
@@ -17,6 +18,7 @@ import { RulerH, RulerV } from "./Ruler";
 import "react-grid-layout/css/styles.css";
 
 const COLS = 12;
+const PHONE_MAX = 768;        // px — below this the page is scaled to fit instead of scrolled
 const ROW_HEIGHT = 40;
 const CANVAS_WIDTH = 820;
 const PAPER_PADDING = 28;     // px — white border around the grid
@@ -29,9 +31,42 @@ const PAGE_SIZE_MM: Record<string, { w: number; h: number }> = {
   Legal:  { w: 216, h: 356 },
 };
 
+/**
+ * The page is drawn at a fixed width (CANVAS_WIDTH). On a phone it is scaled down to fit rather than
+ * scrolled sideways, and react-grid-layout is told the scale (`transformScale`) so dragging and resizing stay accurate.
+ * Returns the scale (never above 1) and the page's scaled height, which the outer box needs because a transform does
+ * not change the space an element takes.
+ */
+function useFitScale(fullWidth: number, ready: boolean) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  const [height, setHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const box = boxRef.current;
+    const page = pageRef.current;
+    if (!box || !page || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      // Phones only: on a wider screen the designer's own scrolling area handles a page wider than its column.
+      const next = window.innerWidth < PHONE_MAX ? Math.min(1, box.clientWidth / fullWidth) : 1;
+      setScale((prev) => (Math.abs(prev - next) < 0.001 ? prev : next));
+      setHeight(page.offsetHeight * next);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(box);
+    ro.observe(page);
+    window.addEventListener("resize", measure);
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
+  }, [fullWidth, ready]);
+  return { boxRef, pageRef, scale, height: scale < 1 ? height : null };
+}
+
 export function Canvas({
-  dataset, params, showRulers = false, reportDbId, tenantBrand,
+  dataset, params, showRulers = false, reportDbId, tenantBrand, readAs,
 }: {
+  /** Show the page in this content language (en, th, zh), the way a reader in it sees it. Unset: as written. */
+  readAs?: string;
   dataset: Dataset;
   params: Record<string, unknown>;
   showRulers?: boolean;
@@ -50,6 +85,7 @@ export function Canvas({
   const addBlock = useDesignerStore((s) => s.addBlock);
   const addBlockTemplate = useDesignerStore((s) => s.addBlockTemplate);
   const updateLayout = useDesignerStore((s) => s.updateBlockLayout);
+  const fit = useFitScale(CANVAS_WIDTH + (showRulers ? 20 : 0), report.pages.some((p) => p.id === activePageId));
 
   const page: Page | undefined = report.pages.find((p) => p.id === activePageId);
   const layout: Layout[] = useMemo(
@@ -91,7 +127,8 @@ export function Canvas({
     <CurrencyProvider reportCurrency={(report as any).currency}>
     <DateStyleProvider reportEra={report.dateEra}>
     <WhyProvider>
-    <div className="mx-auto w-full" style={{ maxWidth: CANVAS_WIDTH + (showRulers ? 20 : 0) }}>
+    <div ref={fit.boxRef} className="mx-auto w-full" style={{ maxWidth: CANVAS_WIDTH + (showRulers ? 20 : 0), height: fit.height ?? undefined }}>
+    <div ref={fit.pageRef} style={{ width: CANVAS_WIDTH + (showRulers ? 20 : 0), transform: fit.scale < 1 ? `scale(${fit.scale})` : undefined, transformOrigin: "top left" }}>
       {showRulers && (
         <div className="flex">
           <div style={{ width: 20 }} />
@@ -138,6 +175,7 @@ export function Canvas({
             cols={COLS}
             rowHeight={ROW_HEIGHT}
             width={gridWidth}
+            transformScale={fit.scale}
             margin={[8, 8]}
             containerPadding={[0, 0]}
             isDraggable
@@ -181,17 +219,26 @@ export function Canvas({
                 className="group block-card relative overflow-hidden rounded-lg border border-border bg-card"
               >
                 <BlockHeaderChip block={block} selected={selectedBlockId === block.id} />
+                {readAs && missingTranslation(report, block, readAs) === "partial" && (
+                  <span className="absolute bottom-1.5 right-2 z-10 rounded border border-dashed border-warning bg-warning/10 px-1.5 text-2xs text-warning">
+                    {t("designerReadAs.missing").replace("{lang}", t(`designerReadAs.${readAs}`))}
+                  </span>
+                )}
                 <div className="h-full w-full p-2">
-                  <RenderBlock block={block} report={report} dataset={dataset} params={params} print={false} reportDbId={reportDbId} />
+                  <RenderBlock block={readAs ? localizeBlock(block, readAs) : block} report={report} dataset={dataset} params={params} print={false} reportDbId={reportDbId} />
                 </div>
               </div>
             ))}
           </GridLayout>
         </div>
       </div>
-      <p className={`mt-3 text-center text-[11px] text-muted-foreground ${showRulers ? "pl-5" : ""}`}>
+      {readAs && page.blocks.some((b) => missingTranslation(report, b, readAs) === "none") && (
+        <p className="mt-3 text-center text-xs text-warning">{t("designerReadAs.none").split("{lang}").join(t(`designerReadAs.${readAs}`))}</p>
+      )}
+      <p className={`mt-3 text-center text-2xs text-muted-foreground ${showRulers ? "pl-5" : ""}`}>
         {page.size} · {t(page.orientation === "landscape" ? "designerShell.landscape" : "designerShell.portrait")} · {pageMm.w}×{pageMm.h} mm
       </p>
+    </div>
     </div>
     </WhyProvider>
     </DateStyleProvider>
@@ -205,7 +252,7 @@ function BlockHeaderChip({ block, selected }: { block: Block; selected?: boolean
   return (
     <div
       title={t("canvas.dragToMove")}
-      className={`drag-handle absolute left-0 top-0 z-10 flex cursor-grab items-center gap-1 rounded-br-md bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground transition-opacity active:cursor-grabbing ${
+      className={`drag-handle absolute left-0 top-0 z-10 flex cursor-grab items-center gap-1 rounded-br-md bg-primary/90 px-1.5 py-0.5 text-2xs font-medium text-primary-foreground transition-opacity active:cursor-grabbing ${
         selected ? "opacity-100" : "opacity-0 group-hover:opacity-90"
       }`}
     >

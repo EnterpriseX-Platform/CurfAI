@@ -9,8 +9,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -18,7 +18,7 @@ export default async function DataSourcesPage() {
   const session = await getSession();
   const user = (session?.user as any) ?? null;
   if (!session) redirect("/login?callbackUrl=/data-sources");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   const isAdmin = (session.user as any)?.role === "admin";
   // Load the tenant's plan tier server-side so the kind picker can show
@@ -30,7 +30,7 @@ export default async function DataSourcesPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.connections") }]}>
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "connections.pageTitle")} description={<>{t(locale, "connections.pageSubtitleShared")} {isAdmin ? t(locale, "connections.adminCanEdit") : t(locale, "connections.onlyAdminsEdit")}</>} />
 
         <DataSourcesManager isAdmin={isAdmin} currentTier={tier} />

@@ -13,8 +13,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -22,7 +22,7 @@ export default async function ApiKeysPage() {
   const user = await requireUser();
   if (!user) redirect("/login?callbackUrl=/admin/api-keys");
   if (user.role !== "admin") redirect("/reports");
-  const locale = readLocale();
+  const locale = await readLocale();
   const tier = await loadTenantTier(user.tenantId);
 
   const [rows, reports] = await Promise.all([
@@ -56,7 +56,7 @@ export default async function ApiKeysPage() {
 
         <section className="mt-10 rounded-lg border bg-muted/30 p-5 text-xs text-muted-foreground">
           <p className="mb-2 font-semibold text-foreground">{t(locale, "adminApiKeys.usingKeyTitle")}</p>
-          <pre className="overflow-x-auto rounded bg-background p-3 font-mono text-[11px]">
+          <pre className="overflow-x-auto rounded bg-background p-3 font-mono text-2xs">
 {`# List your reports
 curl https://your-domain/api/v1/reports \\
      -H "Authorization: Bearer curf_..."

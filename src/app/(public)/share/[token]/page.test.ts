@@ -10,6 +10,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const closed = vi.hoisted(() => new Set<string>());
+vi.mock("@/lib/tenantGuard", () => ({ tenantIsOpen: async (id: string) => !closed.has(id), closedTenantIds: async () => [...closed], forgetTenantStatus: () => {} }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     publicShareToken: { findUnique: vi.fn() },
@@ -65,13 +67,14 @@ const blockIds = (report: any) => report.pages.flatMap((p: any) => p.blocks.map(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  closed.clear();
   vi.mocked(prisma.publicShareToken.findUnique).mockResolvedValue({ tokenHash: "h", tenantId: "t1", reportId: "r1", expiresAt: null } as any);
   vi.mocked(prisma.report.findFirst).mockResolvedValue({ id: "r1", tenantId: "t1", name: "People", definition: DEFINITION } as any);
 });
 
 describe.each([
-  ["/share/:token", () => SharePage({ params: { token: "tok" } })],
-  ["/embed/:token", () => EmbedPage({ params: { token: "tok" } })],
+  ["/share/:token", () => SharePage({ params: Promise.resolve({ token: "tok" }) })],
+  ["/embed/:token", () => EmbedPage({ params: Promise.resolve({ token: "tok" }) })],
 ])("%s — blocks gated to a role", (_path, open) => {
   it("renders as nobody: the gated block, its query and its rows stay out", async () => {
     const doc = propsOf(await open(), "ReportDocument");
@@ -84,5 +87,12 @@ describe.each([
   it("still runs as the anonymous viewer, for the data-source ACL", async () => {
     await open();
     expect(vi.mocked(runReportWithProof).mock.calls[0][0].viewer).toBe(ANONYMOUS_VIEWER);
+  });
+
+  it("is a 404 for a closed (suspended / pending-deletion) workspace: no report is read and no query runs", async () => {
+    closed.add("t1");
+    await expect(open()).rejects.toMatchObject({ digest: expect.stringMatching(/NEXT_NOT_FOUND|NEXT_HTTP_ERROR_FALLBACK;404/) });
+    expect(prisma.report.findFirst).not.toHaveBeenCalled();
+    expect(runReportWithProof).not.toHaveBeenCalled();
   });
 });

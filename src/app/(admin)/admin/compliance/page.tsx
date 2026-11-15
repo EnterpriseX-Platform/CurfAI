@@ -19,8 +19,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -29,7 +29,7 @@ export default async function CompliancePage() {
   if (!user) redirect("/login?next=/admin/compliance");
   if (user.role !== "admin") redirect("/");
 
-  const locale = readLocale();
+  const locale = await readLocale();
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.section.admin"), href: "/admin/tenant" }, { label: t(locale, "nav.compliance") }]}>
@@ -80,11 +80,6 @@ export default async function CompliancePage() {
           />
           <Item
             kind="ok"
-            title={t(locale, "admin.compliance.item.exportDeletion.title")}
-            body={t(locale, "admin.compliance.item.exportDeletion.body")}
-          />
-          <Item
-            kind="ok"
             title={t(locale, "admin.compliance.item.pdpaRecord.title")}
             body={t(locale, "admin.compliance.item.pdpaRecord.body")}
           />
@@ -96,6 +91,14 @@ export default async function CompliancePage() {
         </Section>
 
         <Section title={t(locale, "admin.compliance.section.inProgress")}>
+          {/* A tenant-wide export and a data-subject request flow don't exist
+              yet, and a workspace deletion leaves its lake files on disk —
+              so this is in progress, not something we do today. */}
+          <Item
+            kind="wip"
+            title={t(locale, "admin.compliance.item.exportDeletion.title")}
+            body={t(locale, "admin.compliance.item.exportDeletion.body")}
+          />
           <Item
             kind="wip"
             title={t(locale, "admin.compliance.item.offsiteBackup.title")}

@@ -309,7 +309,7 @@ function SchemaSection({
           <button
             type="button"
             onClick={() => setEditor({ open: true, editing: null })}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-2xs hover:bg-muted"
           >
             <Plus className="h-3 w-3" /> {t("tableManage.schema.addColumn")}
           </button>
@@ -332,7 +332,7 @@ function SchemaSection({
                 }}
                 className="flex flex-1 items-center gap-1"
               >
-                <span className="text-[10px] text-muted-foreground">{c.name} →</span>
+                <span className="text-2xs text-muted-foreground">{c.name} →</span>
                 <input
                   autoFocus
                   value={renameDraft}
@@ -344,7 +344,7 @@ function SchemaSection({
                 <button
                   type="submit"
                   disabled={busy?.startsWith("rename-")}
-                  className="inline-flex h-7 items-center rounded-md bg-primary px-2 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  className="inline-flex h-7 items-center rounded-md bg-primary px-2 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {busy === `rename-${c.name}` ? <Loader2 className="h-3 w-3 animate-spin" /> : t("tableManage.schema.renameOk")}
                 </button>
@@ -364,10 +364,10 @@ function SchemaSection({
                     {c.formula ? (
                       <span
                         title={`= ${c.formula}`}
-                        className="inline-flex max-w-[20rem] items-center gap-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary-ink"
+                        className="inline-flex max-w-[20rem] items-center gap-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-primary-ink"
                       >
                         <SquareFunction className="h-2.5 w-2.5 shrink-0" />
-                        <span className="truncate normal-case tracking-normal font-mono text-[10px]">= {c.formula}</span>
+                        <span className="truncate normal-case tracking-normal font-mono text-2xs">= {c.formula}</span>
                       </span>
                     ) : canEdit ? (
                       <button
@@ -375,19 +375,19 @@ function SchemaSection({
                         onClick={() => { setRetyping(retyping === c.name ? null : c.name); setTagging(null); }}
                         disabled={!!busy}
                         title={t("tableManage.schema.retypeTitle")}
-                        className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                        className="rounded-full bg-muted px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
                       >
                         {c.type}
                       </button>
                     ) : (
-                      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                      <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
                         {c.type}
                       </span>
                     )}
                     {c.sensitivity && (
                       <span
                         className={
-                          "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
+                          "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider " +
                           SENSITIVITY_TONE[c.sensitivity]
                         }
                         title={c.formula ? t("tableManage.schema.formulaInherits") :
@@ -523,7 +523,7 @@ function SensitivityPicker({
   }
 
   return (
-    <div className="rounded-md border border-dashed border-border bg-muted/20 p-2.5 text-[11px]">
+    <div className="rounded-md border border-dashed border-border bg-muted/20 p-2.5 text-2xs">
       <div className="flex items-center justify-between">
         <span className="font-semibold uppercase tracking-wider text-muted-foreground">
           {t("tableManage.sens.headingFor").replace("{name}", column.name)}
@@ -557,7 +557,7 @@ function SensitivityPicker({
           </p>
           <div className="mt-1.5 flex flex-wrap gap-1">
             {availableRoleSlugs.length === 0 && (
-              <p className="text-[10px] italic text-muted-foreground">
+              <p className="text-2xs italic text-muted-foreground">
                 {t("tableManage.sens.noRolesPre")} <a className="text-primary underline" href="/admin/roles">{t("tableManage.vis.adminRolesLink")}</a>{t("tableManage.sens.noRolesPost")}
               </p>
             )}
@@ -567,7 +567,7 @@ function SensitivityPicker({
                 <label
                   key={slug}
                   className={
-                    "inline-flex cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] " +
+                    "inline-flex cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-2xs " +
                     (checked
                       ? "border-primary bg-primary/10 text-primary"
                       : "border-border bg-background text-muted-foreground hover:bg-muted")
@@ -586,7 +586,7 @@ function SensitivityPicker({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted"
+          className="rounded-md px-2 py-1 text-2xs text-muted-foreground hover:bg-muted"
         >
           {t("action.cancel")}
         </button>
@@ -594,7 +594,7 @@ function SensitivityPicker({
           type="button"
           disabled={busy}
           onClick={() => onApply(sensitivity, sensitivity ? allowedRoles : undefined)}
-          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
           {t("action.apply")}
@@ -664,7 +664,7 @@ function RetypePicker({
   }
 
   return (
-    <div className="rounded-md border border-dashed border-border bg-muted/20 p-2.5 text-[11px]">
+    <div className="rounded-md border border-dashed border-border bg-muted/20 p-2.5 text-2xs">
       <div className="flex items-center justify-between">
         <span className="font-semibold uppercase tracking-wider text-muted-foreground">
           {t("tableManage.retype.headingFor").replace("{name}", column.name)}
@@ -709,7 +709,7 @@ function RetypePicker({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted"
+          className="rounded-md px-2 py-1 text-2xs text-muted-foreground hover:bg-muted"
         >
           {/* "Cancel" reads oddly once there's nothing left to cancel — a
               successful retype already happened and this button just
@@ -720,7 +720,7 @@ function RetypePicker({
           type="button"
           disabled={busy || selected === column.type}
           onClick={apply}
-          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
           {t("tableManage.retype.apply")}
@@ -736,7 +736,7 @@ function SensChip({ label, active, tone, onClick }: { label: string; active: boo
       type="button"
       onClick={onClick}
       className={
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors " +
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium transition-colors " +
         (active
           ? (tone ?? "border-primary bg-primary/10 text-primary")
           : "border-border bg-background text-muted-foreground hover:bg-muted")

@@ -33,13 +33,13 @@ function streamed(bytes: number): NextRequest {
 
 describe("PUT /api/lake/uploads/[id] — chunk size", () => {
   it("refuses an over-size streamed body without handing it to storage", async () => {
-    const res = await PUT(streamed(UPLOAD_CHUNK_BYTES + 1), { params: { id: "up1" } });
+    const res = await PUT(streamed(UPLOAD_CHUNK_BYTES + 1), { params: Promise.resolve({ id: "up1" }) });
     expect(res.status).toBe(413);
     expect(staged.append).not.toHaveBeenCalled();
   });
 
   it("accepts a streamed chunk within the limit", async () => {
-    const res = await PUT(streamed(3), { params: { id: "up1" } });
+    const res = await PUT(streamed(3), { params: Promise.resolve({ id: "up1" }) });
     expect(res.status).toBe(200);
     expect(staged.append).toHaveBeenCalledWith(expect.objectContaining({ bytes: expect.any(Buffer) }));
   });

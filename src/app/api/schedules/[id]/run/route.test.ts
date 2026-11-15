@@ -58,7 +58,7 @@ const run = (cookie?: string) => POST(
     method: "POST",
     headers: cookie ? { cookie } : undefined,
   }),
-  { params: { id: "s1" } },
+  { params: Promise.resolve({ id: "s1" }) },
 );
 const scopedKey = (scopedReportIds: string[]) => ({
   id: "apikey:k1", email: "apikey+curf_x@curf.local", role: "viewer", tenantId: "t1",

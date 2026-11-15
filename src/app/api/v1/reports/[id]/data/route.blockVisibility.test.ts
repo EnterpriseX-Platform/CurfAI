@@ -55,7 +55,7 @@ const DEFINITION = JSON.stringify({
   }],
 });
 
-const get = (route: typeof v1Data, path: string) => route(new NextRequest(`http://localhost:3100${path}`), { params: { id: "r1" } });
+const get = (route: typeof v1Data, path: string) => route(new NextRequest(`http://localhost:3100${path}`), { params: Promise.resolve({ id: "r1" }) });
 const recorded = () => vi.mocked(prisma.reportRun.create).mock.calls[0][0].data as any;
 
 beforeEach(() => {

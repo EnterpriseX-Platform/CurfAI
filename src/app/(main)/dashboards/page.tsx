@@ -23,12 +23,12 @@ export default async function DashboardsHubPage() {
   const user = session.user as any;
   const isAdmin = user?.role === "admin";
 
-  const cookieLocale = cookies().get("rd_locale")?.value;
+  const cookieLocale = (await cookies()).get("rd_locale")?.value;
   const locale = (cookieLocale && (LOCALES as readonly string[]).includes(cookieLocale) ? cookieLocale : "en") as Locale;
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.dashboards") }]}>
-      <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "nav.dashboards")} description={t(locale, "dashboardsHub.subtitle")} />
 
         <InteractiveDashboardHub isAdmin={isAdmin} />

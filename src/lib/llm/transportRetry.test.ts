@@ -6,6 +6,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Next puts AsyncLocalStorage on globalThis on the server; a plain test run has to do it itself (lib/llm/spendScope.ts).
+const als = await import("node:async_hooks");
+(globalThis as any).AsyncLocalStorage ??= als.AsyncLocalStorage;
+
 const call = vi.fn();
 const anthropicCall = vi.fn();
 const usageRows: any[] = [];
@@ -34,6 +38,7 @@ vi.mock("./resilience", async (orig) => {
 });
 
 const { callLLM } = await import("./index");
+const { withSpendScope } = await import("./spendScope");
 
 const fail = (over: Record<string, unknown>) => ({
   text: "", provider: "openai-compatible" as const, model: "m", status: "failed" as const,
@@ -52,6 +57,16 @@ beforeEach(async () => {
   await new Promise((r) => setImmediate(r)); // let the last test's usage writes land before clearing
   call.mockReset(); anthropicCall.mockReset(); usageRows.length = 0; state.provider = "openai-compatible";
   delete process.env.CURF_LLM_RETRIES; delete process.env.CURF_LLM_CONCURRENCY;
+});
+
+describe("spend scope", () => {
+  it("tags a call made inside a build's scope with that build, and leaves others untagged", async () => {
+    call.mockResolvedValue(ok());
+    await withSpendScope({ buildId: "b1" }, () => callLLM(req() as any));
+    await callLLM(req() as any);
+    await new Promise((r) => setImmediate(r));
+    expect(usageRows.map((u) => u.buildId)).toEqual(["b1", null]);
+  });
 });
 
 describe("transport retry", () => {

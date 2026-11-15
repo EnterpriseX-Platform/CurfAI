@@ -23,6 +23,7 @@
  *   F           toggle browser fullscreen
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { formatValue } from "@/components/blocks/charts/shared";
 import { isIdentifierLabel } from "@/lib/reporting/format";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
@@ -33,7 +34,9 @@ import { useT } from "@/lib/i18n/LocaleContext";
 import type { Block } from "@/lib/reporting/schema";
 import type { Dataset } from "@/lib/reporting/interpolate";
 import { chartAxes, extractTable, slotChart, stripTables, withoutAiCaption, type SlotChart } from "./dashboardSlots";
+import { findBlock, parseSlotKey } from "@/lib/dashboards/slotKey";
 import { AiNotice } from "@/components/common/AiNotice";
+import { EmptyState } from "@/components/common/EmptyState";
 import { DrillThroughContext, type DrillThroughHandler } from "@/components/providers/drill-through-context";
 import { OperateActionsProvider } from "@/components/providers/OperateActionsProvider";
 import { DrillBreadcrumbBar, type DrillBreadcrumbStep } from "@/components/blocks/DrillBreadcrumbBar";
@@ -68,7 +71,9 @@ function defaultSlotPos(i: number): SlotPos {
 }
 
 type Slot = {
+  /** The card's key: a report id, or "<reportId>#<blockId>" for one block of it (lib/dashboards/slotKey.ts). */
   id: string;
+  blockId?: string | null;
   name: string;
   rendered: null | {
     definition: any;
@@ -303,7 +308,7 @@ export function DashboardViewer({
       setDrillLoading((p) => ({ ...p, [slotId]: true }));
       const qs = new URLSearchParams();
       for (const b of breadcrumb) qs.set(`p.${b.param}`, String(b.value));
-      fetch(`/api/reports/${slotId}/run?${qs.toString()}`, { cache: "no-store" })
+      fetch(`/api/reports/${parseSlotKey(slotId).reportId}/run?${qs.toString()}`, { cache: "no-store" })
         .then((res) => res.json().then((json) => ({ ok: res.ok, json })))
         .then(({ ok, json }) => {
           if (drillReqRef.current[slotId] !== reqId || !ok) return;
@@ -322,6 +327,14 @@ export function DashboardViewer({
   function effectiveProvenance(slot: Slot) {
     return slotOverrides[slot.id]?.provenance ?? slot.rendered?.provenance;
   }
+  // What a card shows: the one block it was made for, else the report's chart (or one drawn from its rows).
+  function cardChart(slot: Slot, dataset: Dataset | undefined): SlotChart | null {
+    if (slot.blockId) {
+      const b = slot.rendered ? findBlock(slot.rendered.definition, slot.blockId) : null;
+      return b ? { block: b as unknown as Block, dataset: dataset ?? {}, auto: false } : null;
+    }
+    return slotChart(slot.rendered?.definition, dataset);
+  }
 
   // A block whose drill shows the rows behind a value opens the drill panel,
   // with the slot's filters and whatever it's drilled into riding along.
@@ -334,7 +347,7 @@ export function DashboardViewer({
       const slot = dashboard.slots.find((s) => s.id === slotId);
       const drilled = Object.fromEntries((drillMap[slotId] ?? []).map((st) => [st.param, st.value]));
       void drillRows.open({
-        reportId: slotId, blockId, value, params: { ...(slot?.rendered?.params ?? {}), ...drilled },
+        reportId: parseSlotKey(slotId).reportId, blockId, value, params: { ...(slot?.rendered?.params ?? {}), ...drilled },
         reportCurrency: reportDef.currency ?? null, tenantCurrency: dashboard.currency ?? null, dateEra: reportDef.dateEra ?? null,
       });
       return;
@@ -465,10 +478,21 @@ export function DashboardViewer({
         <ReportBlock
           block={block} report={rendered.definition} dataset={(dataset ?? {}) as Dataset}
           params={rendered.params} provenance={effectiveProvenance(slot) as any}
-          print={!interactive} reportDbId={slot.id} bare={opts.bare}
+          print={!interactive} reportDbId={parseSlotKey(slot.id).reportId} bare={opts.bare}
           locale={locale} tenantCurrency={dashboard.currency}
         />
       </DrillThroughContext.Provider>
+    );
+  }
+
+  // A card made for one block (any kind), alone in its section whatever the layout.
+  function singleBlockCard(slot: Slot, dataset: Dataset) {
+    const chart = cardChart(slot, dataset);
+    if (!chart) return <div className="grid min-h-[200px] place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.noChartFound")}</p></div>;
+    return (
+      <div className="flex h-[480px] flex-col rounded-xl border bg-card p-6 shadow-sm" data-block-id={chart.block.id}>
+        <div className="min-h-0 flex-1 overflow-auto">{slotBlock(slot, chart.block, chart.dataset, { bare: chart.block.type === "chart" })}</div>
+      </div>
     );
   }
 
@@ -563,7 +587,7 @@ export function DashboardViewer({
   if (interactive) {
     function renderGridCell(slot: Slot, i: number, opts?: { heightPx?: number; showDragHandle?: boolean }) {
       // Drilled-in rows, when this card has been drilled into.
-      const chart = slot.rendered ? slotChart(slot.rendered.definition, effectiveDataset(slot) as Dataset) : null;
+      const chart = slot.rendered ? cardChart(slot, effectiveDataset(slot) as Dataset) : null;
       const breadcrumb = drillMap[slot.id] ?? [];
       const bodyHeight = opts?.heightPx ?? 360;
       const showDragHandle = opts?.showDragHandle ?? false;
@@ -577,7 +601,7 @@ export function DashboardViewer({
           {showDragHandle && (
             <div
               title={t("dashboardViewer.dragToMove") ?? "Drag to move"}
-              className="drag-handle absolute right-2 top-2 z-10 flex cursor-grab items-center gap-1 rounded-md bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground opacity-0 shadow-sm transition-opacity active:cursor-grabbing group-hover:opacity-100"
+              className="drag-handle absolute right-2 top-2 z-10 flex cursor-grab items-center gap-1 rounded-md bg-primary/90 px-1.5 py-0.5 text-2xs font-medium text-primary-foreground opacity-0 shadow-sm transition-opacity active:cursor-grabbing group-hover:opacity-100"
             >
               <GripVertical className="h-3 w-3" />
             </div>
@@ -625,10 +649,7 @@ export function DashboardViewer({
       if (!slot.rendered) {
         return (
           <div key={slot.id + "_" + i} className="grid min-h-[240px] place-items-center">
-            <div className="max-w-md rounded-2xl border border-dashed border-border/60 bg-muted/30 p-12 text-center">
-              <p className="text-base font-medium text-foreground">{slot.name}</p>
-              <p className="mt-2 text-sm text-muted-foreground">{slot.error ?? t("dashboardViewer.reportRenderError")}</p>
-            </div>
+            <SlotUnavailable name={slot.name} error={slot.error} />
           </div>
         );
       }
@@ -638,7 +659,9 @@ export function DashboardViewer({
       // snapshot, and drilling into its chart kept showing pre-drill data.
       const liveDataset = effectiveDataset(slot) as Dataset;
       let templateContent: React.ReactNode = null;
-      if (dashboard.layout === "table_only") {
+      if (slot.blockId) {
+        templateContent = singleBlockCard(slot, liveDataset);
+      } else if (dashboard.layout === "table_only") {
         const tableBlock = extractTable(slot.rendered.definition);
         templateContent = tableBlock ? (
           <div className="rounded-xl border bg-card p-4 shadow-sm" data-block-id={tableBlock.id}>
@@ -648,7 +671,7 @@ export function DashboardViewer({
           <div className="grid min-h-[200px] place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.noTableFound")}</p></div>
         );
       } else if (dashboard.layout === "table_chart") {
-        const chart = slotChart(slot.rendered.definition, liveDataset);
+        const chart = cardChart(slot, liveDataset);
         const tableBlock = extractTable(slot.rendered.definition);
         templateContent = chart && tableBlock ? (
           <div className="flex flex-col gap-4 md:flex-row">
@@ -663,7 +686,7 @@ export function DashboardViewer({
           <div className="grid min-h-[200px] place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.chartAndTableRequired")}</p></div>
         );
       } else if (dashboard.layout === "chart_only") {
-        const chart = slotChart(slot.rendered.definition, liveDataset);
+        const chart = cardChart(slot, liveDataset);
         const axes = chartAxes(chart?.block, t);
         templateContent = chart ? (
           <div className="flex h-[480px] flex-col gap-4 rounded-xl border bg-card p-8 shadow-sm" data-block-id={chart.block.id}>
@@ -700,7 +723,7 @@ export function DashboardViewer({
                 dataset={effectiveDataset(slot) as Record<string, Record<string, unknown>[]>}
                 params={slot.rendered.params} provenance={effectiveProvenance(slot) as any}
                 print={false}
-                reportDbId={slot.id}
+                reportDbId={parseSlotKey(slot.id).reportId}
                 locale={locale}
                 tenantCurrency={dashboard.currency} />
             </DrillThroughContext.Provider>
@@ -880,7 +903,7 @@ export function DashboardViewer({
   // kiosk — unchanged behavior, built for an unattended TV/monitor.
   // ===========================================================================
   const controlsPill = (
-    <div className="fixed bottom-4 right-4 z-30 flex items-center gap-1 rounded-full border bg-background/80 px-2 py-1 text-xs shadow-lg backdrop-blur-md">
+    <div className="fixed bottom-4 right-4 z-30 flex items-center gap-1 rounded-full border bg-background px-2 py-1 text-xs shadow-lg">
       {total > 1 && <span className="px-2 font-mono text-muted-foreground">{index + 1}/{total}</span>}
       {total > 1 && (
         <>
@@ -914,11 +937,11 @@ export function DashboardViewer({
         title={t("dashboardViewer.fullscreenTooltip")}
       ><Maximize2 className="h-4 w-4" /></button>
       {!hideExit && (
-        <a
+        <Link
           href="/dashboards"
           className="rounded-full p-1.5 transition-colors hover:bg-foreground/10"
           title={t("dashboardViewer.exitTooltip")}
-        ><CloseIcon className="h-4 w-4" /></a>
+        ><CloseIcon className="h-4 w-4" /></Link>
       )}
     </div>
   );
@@ -950,11 +973,11 @@ export function DashboardViewer({
           <TopKpiBar topKpis={dashboard.topKpis as any} currency={dashboard.currency} />
           <div className={`grid flex-1 overflow-hidden ${gridCols} ${gridRows} bg-gradient-to-br from-muted to-muted/50   gap-6 p-6`}>
             {gridSlots.map((slot, i) => {
-              const chart = slot.rendered ? slotChart(slot.rendered.definition, effectiveDataset(slot) as Dataset) : null;
+              const chart = slot.rendered ? cardChart(slot, effectiveDataset(slot) as Dataset) : null;
 
               return (
                 <div key={slot.id + "_" + i} className="relative bg-background flex flex-col rounded-2xl border shadow-sm hover:shadow-md transition-shadow duration-300 overflow-hidden ring-1 ring-black/5 dark:ring-white/5">
-                  <div className="flex-none px-6 py-4 flex items-center justify-between border-b bg-muted/20 dark:bg-muted/10 backdrop-blur-sm">
+                  <div className="flex-none px-6 py-4 flex items-center justify-between border-b bg-muted/20 dark:bg-muted/10">
                     <div className="flex flex-col">
                       <span className="font-semibold text-foreground truncate pr-4">{slot.name}</span>
                       {chartCaption(chart)}
@@ -1032,9 +1055,9 @@ export function DashboardViewer({
           <div className="pointer-events-none absolute left-1/2 top-5 z-30 -translate-x-1/2 px-6">
             <div
               key={"hdr_" + index}
-              className="rounded-full border bg-background/70 px-5 py-2 text-center shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-500"
+              className="rounded-full border bg-background px-5 py-2 text-center shadow-lg animate-in fade-in slide-in-from-top-2 duration-500"
             >
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              <p className="text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                 {dashboard.name}
               </p>
               <p className="mt-0.5 flex items-center justify-center gap-2 text-sm font-semibold text-foreground">
@@ -1057,7 +1080,14 @@ export function DashboardViewer({
                 let templateContent = null;
                 if (slot.rendered) {
                 const dataset = effectiveDataset(slot) as Dataset;
-                if (dashboard.layout === "table_only") {
+                if (slot.blockId) {
+                  templateContent = (
+                    <div className="absolute inset-0 flex flex-col">
+                      <div className="h-[88px] flex-shrink-0" />
+                      <div className="flex-1 overflow-hidden px-8 pb-6">{singleBlockCard(slot, dataset)}</div>
+                    </div>
+                  );
+                } else if (dashboard.layout === "table_only") {
                   const tableBlock = extractTable(slot.rendered.definition);
                   templateContent = tableBlock ? (
                     <div className="absolute inset-0 flex flex-col">
@@ -1072,7 +1102,7 @@ export function DashboardViewer({
                     <div className="grid h-full place-items-center"><p className="text-muted-foreground">{t("dashboardViewer.noTableFound")}</p></div>
                   );
                 } else if (dashboard.layout === "table_chart") {
-                  const chart = slotChart(slot.rendered.definition, dataset);
+                  const chart = cardChart(slot, dataset);
                   const tableBlock = extractTable(slot.rendered.definition);
                   templateContent = chart && tableBlock ? (
                     <div className="absolute inset-0 flex flex-col">
@@ -1108,12 +1138,7 @@ export function DashboardViewer({
                   <div key={slot.id + "_" + i}>
                     {slot.rendered ? templateContent : (
                       <div className="grid min-h-[80vh] place-items-center">
-                        <div className="max-w-md rounded-2xl border border-dashed border-border/60 bg-muted/30 p-12 text-center">
-                          <p className="text-base font-medium text-foreground">{slot.name}</p>
-                          <p className="mt-2 text-sm text-muted-foreground">
-                            {slot.error ?? t("dashboardViewer.reportRenderError")}
-                          </p>
-                        </div>
+                        <SlotUnavailable name={slot.name} error={slot.error} />
                       </div>
                     )}
                   </div>
@@ -1127,8 +1152,8 @@ export function DashboardViewer({
                 const active = i === index;
                 let templateContent = null;
                 if (slot.rendered) {
-                  if (dashboard.layout === "chart_only") {
-                    const chart = slotChart(slot.rendered.definition, effectiveDataset(slot) as Dataset);
+                  if (slot.blockId || dashboard.layout === "chart_only") {
+                    const chart = cardChart(slot, effectiveDataset(slot) as Dataset);
                     const axes = chartAxes(chart?.block, t);
                     // A definite height, not h-full: the ACTIVE carousel slot
                     // sits in normal flow with auto height (so a tall report
@@ -1159,13 +1184,13 @@ export function DashboardViewer({
                     // "On Screen" wall displays keep tables (and get no
                     // breadcrumb bar / drill interaction at all).
                     templateContent = (
-                      <main className="mx-auto max-w-7xl px-8 pb-12 pt-24">
+                      <main className="mx-auto max-w-[1264px] px-8 pb-12 pt-24">
                         <DrillThroughContext.Provider value={drillProviderValue(slot.id, slot.rendered?.definition)}>
                           <ReportDocument report={slot.rendered.definition}
                             dataset={slot.rendered.dataset as Record<string, Record<string, unknown>[]>}
                             params={slot.rendered.params} provenance={slot.rendered.provenance as any}
                             print={!interactive}
-                            reportDbId={slot.id}
+                            reportDbId={parseSlotKey(slot.id).reportId}
                             locale={locale}
                             tenantCurrency={dashboard.currency} />
                         </DrillThroughContext.Provider>
@@ -1180,11 +1205,7 @@ export function DashboardViewer({
                     aria-hidden={!active}>
                     {slot.rendered ? templateContent : (
                       <div className="grid min-h-[80vh] place-items-center">
-                        <div className="max-w-md rounded-2xl border border-dashed border-border/60 bg-muted/30 p-12 text-center">
-                          <p className="text-base font-medium text-foreground">{slot.name}</p>
-                          <p className="mt-2 text-sm text-muted-foreground">{slot.error ?? t("dashboardViewer.reportRenderError")}</p>
-                          <p className="mt-4 text-xs italic text-muted-foreground">{t("dashboardViewer.skippingShortly")}</p>
-                        </div>
+                        <SlotUnavailable name={slot.name} error={slot.error} note={t("dashboardViewer.skippingShortly")} />
                       </div>
                     )}
                   </div>
@@ -1195,7 +1216,7 @@ export function DashboardViewer({
 
           {/* Slot-position dots */}
           <div className="pointer-events-none fixed bottom-5 left-1/2 z-30 -translate-x-1/2">
-            <div className="flex items-center gap-1.5 rounded-full bg-background/60 px-3 py-1.5 backdrop-blur-md">
+            <div className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5">
               {dashboard.slots.map((_, i) => (
                 <span key={i} className={"h-1.5 rounded-full transition-all duration-300 " +
                   (i === index ? "w-6 bg-primary" : "w-1.5 bg-foreground/30")} />
@@ -1208,7 +1229,7 @@ export function DashboardViewer({
       {/* Pause indicator */}
       <div className={"pointer-events-none fixed inset-0 z-20 grid place-items-center transition-opacity duration-300 " +
         (paused ? "opacity-100" : "opacity-0")}>
-        <div className="flex items-center gap-2 rounded-full border bg-background/80 px-5 py-2.5 text-sm font-medium shadow-xl backdrop-blur-md">
+        <div className="flex items-center gap-2 rounded-full border bg-background px-5 py-2.5 text-sm font-medium shadow-xl">
           <Pause className="h-4 w-4" /> {t("dashboardViewer.paused")}
         </div>
       </div>
@@ -1294,5 +1315,18 @@ function TopKpiBar({ topKpis, currency }: { topKpis?: any[]; currency?: string }
         );
       })}
     </div>
+  );
+}
+
+/** A slot whose report didn't render — one frame for the grid, stacked and carousel layouts. */
+function SlotUnavailable({ name, error, note }: { name: string; error?: string | null; note?: string }) {
+  const { t } = useT();
+  return (
+    <EmptyState
+      className="max-w-md"
+      title={name}
+      description={error ?? t("dashboardViewer.reportRenderError")}
+      preview={note ? <p className="text-xs italic text-muted-foreground">{note}</p> : undefined}
+    />
   );
 }

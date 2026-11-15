@@ -70,7 +70,7 @@ const DEFINITION = JSON.stringify({
   }],
 });
 
-const open = (searchParams: Record<string, string> = {}) => ViewerPage({ params: { id: "r1" }, searchParams }) as Promise<any>;
+const open = (searchParams: Record<string, string> = {}) => ViewerPage({ params: Promise.resolve({ id: "r1" }), searchParams: Promise.resolve(searchParams) }) as Promise<any>;
 /** The props of the element the page rendered with this component (the print branch wraps it in a div). */
 function propsOf(tree: any, name: string): any {
   if (!tree || typeof tree !== "object") return null;

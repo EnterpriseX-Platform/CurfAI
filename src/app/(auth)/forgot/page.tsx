@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CurfLogo } from "@/components/common/CurfLogo";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * "Forgot password" form. Always shows a success message regardless of
  * whether the email matches a real user - we don't leak account existence.
  */
 export default function ForgotPage() {
+  const { t } = useT();
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -38,40 +40,39 @@ export default function ForgotPage() {
           <CurfLogo variant="lockup" size={32} />
         </div>
 
-        <h1 className="text-2xl font-semibold tracking-tight">Forgot your password?</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("auth.forgot.title")}</h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Enter the email you signed up with. If there's a matching account,
-          we'll send you a reset link that lasts 60 minutes.
+          {t("auth.forgot.subtitle")}
         </p>
 
         {sent ? (
           <div className="mt-8 rounded-md border border-success/40 bg-success/5 px-3 py-4 text-sm">
-            <p className="font-medium text-success-foreground">Check your inbox.</p>
+            <p className="font-medium text-success-foreground">{t("auth.forgot.sentTitle")}</p>
             <p className="mt-1 text-muted-foreground">
-              If you don't see it within a few minutes, check spam or try again with another address.
+              {t("auth.forgot.sentBody")}
             </p>
             <div className="mt-4">
-              <Link href="/login" className="text-xs text-primary underline">Back to sign in</Link>
+              <Link href="/login" className="text-xs text-primary underline">{t("auth.forgot.backToSignIn")}</Link>
             </div>
           </div>
         ) : (
           <form onSubmit={submit} className="mt-8 grid gap-4">
             <div className="grid gap-1.5">
-              <Label htmlFor="email" className="text-xs font-medium">Email</Label>
+              <Label htmlFor="email" className="text-xs font-medium">{t("auth.login.email")}</Label>
               <Input
                 id="email" type="email" required autoFocus
-                placeholder="you@company.com"
+                placeholder={t("auth.signup.emailPlaceholder")}
                 value={email} onChange={(e) => setEmail(e.target.value)}
               />
             </div>
             <Button type="submit" disabled={loading}>
-              {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Sending&hellip;</> : "Send reset link"}
+              {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("auth.forgot.sending")}</> : t("auth.forgot.submit")}
             </Button>
           </form>
         )}
 
         <p className="mt-8 text-center text-xs text-muted-foreground">
-          Remember it? <Link href="/login" className="text-primary underline">Sign in</Link>.
+          {t("auth.forgot.remember")} <Link href="/login" className="text-primary underline">{t("action.signIn")}</Link>
         </p>
       </div>
     </div>

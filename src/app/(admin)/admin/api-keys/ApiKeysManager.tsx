@@ -114,7 +114,7 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
         <UpgradeLock feature="gov.api_keys" currentTier={tier} />
       ) : (
       <section className="rounded-lg border bg-card p-5 shadow-xs">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("admin.apikeys.mintTitle")}
         </p>
         <form onSubmit={mint} className="grid gap-3 sm:grid-cols-[1fr_140px_140px_auto]">
@@ -154,7 +154,7 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
           <button
             type="button"
             onClick={() => setShowScopePicker((v) => !v)}
-            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-primary hover:underline"
+            className="inline-flex items-center gap-1.5 text-2xs font-medium text-primary hover:underline"
           >
             <ShieldCheck className="h-3.5 w-3.5" />
             {showScopePicker ? t("admin.apikeys.fullTenantAccess") : t("admin.apikeys.restrictToReports")}
@@ -163,7 +163,7 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
           {showScopePicker && (
             <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-border bg-muted/20 p-2">
               {reports.length === 0 ? (
-                <p className="p-2 text-[11px] text-muted-foreground">{t("admin.apikeys.noReports")}</p>
+                <p className="p-2 text-2xs text-muted-foreground">{t("admin.apikeys.noReports")}</p>
               ) : (
                 reports.map((r) => (
                   <label key={r.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-muted/60">
@@ -176,7 +176,7 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
                   </label>
                 ))
               )}
-              <p className="mt-1 px-2 text-[10px] text-muted-foreground">
+              <p className="mt-1 px-2 text-2xs text-muted-foreground">
                 {scopedReportIds.length === 0
                   ? t("admin.apikeys.hintNoneChecked")
                   : t("admin.apikeys.hintSomeChecked")
@@ -193,7 +193,7 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
               {t("admin.apikeys.copyTokenNow")}
             </div>
             <div className="flex items-center gap-2">
-              <code className="flex-1 overflow-x-auto rounded bg-background px-2 py-1 font-mono text-[11px]">{lastMinted.token}</code>
+              <code className="flex-1 overflow-x-auto rounded bg-background px-2 py-1 font-mono text-2xs">{lastMinted.token}</code>
               <Button size="sm" variant="outline" onClick={copyToken}>
                 <Copy className="mr-1.5 h-3.5 w-3.5" /> {t("admin.apikeys.copyButton")}
               </Button>
@@ -203,9 +203,9 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
               <div className="mb-1 font-medium text-foreground">
                 {t("admin.apikeys.mcpConnectTitle")}
               </div>
-              <p className="mb-1.5 text-[11px] text-muted-foreground">{t("admin.apikeys.mcpConnectHint")}</p>
+              <p className="mb-1.5 text-2xs text-muted-foreground">{t("admin.apikeys.mcpConnectHint")}</p>
               <div className="flex items-center gap-2">
-                <code className="flex-1 overflow-x-auto whitespace-pre rounded bg-background px-2 py-1 font-mono text-[11px]">{mcpConnectCommand(lastMinted.token)}</code>
+                <code className="flex-1 overflow-x-auto whitespace-pre rounded bg-background px-2 py-1 font-mono text-2xs">{mcpConnectCommand(lastMinted.token)}</code>
                 <Button size="sm" variant="outline" onClick={copyMcpCommand}>
                   <Copy className="mr-1.5 h-3.5 w-3.5" /> {t("admin.apikeys.copyButton")}
                 </Button>
@@ -217,7 +217,7 @@ export function ApiKeysManager({ initial, reports, tier }: { initial: Key[]; rep
       )}
 
       <section>
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("admin.apikeys.existingKeysTitle").replace("{n}", String(keys.length))}
         </p>
         <div className="overflow-x-auto rounded-lg border bg-card shadow-xs">

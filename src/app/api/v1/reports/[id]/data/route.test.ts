@@ -19,7 +19,7 @@ vi.mock("@/lib/reporting/runForApi", () => ({
 
 import { GET } from "./route";
 
-const get = () => GET(new NextRequest("http://localhost:3100/api/v1/reports/r1/data"), { params: { id: "r1" } });
+const get = () => GET(new NextRequest("http://localhost:3100/api/v1/reports/r1/data"), { params: Promise.resolve({ id: "r1" }) });
 
 beforeEach(() => { h.provenance = { good: {}, bad: {} }; });
 

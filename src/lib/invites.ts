@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
+import { ee } from "@/ee";
 
 /**
  * Helpers for the workspace invite flow. Keeping the token-mint + email-send
@@ -12,6 +13,15 @@ export const INVITE_TTL_DAYS = 7;
 
 export function hashInviteToken(t: string): string {
   return createHash("sha256").update(t).digest("hex");
+}
+
+/**
+ * An invited person who has not signed in yet. Not "has no password": with Keycloak as the sign-in a Curf account never holds one.
+ * Signing in the first time (or a password set through an invite link, or a Google/GitHub sign-in) confirms the address, so an
+ * account with neither a hash nor a confirmed address is still waiting.
+ */
+export function isPendingInvite(u: { passwordHash: string | null; emailVerifiedAt: Date | null }): boolean {
+  return !u.passwordHash && !u.emailVerifiedAt;
 }
 
 export type MintedInvite = {
@@ -31,11 +41,23 @@ export async function mintAndSendInvite(opts: {
   tenantId: string;
   tenantName: string;
   inviterName: string;
-  user: { id: string; email: string; name: string | null; role: string };
+  user: { id: string; email: string; name: string | null; role: string; emailVerifiedAt?: Date | null; keycloakSub?: string | null };
   origin: string;
   invalidatePrevious?: boolean;
 }): Promise<MintedInvite> {
   const { tenantId, tenantName, inviterName, user, origin } = opts;
+
+  // Keycloak is the only sign-in: the invitee gets Keycloak's own mail (confirm the address, choose a password) and signs in
+  // there. Curf mints no token and holds no password; the "accept URL" an admin can fall back on is just the sign-in page.
+  if (ee.identity?.only()) {
+    const r = await ee.identity.accounts.enrollInvitee(user, { reason: opts.invalidatePrevious ? "invite_resend" : "invite" });
+    return {
+      rawToken: "",
+      expiresAt: new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000),
+      acceptUrl: origin + "/login",
+      emailStatus: r.mail === "sent" ? "sent" : r.mail === "not_needed" ? "skipped" : "failed",
+    };
+  }
 
   if (opts.invalidatePrevious) {
     // Mark any still-active token rows as used so old links won't validate.

@@ -23,15 +23,15 @@ import { EDITION } from "@/lib/ee/edition";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
 export default async function TablesPage() {
   const user = await requireUser();
   if (!user) redirect("/login?next=/tables");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   let initialTables: any[] = [];
   let initialTokens: any[] = [];
@@ -128,7 +128,7 @@ export default async function TablesPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.tables") }]}>
-      <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader
           title={t(locale, "tables.pageTitle")}
           description={t(locale, "tables.pageSubtitle")}
@@ -141,7 +141,7 @@ export default async function TablesPage() {
               <div>
                 <span className="font-medium text-foreground">{usage.tables}</span> {usage.tables === 1 ? t(locale, "tables.tableSingular") : t(locale, "tables.tablePlural")}{quota.maxTables ? ` ${t(locale, "tables.usageOf")} ${quota.maxTables}` : ""}
               </div>
-              <div className="mt-1 inline-block rounded-sm border border-border px-1.5 py-px text-[11px] uppercase tracking-[.04em]">
+              <div className="mt-1 inline-block rounded-sm border border-border px-1.5 py-px text-2xs uppercase tracking-[.04em]">
                 {quota.tier}
               </div>
             </div>

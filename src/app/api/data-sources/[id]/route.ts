@@ -37,7 +37,8 @@ function safeParseJson<T = unknown>(s: string): T | null {
   try { return JSON.parse(s) as T; } catch { return null; }
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -287,7 +288,8 @@ const PatchSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 
@@ -432,7 +434,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
   const existing = await prisma.dataSource.findFirst({
@@ -469,7 +472,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 // Test endpoints (params.id = "test-rest" or "test-sqlite") run a one-shot
 // connection probe without persisting anything; tenant-agnostic.
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   // Connections are admin-managed. Every test-* action below reaches an

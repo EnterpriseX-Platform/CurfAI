@@ -43,7 +43,7 @@ import { recordAudit } from "@/lib/audit";
 import { DELETE } from "./route";
 
 const call = (id: string) =>
-  DELETE(new NextRequest(`http://localhost:3100/api/admin/users/${id}/membership`, { method: "DELETE" }), { params: { id } });
+  DELETE(new NextRequest(`http://localhost:3100/api/admin/users/${id}/membership`, { method: "DELETE" }), { params: Promise.resolve({ id }) });
 const member = (over: Record<string, unknown> = {}) => ({
   role: "developer", user: { id: "u2", email: "leaver@example.com", passwordHash: "$2a$hash" }, ...over,
 });

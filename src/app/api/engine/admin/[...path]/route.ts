@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic";
  *
  * Admins only. The body of a call is passed on and never logged or audited: a connection holds a password.
  */
-async function handle(req: NextRequest, { params }: { params: { path: string[] } }) {
+async function handle(req: NextRequest, props: { params: Promise<{ path: string[] }> }) {
+  const params = await props.params;
   const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 

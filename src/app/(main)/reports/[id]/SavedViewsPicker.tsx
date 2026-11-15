@@ -144,7 +144,7 @@ export function SavedViewsPicker({
             <Bookmark className="h-3 w-3 opacity-60" />
             <span className="text-muted-foreground">{t("savedViews.viewLabel")}</span>
             <span className="max-w-[12ch] truncate">{active?.name ?? "—"}</span>
-            <span className="text-[10px] opacity-50">▾</span>
+            <span className="text-2xs opacity-50">▾</span>
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-72 p-1">
@@ -163,7 +163,7 @@ export function SavedViewsPicker({
             <>
               {grouped.shared.length > 0 && (
                 <>
-                  <DropdownMenuLabel className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <DropdownMenuLabel className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <Users className="h-3 w-3" /> {t("savedViews.sharedWithWorkspace")}
                   </DropdownMenuLabel>
                   {grouped.shared.map((v) => (
@@ -183,7 +183,7 @@ export function SavedViewsPicker({
               {grouped.mine.length > 0 && (
                 <>
                   {grouped.shared.length > 0 && <DropdownMenuSeparator className="my-1" />}
-                  <DropdownMenuLabel className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <DropdownMenuLabel className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <Lock className="h-3 w-3" /> {t("savedViews.privateToMe")}
                   </DropdownMenuLabel>
                   {grouped.mine.map((v) => (
@@ -445,7 +445,7 @@ function SaveViewDialog({
 
         <div className="space-y-3 px-5 py-4">
           <label className="block">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("common.name")}</span>
+            <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("common.name")}</span>
             <input
               ref={inputRef}
               value={name}
@@ -456,7 +456,7 @@ function SaveViewDialog({
             />
           </label>
           <label className="block">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("common.description")} {t("common.optional")}</span>
+            <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("common.description")} {t("common.optional")}</span>
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -466,7 +466,7 @@ function SaveViewDialog({
           </label>
 
           <fieldset className="rounded-md border border-border p-2">
-            <legend className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <legend className="px-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               {t("savedViews.visibility")}
             </legend>
             <label className="flex cursor-pointer items-start gap-2 rounded p-1.5 hover:bg-muted">
@@ -478,7 +478,7 @@ function SaveViewDialog({
               />
               <span className="flex-1">
                 <span className="flex items-center gap-1.5 text-sm font-medium"><Lock className="h-3.5 w-3.5" /> {t("savedViews.justMe")}</span>
-                <span className="block text-[11px] text-muted-foreground">{t("savedViews.justMeDesc")}</span>
+                <span className="block text-2xs text-muted-foreground">{t("savedViews.justMeDesc")}</span>
               </span>
             </label>
             <label className="flex cursor-pointer items-start gap-2 rounded p-1.5 hover:bg-muted">
@@ -490,7 +490,7 @@ function SaveViewDialog({
               />
               <span className="flex-1">
                 <span className="flex items-center gap-1.5 text-sm font-medium"><Globe2 className="h-3.5 w-3.5" /> {t("savedViews.workspace")}</span>
-                <span className="block text-[11px] text-muted-foreground">{t("savedViews.workspaceDesc")}</span>
+                <span className="block text-2xs text-muted-foreground">{t("savedViews.workspaceDesc")}</span>
               </span>
             </label>
           </fieldset>

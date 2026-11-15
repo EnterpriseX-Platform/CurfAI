@@ -15,6 +15,7 @@
  *   - A missing member means "not in this edition", never an error.
  */
 import type { NextRequest, NextResponse } from "next/server";
+import type { ReactNode } from "react";
 import type { DataSourceDef } from "@/lib/reporting/schema";
 import type { Row } from "@/lib/reporting/interpolate";
 import type { RunViewer } from "@/lib/reporting/runner";
@@ -71,6 +72,23 @@ export type WarehouseConnector = {
   test: (req: NextRequest) => Promise<NextResponse>;
 };
 
+/** A place a workspace keeps files on disk (lib/lifecycle/files.ts). */
+export type FileTarget = { what: string; path: string; kind: "file" | "dir" };
+
+/** The verdict of a Keycloak sign-in (src/ee/identity/signin.ts). */
+export type IdentityDecision =
+  | {
+      ok: true; userId: string; email: string; tenantId: string; role: string; sid: string; acr: number;
+      emailNewlyVerified: boolean; passwordCleared: boolean; linked: boolean; created: boolean; joinedTenantIds: string[];
+    }
+  | {
+      ok: false;
+      reason: "email_unverified" | "no_account" | "workspace_suspended" | "sso_required" | "mfa_required" | "identity_conflict" | "session_revoked"
+        /** Came through a company IdP with an address its organisation has not verified, or through one that is not switched on. */
+        | "sso_domain_mismatch" | "sso_not_enabled";
+      userId?: string; tenantIds?: string[]; stepUp?: boolean; organizationId?: string;
+    };
+
 export type EeRegistry = {
   edition: Edition;
 
@@ -101,6 +119,62 @@ export type EeRegistry = {
     fireSecurityAlert?: (args: { tenantId: string; userEmail: string; failedCount: number; windowMinutes: number }) => Promise<void>;
   };
 
+  /**
+   * What the paid lake (DuckDB, branches, Parquet copies, assets, streaming buffers, lineage) leaves behind, for the
+   * customer lifecycle (lib/lifecycle/): the places it keeps a workspace's files, and a hook that makes this process let
+   * go of the workspace before they are removed. `quiesce` returns the number of buffered rows it discarded.
+   */
+  lifecycle?: {
+    fileTargets: (tenantId: string) => Promise<FileTarget[]>;
+    quiesce: (tenantId: string) => Promise<number>;
+  };
+
+  /**
+   * Enterprise identity (CURF_AUTH=keycloak, docs/KEYCLOAK_IDENTITY.md). Absent in the Community edition, and when Keycloak
+   * isn't configured `enabled()` is false: sign-in is then NextAuth's credentials, Google and GitHub, as before.
+   */
+  identity?: {
+    enabled: () => boolean;
+    /** NextAuth providers to add (the Keycloak provider), or none. */
+    providers: () => any[];
+    /** Decide a Keycloak sign-in from the id_token claims. */
+    signIn: (args: { profile: unknown; ip?: string | null; userAgent?: string | null }) => Promise<IdentityDecision>;
+    /** Is this Keycloak-backed session still allowed (not revoked, idle or past its maximum age)? */
+    checkSession: (sid: string, userId: string) => Promise<"ok" | "revoked" | "idle" | "expired">;
+    /** End one session (own sign-out) or all of a person's. */
+    revokeSessions: (by: { sid?: string; userId?: string }) => Promise<void>;
+    /**
+     * A local password sign-in while Keycloak is the sign-in: "ok" to proceed (the password is handed to Keycloak once, the
+     * account migration window), or "use_identity_provider" when the person must use Keycloak instead (already migrated, window
+     * over, or an organisation's SSO / MFA rule a password can't meet).
+     */
+    passwordSignIn: (user: { id: string; email: string; name: string | null; identityMigratedAt: Date | null }, password: string) => Promise<"ok" | "use_identity_provider">;
+    /** Keycloak is the ONLY sign-in (CURF_AUTH_ONLY=1, or the password window is over): no password, Google or GitHub provider of Curf's own. */
+    only: () => boolean;
+    /** The social sign-ins Keycloak brokers for the login page, e.g. ["google", "github"]. */
+    brokered: () => string[];
+    /** Identity-first sign-in: the company IdP (Keycloak alias, used as `kc_idp_hint`) an email address belongs to, if its organisation has set one up and verified the domain. */
+    companySignIn: (email: string) => Promise<{ alias: string } | null>;
+    /**
+     * Keycloak-only accounts: a person's password lives in Keycloak, Curf keeps an account row with no hash. `signUp` creates the
+     * Keycloak user (with the password, held only for the call) and refuses an address Keycloak already has; `enrollInvitee` gives
+     * an invited account its Keycloak user and mails the "confirm and choose a password" link; `mail` sends such a link to an existing
+     * Keycloak user (forgot password, confirm the address).
+     */
+    accounts: {
+      signUp: (input: { email: string; name?: string | null; password: string; emailVerified: boolean }) => Promise<{ ok: true; id: string } | { ok: false; reason: "exists" | "unavailable" | "password_policy" }>;
+      /** Take back a Keycloak user created for a sign-up that then failed. */
+      discard: (keycloakId: string) => Promise<void>;
+      link: (userId: string, keycloakSub: string) => Promise<boolean>;
+      enrollInvitee: (user: { id: string; email: string; name: string | null; emailVerifiedAt?: Date | null; keycloakSub?: string | null }, opts: { reason: string; mail?: boolean }) => Promise<{ mail: "sent" | "failed" | "not_needed"; linked: boolean }>;
+      mail: (email: string, actions: Array<"VERIFY_EMAIL" | "UPDATE_PASSWORD">) => Promise<"sent" | "failed">;
+    };
+    /** The person's account is being erased: remove their Keycloak user too. */
+    onUserErased: (user: { id: string; keycloakSub: string | null }) => Promise<void>;
+    /** Where the browser goes to end the Keycloak session as well (RP-initiated logout). */
+    endSessionUrl: (postLogoutRedirect: string) => string | null;
+  };
+
   /** Embeddings behind "Find by meaning" and semantic search. */
   vectorStore?: {
     enqueueSchemaColEmbedBatch: (args: any) => Promise<unknown>;
@@ -113,6 +187,21 @@ export type EeRegistry = {
     enrichDatasetWithMetrics: (dataset: any, report: any, tenantId: string, params: Record<string, unknown>, viewer: RunViewer) => Promise<void>;
     /** A metric's source and SQL, to gate a saved run's "metric:<slug>" rows. Absent → those rows are withheld. */
     getMetricGateSource: (tenantId: string, slug: string) => Promise<{ dataSourceId: string; sql: string } | null>;
+    /**
+     * The gate's governed-metrics hook: a KPI that names one of the workspace's
+     * defined metrics is rewired to the metric's SQL (lib/metrics/govern.ts).
+     * Returns the report to carry on with; absent in Community, which has no metrics.
+     */
+    /** The GOVERNED METRICS block of a planner / designer prompt for the metrics `texts` name ("" when none). */
+    governedPrompt?: (tenantId: string, texts: string[], opts: { withSql: boolean }) => Promise<string>;
+    governReport?: (report: any, args: { tenantId: string; viewer: RunViewer }) => Promise<{ report: any; substituted: Array<{ blockId: string; metricKey: string; before: number | null; after: number | null }> }>;
+    /** The workspace's published metrics whose SQL names this lake table (the table page's "read by metrics" list). */
+    readingTable?: (tenantId: string, tableName: string) => Promise<Array<{ slug: string; label: string }>>;
+  };
+
+  /** Data-quality checks (paid): the checks already defined on a lake table, for the table page's suggestions and delete warning. */
+  dataQuality?: {
+    tableChecks: (tenantId: string, tableName: string) => Promise<Array<{ kind: string; configJson: string }>>;
   };
 
   /** Analytic Apps: advance an app's data-mode badge after a table is bound to real rows. */
@@ -120,11 +209,25 @@ export type EeRegistry = {
     advanceAppDataModes: (tenantId: string, tableName: string) => Promise<string[]>;
   };
 
+  /** My account (paid): the LINE and phone-notification cards, and the signed-in-devices list, on the console's /account. */
+  account?: {
+    notifyCards: (args: { tenantId: string; userId: string; lineResult?: string | null; lineBrief?: unknown }) => Promise<ReactNode>;
+    /** "Where you're signed in" (a client component that hides itself when the person has no session records). */
+    sessionsPanel: () => Promise<ReactNode>;
+  };
+
   /** Off-site backup shipping (Business); DuckDB lake-engine reads (Team+). */
   /** Home (paid): the KPIs pinned to a person's Home. */
   home?: {
     /** Pin these report blocks after what the person has, skipping ones already pinned, never past the cap; how many were added. */
     addPins: (userId: string, tenantId: string, pins: Array<{ reportId: string; blockId: string }>) => Promise<number>;
+    /** Note that this person opened a report or dashboard, for Home's "Pick up where you left off". Fire and forget, never fails the page. */
+    noteView: (user: { id?: string; tenantId?: string; viaApiKey?: boolean } | null | undefined, kind: "report" | "dashboard" | "notebook", refId: string) => void;
+  };
+
+  /** Scheduled agent briefs (paid): the list on /schedules. */
+  briefs?: {
+    scheduledBriefs: () => Promise<ReactNode>;
   };
   lake?: {
     shipSnapshotToDestinations: (args: { tenantId: string; backupId: string; kind: string }) => Promise<unknown>;

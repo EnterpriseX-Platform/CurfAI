@@ -9,6 +9,7 @@
 import { prisma } from "@/lib/db";
 import { cronMatches } from "@/lib/cron/cronMatches";
 import { acquireLeaseOn, releaseLeaseOn } from "@/lib/cron/leases";
+import { OPEN_TENANT } from "@/lib/tenantStatus";
 import type { FiredItem } from "./types";
 
 // Single-process dev-appropriate constant — same precedent as
@@ -42,7 +43,7 @@ async function finishJobRun(jobRunId: string | null, data: { status: "ok" | "fai
 export async function tickLakePulls(fired: FiredItem[], now: Date, force: boolean): Promise<void> {
   let pulls: any[] = [];
   try {
-    pulls = await prisma.lakePull.findMany({ where: { enabled: true } });
+    pulls = await prisma.lakePull.findMany({ where: { enabled: true, tenant: OPEN_TENANT } });
   } catch {
     /* model missing pre-prisma-db-push — ignore */
   }
@@ -71,7 +72,7 @@ export async function tickLakePulls(fired: FiredItem[], now: Date, force: boolea
 export async function tickMaterializedViews(fired: FiredItem[], now: Date, force: boolean): Promise<void> {
   let mvs: any[] = [];
   try {
-    mvs = await prisma.materializedView.findMany({ where: { enabled: true, cron: { not: null } } });
+    mvs = await prisma.materializedView.findMany({ where: { enabled: true, cron: { not: null }, tenant: OPEN_TENANT } });
   } catch {
     /* model missing pre-prisma-db-push — ignore */
   }
@@ -103,7 +104,8 @@ export async function tickLakeBackups(fired: FiredItem[], now: Date, force: bool
   if (!(force || (now.getUTCHours() === 2 && now.getUTCMinutes() === 0))) return;
   try {
     const { snapshotTenant, sweepOldBackups } = await import("@/lib/lake/backup");
-    const tenants = await prisma.tenant.findMany({ select: { id: true } });
+    // A suspended workspace is still backed up (data protection); one awaiting purge is not — its files are being removed.
+    const tenants = await prisma.tenant.findMany({ where: { status: { not: "pending_deletion" } }, select: { id: true } });
     for (const t of tenants) {
       try {
         const snap = await snapshotTenant({ tenantId: t.id, kind: "auto" });
@@ -127,7 +129,8 @@ export async function tickBackupSnapshots(fired: FiredItem[], now: Date, force: 
   if (!(force || now.getUTCMinutes() === 0)) return;
   try {
     const { mintBackupSnapshots } = await import("@/lib/lake/timeTravel");
-    const tenants = await prisma.tenant.findMany({ select: { id: true } });
+    // A suspended workspace is still backed up (data protection); one awaiting purge is not — its files are being removed.
+    const tenants = await prisma.tenant.findMany({ where: { status: { not: "pending_deletion" } }, select: { id: true } });
     let total = 0;
     for (const t of tenants) {
       const r = await mintBackupSnapshots(t.id).catch(() => ({ created: 0 }));

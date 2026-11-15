@@ -159,7 +159,7 @@ function SnippetEditor({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">{draft.name}</span>
-              <span className="rounded-full bg-muted px-1.5 py-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="rounded-full bg-muted px-1.5 py-0 text-2xs uppercase tracking-wider text-muted-foreground">
                 {kindMeta.label}
               </span>
             </div>
@@ -167,13 +167,13 @@ function SnippetEditor({
               <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{draft.description}</p>
             )}
           </div>
-          <span className="text-[10px] text-muted-foreground">{shortDate(draft.updatedAt)}</span>
+          <span className="text-2xs text-muted-foreground">{shortDate(draft.updatedAt)}</span>
         </button>
       ) : (
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <div className="grid gap-0.5">
-              <Label className="text-[10px]">{t("common.name")}</Label>
+              <Label className="text-2xs">{t("common.name")}</Label>
               <Input
                 value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
@@ -182,7 +182,7 @@ function SnippetEditor({
               />
             </div>
             <div className="grid gap-0.5">
-              <Label className="text-[10px]">{t("admin.snippets.kindLabel")}</Label>
+              <Label className="text-2xs">{t("admin.snippets.kindLabel")}</Label>
               <Select value={draft.kind} onValueChange={(v) => setDraft({ ...draft, kind: v as Snippet["kind"] })}>
                 <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -192,7 +192,7 @@ function SnippetEditor({
             </div>
           </div>
           <div className="grid gap-0.5">
-            <Label className="text-[10px]">{t("common.description")}</Label>
+            <Label className="text-2xs">{t("common.description")}</Label>
             <Input
               value={draft.description ?? ""}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
@@ -201,14 +201,14 @@ function SnippetEditor({
             />
           </div>
           <div className="grid gap-0.5">
-            <Label className="text-[10px]">{t("admin.snippets.bodyLabel")}</Label>
+            <Label className="text-2xs">{t("admin.snippets.bodyLabel")}</Label>
             <textarea
               value={draft.body}
               onChange={(e) => setDraft({ ...draft, body: e.target.value })}
               className="min-h-[120px] rounded-md border border-input bg-background p-2 font-mono text-xs shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
               placeholder={kindMeta.hint}
             />
-            <p className="text-[10px] text-muted-foreground">{kindMeta.hint}</p>
+            <p className="text-2xs text-muted-foreground">{kindMeta.hint}</p>
           </div>
           <div className="flex items-center gap-2">
             <Button size="sm" disabled={!dirty} onClick={async () => { await onSave(draft); if (!isNew) setOpen(false); }}>

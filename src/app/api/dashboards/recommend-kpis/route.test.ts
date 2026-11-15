@@ -20,13 +20,13 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 });
 vi.mock("@/lib/reporting/runner", () => ({ ANONYMOUS_VIEWER: { id: "anonymous", isAdmin: false, roles: [] } }));
 vi.mock("@/lib/llm", () => ({ callLLM: vi.fn() }));
-vi.mock("@/app/api/reports/generate/route", () => ({
+vi.mock("@/lib/reporting/introspectTables", () => ({
   introspectTables: vi.fn(async () => ({ dataSourceName: "Sales DB", kind: "postgres", tables: [{ name: "orders", columns: [{ name: "amount", type: "numeric" }], sample: null }] })),
 }));
 
 import { prisma } from "@/lib/db";
 import { callLLM } from "@/lib/llm";
-import { introspectTables } from "@/app/api/reports/generate/route";
+import { introspectTables } from "@/lib/reporting/introspectTables";
 import { POST } from "./route";
 
 const post = () => POST(new NextRequest("http://localhost:3100/api/dashboards/recommend-kpis", {

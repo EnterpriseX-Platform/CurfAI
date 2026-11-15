@@ -42,7 +42,11 @@ function safeParse(s: string): Record<string, unknown> {
   try { return JSON.parse(s) ?? {}; } catch { return {}; }
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string; viewId: string } }) {
+export async function GET(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; viewId: string }> }
+) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);
@@ -55,7 +59,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   });
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string; viewId: string } }) {
+export async function PATCH(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; viewId: string }> }
+) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);
@@ -97,7 +105,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string; viewId: string } }) {
+export async function DELETE(
+  req: NextRequest,
+  props: { params: Promise<{ id: string; viewId: string }> }
+) {
+  const params = await props.params;
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const scopeBlock = requireReportInScope(user, params.id);

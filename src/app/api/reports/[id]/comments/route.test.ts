@@ -60,7 +60,7 @@ beforeEach(() => {
 });
 
 const list = async () => {
-  const res = await GET(new NextRequest("http://localhost:3100/api/reports/r1/comments"), { params: { id: "r1" } });
+  const res = await GET(new NextRequest("http://localhost:3100/api/reports/r1/comments"), { params: Promise.resolve({ id: "r1" }) });
   expect(res.status).toBe(200);
   return ((await res.json()).items as any[]).map((c) => c.id);
 };
@@ -80,7 +80,7 @@ describe("GET /api/reports/:id/comments — comments on hidden blocks", () => {
 describe("POST /api/reports/:id/comments — a hidden block can't be commented on", () => {
   const post = (body: Record<string, unknown>) => POST(
     new NextRequest("http://localhost:3100/api/reports/r1/comments", { method: "POST", body: JSON.stringify(body) }),
-    { params: { id: "r1" } },
+    { params: Promise.resolve({ id: "r1" }) },
   );
   beforeEach(() => {
     h.user = { id: "u1", email: "m@test.dev", role: "viewer", tenantId: "t1" };

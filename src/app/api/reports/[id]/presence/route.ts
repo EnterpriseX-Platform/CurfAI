@@ -61,7 +61,8 @@ async function authorize(req: NextRequest, reportId: string): Promise<{ tenantId
   };
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ctx = await authorize(req, params.id);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -116,14 +117,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ctx = await authorize(req, params.id);
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   heartbeat(params.id, ctx.user);
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ctx = await authorize(req, params.id);
   if (!ctx) return NextResponse.json({ ok: true });  // best-effort
   leave(params.id, ctx.user.key);

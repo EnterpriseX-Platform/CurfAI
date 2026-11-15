@@ -18,8 +18,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -53,7 +53,7 @@ export default async function ReleaseLogPage() {
   if (!user) redirect("/login?next=/admin/release-log");
   if (user.role !== "admin") redirect("/");
 
-  const locale = readLocale();
+  const locale = await readLocale();
   // The roadmap-status report is an operator tool that only exists in the
   // private build (src/ee); Community has no roadmap to reconcile.
   const mismatchCount = ee.operator?.roadmapMismatchCount() ?? 0;
@@ -63,7 +63,7 @@ export default async function ReleaseLogPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.section.admin"), href: "/admin/tenant" }, { label: t(locale, "releaseLog.title") }]}>
-      <div className="mx-auto max-w-3xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-4xl px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "releaseLog.title")} description={t(locale, "releaseLog.subtitle")} />
 
 
@@ -88,18 +88,18 @@ export default async function ReleaseLogPage() {
             <li key={r.version} className="relative">
               <span className="absolute -left-[29px] top-1 h-3 w-3 rounded-full border-2 border-background bg-primary" />
               <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-                <span className="rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 font-mono text-[11px] font-semibold text-primary">
+                <span className="rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 font-mono text-2xs font-semibold text-primary">
                   v{r.version}
                 </span>
                 <h2 className="text-sm font-semibold text-foreground">{t(locale, r.titleKey)}</h2>
-                <span className="text-[11px] text-muted-foreground">{r.date}</span>
+                <span className="text-2xs text-muted-foreground">{r.date}</span>
               </div>
               <div className="mt-3 space-y-3">
                 {groupByCategory(r.changes).map(({ category, items }) => {
                   const Icon = CATEGORY_ICON[category];
                   return (
                     <div key={category}>
-                      <div className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${CATEGORY_CLASS[category]}`}>
+                      <div className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-semibold ${CATEGORY_CLASS[category]}`}>
                         <Icon className="h-3 w-3" /> {t(locale, `releaseLog.cat.${category}`)}
                       </div>
                       <ul className="mt-1.5 space-y-1.5">

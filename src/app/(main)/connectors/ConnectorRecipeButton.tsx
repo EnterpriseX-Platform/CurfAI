@@ -69,7 +69,7 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
       <button
         type="button"
         onClick={() => { setOpen(true); setErr(null); }}
-        className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90"
+        className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-2xs font-semibold text-primary-foreground hover:bg-primary/90"
       >
         <Plus className="h-2.5 w-2.5" /> {t("action.connect")}
       </button>
@@ -95,7 +95,7 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
                   href={recipe.docsUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
+                  className="mt-1 inline-flex items-center gap-1 text-2xs font-medium text-primary hover:underline"
                 >
                   {t("connectors.vendorDocsLink")} <ExternalLink className="h-2.5 w-2.5" />
                 </a>
@@ -113,7 +113,7 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
 
             <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
               <label className="block">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectors.connectionNameLabel")}</span>
+                <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectors.connectionNameLabel")}</span>
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -124,7 +124,7 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
 
               {recipe.auth.kind === "basic" && (
                 <label className="block">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("connectors.usernameLabel")}</span>
+                  <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{t("connectors.usernameLabel")}</span>
                   <input
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -135,7 +135,7 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
               )}
 
               <label className="block">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                   {recipe.auth.kind === "basic" ? t("connectors.secretPasswordLabel") : t("connectors.apiKeyLabel")}
                 </span>
                 <input
@@ -149,14 +149,14 @@ export function ConnectorRecipeButton({ recipeId }: { recipeId: string }) {
               </label>
 
               <div className="rounded-md border border-dashed border-border bg-muted/20 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                   {t("connectors.sampleEndpointsHeading")}
                 </p>
-                <ul className="mt-1.5 space-y-1 text-[11px] text-muted-foreground">
+                <ul className="mt-1.5 space-y-1 text-2xs text-muted-foreground">
                   {recipe.exampleEndpoints.slice(0, 3).map((e, i) => (
                     <li key={i} className="flex flex-col gap-0.5">
                       <code className="text-foreground">{e.path}</code>
-                      <span className="text-[10px]">{e.description}</span>
+                      <span className="text-2xs">{e.description}</span>
                     </li>
                   ))}
                 </ul>

@@ -284,7 +284,7 @@ export function BetaRequestsPanel({ initialRows, initialTotal }: Props) {
         )}
       </div>
 
-      <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+      <p className="mt-2 flex items-center gap-1 text-2xs text-muted-foreground">
         <Copy className="h-3 w-3" />
         {t("admin.betaRequests.footerNote")}
       </p>

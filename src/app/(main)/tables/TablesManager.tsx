@@ -31,6 +31,7 @@ import { DateOrderToggle } from "./DateOrderToggle";
 import { RetailPackCard } from "./RetailPackCard";
 import { eeClient } from "@/ee/client";
 import { StandardMappingPanel, type StandardMappingState, type StandardTarget, type FieldSource } from "./StandardMappingPanel";
+import { ListViewControls, useListPrefs } from "@/components/lists/ListViewControls";
 
 type Schema = Array<{ name: string; type: string }>;
 
@@ -82,6 +83,16 @@ const SOURCE_LABEL_KEYS = {
   manual:    "tables.source.manual",
 } as const;
 
+const TABLE_SORTS = ["updated", "name", "rows"] as const;
+type TableSort = (typeof TABLE_SORTS)[number];
+
+function sortTables(rows: TableRow[], sort: TableSort): TableRow[] {
+  const xs = [...rows];
+  if (sort === "name") return xs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
+  if (sort === "rows") return xs.sort((a, b) => b.rowCount - a.rowCount || a.name.localeCompare(b.name));
+  return xs.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+}
+
 // The retail weekly summary — paid edition only (src/ee/client.tsx).
 const WeeklyCard = eeClient.tables?.RetailWeeklyCard;
 
@@ -98,6 +109,8 @@ export function TablesManager({
   const [tables, setTables] = useState<TableRow[]>(initialTables);
   const [tokens, setTokens] = useState<TokenRow[]>(initialTokens);
   const [showTokens, setShowTokens] = useState(false);
+  const prefs = useListPrefs<TableSort>("curf.tables.listPrefs", TABLE_SORTS, "updated");
+  const sortedTables = sortTables(tables, prefs.sort);
 
   async function refreshTables() {
     const r = await fetch("/api/lake/tables", { cache: "no-store", credentials: "include" });
@@ -140,20 +153,34 @@ export function TablesManager({
         <WeeklyCard dataKey={tables.filter((row) => row.name === "sales_lines").map((row) => row.updatedAt).join("|")} />
       )}
 
-      {/* Vector DB — "Find by meaning". Renders only when the user has at
-          least one table (otherwise there's nothing to search). The panel
-          hides itself when the query is short or returns no hits, so it
-          stays invisible in the empty-state and the tenant-has-no-vectors
-          cases. */}
-      {tables.length > 0 && <FindByMeaningPanel />}
-
       {tables.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {tables.map((row) => (
-            <TableCard key={row.id} row={row} onDelete={() => deleteTable(row)} />
-          ))}
+        <div className="space-y-3">
+          {/* "Find by meaning" (vector search over column meanings) shares the
+              controls row; its results open under the input only when there
+              is something to show. */}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <FindByMeaningPanel />
+            <ListViewControls
+              view={prefs.view} onView={prefs.setView}
+              sort={prefs.sort} onSort={prefs.setSort}
+              sorts={[
+                { value: "updated", label: t("lists.sort.updated") },
+                { value: "name", label: t("lists.sort.name") },
+                { value: "rows", label: t("lists.sort.rows") },
+              ]}
+            />
+          </div>
+          {prefs.view === "cards" ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {sortedTables.map((row) => (
+                <TableCard key={row.id} row={row} onDelete={() => deleteTable(row)} />
+              ))}
+            </div>
+          ) : (
+            <TablesList rows={sortedTables} onDelete={deleteTable} />
+          )}
         </div>
       )}
 
@@ -169,7 +196,7 @@ export function TablesManager({
             </span>
             <div>
               <h2 className="text-sm font-semibold">{t("tables.tokensHeading")}</h2>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-2xs text-muted-foreground">
                 {tokens.length === 0
                   ? t("tables.tokensEmptyHint")
                   : t("tables.activeTokensCount")
@@ -432,18 +459,15 @@ function UploadCard({ onUploaded }: { onUploaded: () => void | Promise<void> }) 
       onDragLeave={() => setDrag(false)}
       onDrop={onDrop}
       className={
-        "rounded-lg border-2 border-dashed bg-card p-5 transition-colors " +
+        "rounded-lg border bg-card px-4 py-3 transition-colors " +
         (drag ? "border-primary bg-primary/5" : "border-border")
       }
     >
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
         <div className="flex items-center gap-3 md:flex-1">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-            <Upload className="h-5 w-5" />
-          </span>
           <div>
             <h2 className="text-sm font-semibold">{t("tables.upload.heading")}</h2>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("tables.upload.subtext")}
             </p>
           </div>
@@ -474,7 +498,7 @@ function UploadCard({ onUploaded }: { onUploaded: () => void | Promise<void> }) 
           label={inBatch(t("tables.upload.uploading").replace("{name}", filename).replace("{pct}", String(uploadPct)))}
           pct={uploadPct}
           action={
-            <button type="button" onClick={cancelUpload} className="text-[11px] text-muted-foreground hover:text-foreground">
+            <button type="button" onClick={cancelUpload} className="text-2xs text-muted-foreground hover:text-foreground">
               {t("action.cancel")}
             </button>
           }
@@ -549,7 +573,7 @@ function ProgressLine({ label, hint, pct, action }: { label: string; hint?: stri
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${pct}%` }} />
       </div>
-      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+      {hint && <p className="text-2xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -718,7 +742,7 @@ function UploadPreviewDialog({
           <div>
             <DialogTitle>{t("tables.preview.heading")}</DialogTitle>
             <DialogDescription>
-              {fileLabel && <span className="block font-mono text-[11px] text-foreground">{fileLabel}</span>}
+              {fileLabel && <span className="block font-mono text-2xs text-foreground">{fileLabel}</span>}
               {(target === "table" ? t("tables.preview.subtext") : t("tables.import.mapping.subtext"))
                 .replace("{rows}", rows)
                 .replace("{cols}", String(preview.columns.length))}
@@ -758,7 +782,7 @@ function UploadPreviewDialog({
 
           {preview.sheets.length > 1 && (
             <div className="rounded-md border border-border bg-muted/30 p-3">
-              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+              <label className="mb-1 block text-2xs font-medium text-muted-foreground">
                 {t("tables.preview.sheetLabel").replace("{count}", String(preview.sheets.length))}
               </label>
               <Select
@@ -775,14 +799,14 @@ function UploadPreviewDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="mt-1.5 text-[11px] text-muted-foreground">
+              <p className="mt-1.5 text-2xs text-muted-foreground">
                 {t("tables.preview.sheetHint")}
               </p>
             </div>
           )}
 
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            <label className="mb-1 block text-2xs font-medium text-muted-foreground">
               {t("tables.import.target")}
             </label>
             <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={t("tables.import.target")}>
@@ -795,7 +819,7 @@ function UploadPreviewDialog({
                   disabled={busy || switching}
                   onClick={() => setTarget(k)}
                   className={
-                    "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 " +
+                    "rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors disabled:opacity-50 " +
                     (target === k ? "border-primary bg-primary-soft text-primary" : "border-border text-muted-foreground hover:bg-muted")
                   }
                 >
@@ -818,7 +842,7 @@ function UploadPreviewDialog({
           ) : (
           <>
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            <label className="mb-1 block text-2xs font-medium text-muted-foreground">
               {t("tables.upload.namePlaceholder")}
             </label>
             <input
@@ -831,7 +855,7 @@ function UploadPreviewDialog({
 
           <div className={"max-h-[45vh] overflow-y-auto rounded-md border border-border transition-opacity " + (switching ? "opacity-40" : "")}>
             <table className="w-full text-xs">
-              <thead className="sticky top-0 z-10 bg-muted text-[10px] uppercase tracking-wider text-muted-foreground">
+              <thead className="sticky top-0 z-10 bg-muted text-2xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">{t("tableDetail.colHeaderColumn")}</th>
                   <th className="px-3 py-2 text-left font-medium">{t("tableDetail.colHeaderType")}</th>
@@ -847,12 +871,12 @@ function UploadPreviewDialog({
                         value={types[c.name]}
                         onValueChange={(v) => setTypes((cur) => ({ ...cur, [c.name]: v as PreviewColumn["type"] }))}
                       >
-                        <SelectTrigger className="h-7 w-28 text-[11px]">
+                        <SelectTrigger className="h-7 w-28 text-2xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
                           {TYPE_OPTIONS.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value} className="text-[11px]">
+                            <SelectItem key={opt.value} value={opt.value} className="text-2xs">
                               {t(opt.labelKey)}
                             </SelectItem>
                           ))}
@@ -869,7 +893,7 @@ function UploadPreviewDialog({
                         />
                       )}
                     </td>
-                    <td className="max-w-[16rem] truncate px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                    <td className="max-w-[16rem] truncate px-3 py-1.5 font-mono text-2xs text-muted-foreground">
                       {c.sample == null ? <span className="italic">{t("tableDetail.nullLabel")}</span> : String(c.sample).slice(0, 40)}
                     </td>
                   </tr>
@@ -989,24 +1013,21 @@ function FindByMeaningPanel() {
   const showResults = longEnough && (loading || hits.length > 0 || emptyReason !== "ok");
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4 shadow-xs">
-      <label htmlFor="tables-find-by-meaning" className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        <Sparkles className="h-3 w-3" />
-        {t("tables.findByMeaning.label")}
-      </label>
-      <div className="relative mt-2">
+    <section className="w-full min-w-0 sm:w-auto sm:flex-1">
+      <div className="relative max-w-xl">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
         <input
           id="tables-find-by-meaning"
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={t("tables.findByMeaning.placeholder")}
-          className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={t("tables.findByMeaning.label")}
+          placeholder={t("tables.findByMeaning.label") + ": " + t("tables.findByMeaning.placeholder")}
+          className="h-9 w-full rounded-md border border-border bg-card pl-9 pr-3 text-sm placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
       </div>
       {showResults && (
-        <ul className="mt-3 flex flex-col gap-1">
+        <ul className="mt-2 flex flex-col gap-1 rounded-lg border border-border bg-card p-2">
           {loading && hits.length === 0 && (
             <li className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -1015,7 +1036,7 @@ function FindByMeaningPanel() {
           )}
           {!loading && hits.length === 0 && emptyReason === "disabled" && (
             <li className="px-2 py-2 text-xs text-muted-foreground">
-              {t("tables.findByMeaning.disabledPart1")} <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">CURF_VECTOR_DB=on</code> {t("tables.findByMeaning.disabledPart2")} <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">npm run db:embed-backfill</code> {t("tables.findByMeaning.disabledPart3")}
+              {t("tables.findByMeaning.disabledPart1")} <code className="rounded bg-muted px-1 py-0.5 font-mono text-2xs">CURF_VECTOR_DB=on</code> {t("tables.findByMeaning.disabledPart2")} <code className="rounded bg-muted px-1 py-0.5 font-mono text-2xs">npm run db:embed-backfill</code> {t("tables.findByMeaning.disabledPart3")}
             </li>
           )}
           {!loading && hits.length === 0 && emptyReason === "error" && (
@@ -1036,17 +1057,17 @@ function FindByMeaningPanel() {
                   <span className="mx-1.5 text-muted-foreground/60">·</span>
                   <span>{h.columnName}</span>
                   {h.columnType && (
-                    <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                    <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">
                       {h.columnType}
                     </span>
                   )}
                   {h.sample && (
-                    <span className="ml-2 truncate text-[11px] text-muted-foreground/80">
+                    <span className="ml-2 truncate text-2xs text-muted-foreground/80">
                       {h.sample}
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">
                   {Math.round(h.score * 100)}%
                 </span>
                 <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
@@ -1090,9 +1111,9 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        // The /tables list shortcut always publishes — different intent
-        // from the detail-page button (which lets the user opt out).
-        body: JSON.stringify({ lakeTable: row.name, publish: true }),
+        // Never publishes: a no-sign-in public link is opted into on the
+        // table's own page, where its sensitive columns are shown.
+        body: JSON.stringify({ lakeTable: row.name, publish: false }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error ?? `Server returned ${r.status}`);
@@ -1125,7 +1146,7 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
           >
             {row.name}
           </Link>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-2xs uppercase tracking-wider text-muted-foreground">
             <span className="whitespace-nowrap">{t(refineManualOrigin(row.sourceKind, row.sourceConfig)?.labelKey ?? SOURCE_LABEL_KEYS[row.sourceKind])}</span>
             {row.freshnessIssue && (
               <span
@@ -1163,7 +1184,7 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
             type="button"
             onClick={autoGenerate}
             disabled={generating}
-            className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-2xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
             title={t("tables.card.autoGenerateTitle")}
           >
             {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
@@ -1192,16 +1213,77 @@ function TableCard({ row, onDelete }: { row: TableRow; onDelete: () => void }) {
         </span>
       </div>
       {row.schema.length > 0 && (
-        <p className="mt-2 truncate font-mono text-[10px] text-muted-foreground/80">
+        <p className="mt-2 truncate font-mono text-2xs text-muted-foreground/80">
           {row.schema.slice(0, 6).map((c) => c.name).join(", ")}
           {row.schema.length > 6 ? ", " + t("tables.card.moreColumns").replace("{n}", String(row.schema.length - 6)) : ""}
         </p>
       )}
       {autoError && (
-        <p className="mt-2 rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-[10px] text-destructive">
+        <p className="mt-2 rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-2xs text-destructive">
           {autoError}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The dense view of the same tables: one row each, the card's facts in columns. */
+function TablesList({ rows, onDelete }: { rows: TableRow[]; onDelete: (row: TableRow) => void }) {
+  const { t } = useT();
+  return (
+    <div className="overflow-x-auto rounded-lg border border-border bg-card shadow-xs">
+      <table className="w-full text-sm">
+        <thead className="bg-muted text-left text-xs text-muted-foreground">
+          <tr>
+            <th className="px-4 py-2 font-medium">{t("lists.col.name")}</th>
+            <th className="px-3 py-2 font-medium">{t("lists.col.source")}</th>
+            <th className="px-3 py-2 text-right font-medium">{t("lists.col.rows")}</th>
+            <th className="px-3 py-2 text-right font-medium">{t("lists.col.columns")}</th>
+            <th className="px-3 py-2 font-medium">{t("lists.col.updated")}</th>
+            <th className="w-10" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const Icon = SOURCE_ICONS[row.sourceKind] ?? Database;
+            return (
+              <tr key={row.id} className={"border-t border-border " + (row.freshnessIssue ? "bg-destructive/5" : "hover:bg-muted/50")}>
+                <td className="max-w-[320px] px-4 py-2">
+                  <Link href={`/tables/${encodeURIComponent(row.name)}`} className="block truncate font-medium hover:underline" title={row.name}>
+                    {row.name}
+                  </Link>
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Icon className="h-3.5 w-3.5" />
+                    {t(refineManualOrigin(row.sourceKind, row.sourceConfig)?.labelKey ?? SOURCE_LABEL_KEYS[row.sourceKind])}
+                    {row.freshnessIssue && (
+                      <AlertTriangle
+                        className="h-3 w-3 text-destructive"
+                        aria-label={t("tables.card.freshnessIssueBadge")}
+                      />
+                    )}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">{row.rowCount.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.schema.length}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-muted-foreground" suppressHydrationWarning>{timeAgo(row.updatedAt, t)}</td>
+                <td className="px-2 py-1 text-right">
+                  <button
+                    type="button"
+                    onClick={() => onDelete(row)}
+                    className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title={t("tables.card.deleteTitle")}
+                    aria-label={t("tables.card.deleteTitle")}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1296,7 +1378,7 @@ function TokensPanel({
       )}
 
       {tokens.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-2 text-2xs text-muted-foreground">
           {t("tables.tokens.emptyPart1")} <code className="font-mono">/api/lake/append</code> {t("tables.tokens.emptyPart2")} <code className="font-mono">Authorization: Bearer &lt;token&gt;</code> {t("tables.tokens.emptyPart3")}
         </p>
       ) : (
@@ -1307,9 +1389,9 @@ function TokensPanel({
                 <div className="flex items-center gap-2 text-xs font-medium">
                   <KeyRound className="h-3 w-3 text-muted-foreground" />
                   <span className="truncate">{tok.label}</span>
-                  <code className="font-mono text-[10px] text-muted-foreground">{tok.prefix}…</code>
+                  <code className="font-mono text-2xs text-muted-foreground">{tok.prefix}…</code>
                 </div>
-                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                <div className="mt-0.5 text-2xs text-muted-foreground">
                   {t("tables.tokens.arrowTable")} <code className="font-mono">{tok.tableName}</code>
                   {tok.lastUsedAt
                     ? ` · ${t("tables.tokens.lastUsed").replace("{time}", timeAgo(tok.lastUsedAt, t))}`
@@ -1353,16 +1435,16 @@ function NewTokenBanner({ secret, label, onDismiss }: { secret: string; label: s
             {t("tables.tokens.mintedBanner").replace("{label}", label)}
           </p>
           <div className="mt-1.5 flex items-center gap-2">
-            <code className="block flex-1 truncate rounded border border-warning/30 bg-background px-2 py-1 font-mono text-[11px]">{secret}</code>
+            <code className="block flex-1 truncate rounded border border-warning/30 bg-background px-2 py-1 font-mono text-2xs">{secret}</code>
             <button
               type="button"
               onClick={copy}
-              className="inline-flex h-7 items-center gap-1 rounded bg-warning/20 px-2 text-[11px] font-semibold text-warning hover:bg-warning/30"
+              className="inline-flex h-7 items-center gap-1 rounded bg-warning/20 px-2 text-2xs font-semibold text-warning hover:bg-warning/30"
             >
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {t("tables.tokens.copyButton")}
             </button>
           </div>
-          <p className="mt-2 text-[10px] text-warning/80">
+          <p className="mt-2 text-2xs text-warning/80">
             {t("tables.tokens.useInProducer")}{" "}
             <code className="font-mono">{EXAMPLE_CURL}</code>
           </p>

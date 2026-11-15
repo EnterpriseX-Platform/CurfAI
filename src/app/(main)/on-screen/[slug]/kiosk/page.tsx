@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { tenantIsOpen } from "@/lib/tenantGuard";
 import { DashboardViewer } from "@/app/(main)/dashboards/[slug]/DashboardViewer";
 import { prefetchDashboardPayload } from "@/app/(main)/dashboards/[slug]/payload";
 
@@ -11,13 +12,14 @@ import { prefetchDashboardPayload } from "@/app/(main)/dashboards/[slug]/payload
  */
 export const dynamic = "force-dynamic";
 
-export default async function OnScreenKioskPage({
-  params,
-  searchParams,
-}: {
-  params: { slug: string };
-  searchParams?: { token?: string };
-}) {
+export default async function OnScreenKioskPage(
+  props: {
+    params: Promise<{ slug: string }>;
+    searchParams?: Promise<{ token?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const token = searchParams?.token?.trim();
   if (!token) return <KioskExpired reason="Missing kiosk token. Open this display from /on-screen instead." />;
 
@@ -26,6 +28,8 @@ export default async function OnScreenKioskPage({
     include: { onScreen: true },
   });
   if (!tokenRow) return <KioskExpired reason="Kiosk token not recognised." />;
+  // A closed (suspended / pending-deletion) workspace reads as a token that was never issued.
+  if (!(await tenantIsOpen(tokenRow.tenantId))) return <KioskExpired reason="Kiosk token not recognised." />;
   if (tokenRow.revokedAt) return <KioskExpired reason="This kiosk token has been revoked." />;
   if (tokenRow.expiresAt && new Date(tokenRow.expiresAt) < new Date()) {
     return <KioskExpired reason={`This kiosk token expired on ${new Date(tokenRow.expiresAt).toLocaleDateString()}.`} />;

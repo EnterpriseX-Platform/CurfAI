@@ -14,6 +14,7 @@ import { runReportWithProof, runSingleQuery, ANONYMOUS_VIEWER, type RunViewer } 
 import { extractSqlParamNames } from "@/lib/reporting/params";
 import { visibleReport } from "@/lib/reporting/visibleReport";
 import { DEFAULT_CURRENCY } from "@/lib/reporting/currency";
+import { blockLabel, findBlock, parseSlotKey } from "@/lib/dashboards/slotKey";
 
 /**
  * Resolve the dashboard's report list into ready-to-render payload. Reports
@@ -31,9 +32,12 @@ import { DEFAULT_CURRENCY } from "@/lib/reporting/currency";
  * such blocks use.
  */
 export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer = ANONYMOUS_VIEWER) {
-  let reportIds: string[] = [];
-  try { reportIds = JSON.parse(dashboard.reportIdsJson ?? "[]"); }
+  // The dashboard's cards: a whole report ("<id>") or one block of a report ("<id>#<blockId>").
+  let slotKeys: string[] = [];
+  try { slotKeys = JSON.parse(dashboard.reportIdsJson ?? "[]"); }
   catch { /* corrupt → empty rotation */ }
+  const refs = slotKeys.map((key) => ({ key, ...parseSlotKey(key) }));
+  const reportIds = [...new Set(refs.map((r) => r.reportId))];
 
   // Top-KPI strip formats currency client-side (no per-KPI report context
   // to read Report.currency from), so it resolves straight to the tenant
@@ -54,6 +58,9 @@ export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer
 
   type Slot = {
     id: string;
+    /** The report behind the card (the id itself for a whole report) and, for a block card, which block. */
+    reportId: string;
+    blockId: string | null;
     name: string;
     /** When defined, this report renders. When null, the slot shows a
      *  "report unavailable" placeholder (deleted, errored, etc). */
@@ -65,13 +72,12 @@ export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer
     };
     error?: string;
   };
-  const slots: Slot[] = [];
+  // Each report runs once, however many of its blocks are cards.
+  type Ran = { def: any; dataset: Record<string, unknown[]>; provenance: Record<string, unknown>; params: Record<string, unknown> };
+  const ran = new Map<string, Ran | { error: string }>();
   for (const id of reportIds) {
     const row = byId.get(id);
-    if (!row) {
-      slots.push({ id, name: "(deleted)", rendered: null, error: "Report no longer exists." });
-      continue;
-    }
+    if (!row) { ran.set(id, { error: "Report no longer exists." }); continue; }
     try {
       const def = visibleReport(ReportSchema.parse(JSON.parse(row.definition)), viewer);
       // Default every parameter — the dashboard viewer doesn't expose a
@@ -79,14 +85,22 @@ export async function prefetchDashboardPayload(dashboard: any, viewer: RunViewer
       const pvals: Record<string, unknown> = {};
       for (const p of def.parameters) pvals[p.name] = p.default ?? "";
       const { dataset, provenance } = await runReportWithProof({ report: def, params: pvals, tenantId: dashboard.tenantId, viewer });
-      slots.push({
-        id, name: row.name,
-        rendered: { definition: def, dataset, provenance: provenance as any, params: pvals },
-      });
+      ran.set(id, { def, dataset, provenance: provenance as any, params: pvals });
     } catch (e: any) {
-      slots.push({ id, name: row.name, rendered: null, error: e?.message ?? "Failed to render report." });
+      ran.set(id, { error: e?.message ?? "Failed to render report." });
     }
   }
+  const slots: Slot[] = refs.map(({ key, reportId, blockId }) => {
+    const row = byId.get(reportId);
+    const r = ran.get(reportId)!;
+    if (!row) return { id: key, reportId, blockId, name: "(deleted)", rendered: null, error: "Report no longer exists." };
+    if ("error" in r) return { id: key, reportId, blockId, name: row.name, rendered: null, error: r.error };
+    if (!blockId) return { id: key, reportId, blockId, name: row.name, rendered: { definition: r.def, dataset: r.dataset, provenance: r.provenance, params: r.params } };
+    // A block the viewer's role cannot see (visibleReport leaves it out) or one that was deleted is an unavailable card.
+    const block = findBlock(r.def, blockId);
+    if (!block) return { id: key, reportId, blockId, name: row.name, rendered: null, error: "That block is no longer in the report." };
+    return { id: key, reportId, blockId, name: `${blockLabel(block)} · ${row.name}`, rendered: { definition: r.def, dataset: r.dataset, provenance: r.provenance, params: r.params } };
+  });
 
   let topKpisDef: any[] = [];
   try { topKpisDef = JSON.parse(dashboard.topKpisJson ?? "[]"); }

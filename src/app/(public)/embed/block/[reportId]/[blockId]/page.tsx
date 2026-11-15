@@ -21,6 +21,7 @@ import { visibleReport, dropQueriesOnlyUsedBy } from "@/lib/reporting/visibleRep
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { verifyEmbedToken } from "@/lib/embed/token";
+import { tenantIsOpen } from "@/lib/tenantGuard";
 
 export const dynamic = "force-dynamic";
 // No-cache so the iframe always reflects latest data when the parent
@@ -29,11 +30,13 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type Props = {
-  params: { reportId: string; blockId: string };
-  searchParams: { token?: string; [key: string]: string | undefined };
+  params: Promise<{ reportId: string; blockId: string }>;
+  searchParams: Promise<{ token?: string; [key: string]: string | undefined }>;
 };
 
-export default async function EmbedBlockPage({ params, searchParams }: Props) {
+export default async function EmbedBlockPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   // 1. Resolve auth: token-mint OR public-app-derived.
   const tokenPayload = searchParams.token ? verifyEmbedToken(searchParams.token) : null;
   let tenantId: string | null = null;
@@ -44,6 +47,8 @@ export default async function EmbedBlockPage({ params, searchParams }: Props) {
       return <EmbedError message="Token does not match this block." />;
     }
     tenantId = tokenPayload.t;
+    // A closed workspace's token is refused like one that never verified: the page says only that the block is private.
+    if (!(await tenantIsOpen(tenantId))) return <EmbedError message="This block is private. Embed token required." />;
     frozenParams = tokenPayload.p ?? {};
   } else {
     // Anonymous path — only allowed if the report has a published public app.
@@ -52,6 +57,7 @@ export default async function EmbedBlockPage({ params, searchParams }: Props) {
       select: { tenantId: true },
     });
     if (!app) return <EmbedError message="This block is private. Embed token required." />;
+    if (!(await tenantIsOpen(app.tenantId))) return <EmbedError message="This block is private. Embed token required." />;
     tenantId = app.tenantId;
   }
 
@@ -123,14 +129,14 @@ export default async function EmbedBlockPage({ params, searchParams }: Props) {
         params={pvals}
         reportDbId={params.reportId}
         tenantCurrency={tenantRow?.currency ?? null}
-        locale={serverLocale()}
+        locale={await serverLocale()}
       />
       {/* Tiny attribution. Light, unobtrusive — clickable backlink to Curf. */}
       <a
         href="https://curf.ai"
         target="_blank"
         rel="noreferrer"
-        className="mt-2 inline-block text-[9px] uppercase tracking-wider text-muted-foreground/50 hover:text-muted-foreground"
+        className="mt-2 inline-block text-2xs uppercase tracking-wider text-muted-foreground/50 hover:text-muted-foreground"
       >
         Powered by Curf
       </a>

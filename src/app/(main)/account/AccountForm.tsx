@@ -191,7 +191,7 @@ function ThemeCard({ active, onClick, swatch, label, description, palette }: {
         <span className="text-sm font-medium">{label}</span>
         {active && <Check className="h-3.5 w-3.5 text-primary" />}
       </div>
-      <p className="text-[11px] leading-snug text-muted-foreground">{description}</p>
+      <p className="text-2xs leading-snug text-muted-foreground">{description}</p>
       {palette && palette.length > 0 && (
         <div className="flex overflow-hidden rounded ring-1 ring-border">
           {palette.map((c, i) => (

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CurfLogo } from "@/components/common/CurfLogo";
+import { useT } from "@/lib/i18n/LocaleContext";
 
 /**
  * Self-serve signup. Creates a new Tenant + admin user and immediately signs
@@ -31,6 +32,7 @@ export default function SignupPage() {
 }
 
 function SignupPageInner() {
+  const { t } = useT();
   const router = useRouter();
   const search = useSearchParams();
   const inviteToken = search?.get("invite") ?? null;
@@ -51,6 +53,19 @@ function SignupPageInner() {
   // the form for a CTA back to the landing page so the user can request
   // access instead of bouncing off a generic error.
   const [betaBlocked, setBetaBlocked] = useState(false);
+  // Set when the account was created but must confirm its email before it
+  // can sign in ("sent", or "failed" when the link could not be mailed).
+  const [confirmEmail, setConfirmEmail] = useState<"sent" | "failed" | null>(null);
+  const [resent, setResent] = useState(false);
+
+  async function resendVerification() {
+    setResent(true);
+    await fetch("/api/verify-email/resend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }).catch(() => null);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -72,7 +87,7 @@ function SignupPageInner() {
         }),
       });
       if (!res.ok) {
-        let msg = "Signup failed";
+        let msg = t("auth.signup.failed");
         let code: string | undefined;
         try {
           const j = await res.json();
@@ -89,10 +104,24 @@ function SignupPageInner() {
         setError(msg);
         return;
       }
+      // The address has to be confirmed first: show where to look instead of
+      // a sign-in that would be refused.
+      let verification: string | undefined;
+      let identity: string | undefined;
+      try { const j = await res.json(); verification = j?.emailVerification; identity = j?.identity; } catch { /* sign in as before */ }
+      if (verification === "sent" || verification === "failed") {
+        setConfirmEmail(verification);
+        return;
+      }
+      // Keycloak is the only sign-in: the address is already confirmed (a waitlist invite), so go straight to its login.
+      if (identity === "keycloak") {
+        await signIn("keycloak", { callbackUrl: "/reports" });
+        return;
+      }
       // Auto-sign-in with the credentials we just set.
       const signInRes = await signIn("credentials", { email, password, redirect: false });
       if (signInRes?.error) {
-        setError("Account created, but sign-in failed. Try /login.");
+        setError(t("auth.signup.signInFailed"));
         return;
       }
       router.push("/reports");
@@ -112,27 +141,42 @@ function SignupPageInner() {
           {/* Invite banner — only when ?invite= is present. The API enforces
               the email match server-side so we can't decode the email here;
               we just hint the user to use the right address. */}
-          {inviteToken && !betaBlocked && (
+          {inviteToken && !betaBlocked && !confirmEmail && (
             <InviteBanner token={inviteToken} />
           )}
 
-          {betaBlocked ? (
+          {confirmEmail ? (
+            <div className="space-y-4">
+              <h1 className="text-2xl font-semibold tracking-tight">{t("auth.signup.checkInboxTitle")}</h1>
+              <p className="text-sm text-muted-foreground">
+                {confirmEmail === "sent"
+                  ? t("auth.signup.checkInboxBody").replace("{email}", email)
+                  : t("auth.signup.sendFailedBody")}
+              </p>
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                <Button asChild><Link href="/login">{t("action.signIn")}</Link></Button>
+                {resent
+                  ? <span className="text-xs text-muted-foreground">{t("auth.login.verificationResent")}</span>
+                  : <button type="button" onClick={resendVerification} className="text-xs text-primary underline">{t("auth.login.resendVerification")}</button>}
+              </div>
+            </div>
+          ) : betaBlocked ? (
             <BetaBlockedPanel />
           ) : (
             <>
-              <h1 className="text-2xl font-semibold tracking-tight">Create your workspace</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{t("auth.signup.title")}</h1>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                Spin up a fresh tenant in under a minute. You&apos;ll be the admin.
+                {t("auth.signup.subtitle")}
               </p>
 
               <form onSubmit={submit} className="mt-8 grid gap-4">
                 <div className="grid gap-1.5">
-                  <Label className="text-xs font-medium">Account type</Label>
+                  <Label className="text-xs font-medium">{t("auth.signup.accountType")}</Label>
                   <div className="grid grid-cols-2 gap-2">
                     {(
                       [
-                        { key: "individual", label: "Individual", hint: "Just you — you'll be the workspace admin." },
-                        { key: "organization", label: "Organization", hint: "Multiple workspaces — you'll be Platform Admin." },
+                        { key: "individual", label: t("auth.signup.individual"), hint: t("auth.signup.individualHint") },
+                        { key: "organization", label: t("auth.signup.organization"), hint: t("auth.signup.organizationHint") },
                       ] as const
                     ).map((opt) => (
                       <button
@@ -151,72 +195,71 @@ function SignupPageInner() {
                             what either choice meant before picking, since this
                             line used to appear only after selecting
                             Organization. */}
-                        <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground/80">
+                        <span className="mt-0.5 block text-2xs font-normal text-muted-foreground/80">
                           {opt.hint}
                         </span>
                       </button>
                     ))}
                   </div>
                   {accountType === "organization" && (
-                    <p className="text-[11px] text-muted-foreground">
-                      You&apos;ll become Platform Admin — able to oversee every workspace under this
-                      organization and invite others to help manage it.
+                    <p className="text-2xs text-muted-foreground">
+                      {t("auth.signup.organizationNote")}
                     </p>
                   )}
                 </div>
                 {accountType === "organization" && (
                   <>
                     <div className="grid gap-1.5">
-                      <Label htmlFor="org-name-th" className="text-xs font-medium">Organization name (Thai)</Label>
+                      <Label htmlFor="org-name-th" className="text-xs font-medium">{t("auth.signup.orgNameTh")}</Label>
                       <Input
                         id="org-name-th" required
-                        placeholder="บริษัท ตัวอย่าง จำกัด"
+                        placeholder={t("auth.signup.orgNameThPlaceholder")}
                         value={orgNameTh} onChange={(e) => setOrgNameTh(e.target.value)}
                       />
                     </div>
                     <div className="grid gap-1.5">
-                      <Label htmlFor="org-name-en" className="text-xs font-medium">Organization name (English)</Label>
+                      <Label htmlFor="org-name-en" className="text-xs font-medium">{t("auth.signup.orgNameEn")}</Label>
                       <Input
                         id="org-name-en" required
-                        placeholder="Example Co., Ltd."
+                        placeholder={t("auth.signup.orgNameEnPlaceholder")}
                         value={orgNameEn} onChange={(e) => setOrgNameEn(e.target.value)}
                       />
                     </div>
                   </>
                 )}
                 <div className="grid gap-1.5">
-                  <Label htmlFor="workspace" className="text-xs font-medium">Workspace name</Label>
+                  <Label htmlFor="workspace" className="text-xs font-medium">{t("auth.signup.workspaceName")}</Label>
                   <Input
                     id="workspace" required autoFocus
-                    placeholder="Acme Corp"
+                    placeholder={t("auth.signup.workspacePlaceholder")}
                     value={workspace} onChange={(e) => setWorkspace(e.target.value)}
                   />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="name" className="text-xs font-medium">Your name (optional)</Label>
+                  <Label htmlFor="name" className="text-xs font-medium">{t("auth.signup.yourName")}</Label>
                   <Input
-                    id="name" placeholder="Alex Chen"
+                    id="name" placeholder={t("auth.signup.namePlaceholder")}
                     value={name} onChange={(e) => setName(e.target.value)}
                   />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="email" className="text-xs font-medium">Email</Label>
+                  <Label htmlFor="email" className="text-xs font-medium">{t("auth.login.email")}</Label>
                   <Input
                     id="email" type="email" required
-                    placeholder="you@company.com"
+                    placeholder={t("auth.signup.emailPlaceholder")}
                     value={email} onChange={(e) => setEmail(e.target.value)}
                   />
                   {inviteToken && (
-                    <p className="text-[11px] text-muted-foreground">
-                      Use the email this invite was sent to.
+                    <p className="text-2xs text-muted-foreground">
+                      {t("auth.signup.inviteEmailHint")}
                     </p>
                   )}
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="password" className="text-xs font-medium">Password</Label>
+                  <Label htmlFor="password" className="text-xs font-medium">{t("auth.login.password")}</Label>
                   <Input
                     id="password" type="password" required minLength={8}
-                    placeholder="8+ characters"
+                    placeholder={t("auth.signup.passwordPlaceholder")}
                     value={password} onChange={(e) => setPassword(e.target.value)}
                   />
                 </div>
@@ -227,46 +270,41 @@ function SignupPageInner() {
                   </div>
                 )}
                 <Button type="submit" disabled={loading} className="mt-2">
-                  {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Creating&hellip;</> : "Create workspace"}
+                  {loading ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> {t("action.creating")}</> : t("auth.signup.submit")}
                 </Button>
               </form>
 
               <p className="mt-8 text-center text-xs text-muted-foreground">
-                Already have an account? <Link href="/login" className="text-primary underline">Sign in</Link>.
+                {t("auth.signup.haveAccount")} <Link href="/login" className="text-primary underline">{t("action.signIn")}</Link>
               </p>
             </>
           )}
         </div>
       </div>
 
-      <div className="relative hidden overflow-hidden bg-gradient-chrome lg:block">
-        <div className="absolute inset-0 opacity-60">
-          <div className="absolute -top-24 -right-24 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
-          <div className="absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
-        </div>
-        <div className="relative flex h-full flex-col justify-between p-12">
+      <div className="hidden border-l border-border bg-muted lg:block">
+        <div className="flex h-full flex-col justify-between p-12">
           <div className="max-w-md">
-            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
-              The living-reports platform
-            </div>
+            <p className="mb-6 text-xs font-medium uppercase tracking-[.04em] text-muted-foreground">
+              {t("landing.heroEyebrow")}
+            </p>
             <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-              Your own workspace, your own data.
+              {t("auth.signup.asideTitle")}
             </h2>
             <p className="mt-3 text-sm text-muted-foreground">
-              Every record in Curf is tenant-scoped. Two tenants can share email addresses,
-              connection names, and role slugs - your data is strictly yours.
+              {t("auth.signup.asideBody")}
             </p>
           </div>
 
           <div className="space-y-3 text-sm">
             {[
-              "Designer, templates, exports, schedules - out of the box",
-              "Trust Layer: proof-carrying cells, time-travel replay",
-              "Intelligence: Talks-back Q&A, role-gated blocks, actions",
-            ].map((t) => (
-              <div key={t} className="flex items-center gap-2.5 text-foreground/80">
-                <div className="h-1.5 w-1.5 rounded-full bg-primary" />
-                {t}
+              t("auth.signup.asideBullet1"),
+              t("auth.signup.asideBullet2"),
+              t("auth.signup.asideBullet3"),
+            ].map((line) => (
+              <div key={line} className="flex items-center gap-2.5 text-foreground/80">
+                <div className="h-1.5 w-1.5 rounded-full bg-faint" />
+                {line}
               </div>
             ))}
           </div>
@@ -277,18 +315,20 @@ function SignupPageInner() {
 }
 
 function InviteBanner({ token }: { token: string }) {
+  const { t } = useT();
   // Token is opaque on the client — we just acknowledge it's present so the
   // user knows they're in the invitee path, not the (gated) self-serve path.
   // Show first/last 4 chars of the token as a tiny breadcrumb to help debug
   // copy-paste mistakes.
   const fp = token.length > 12 ? `${token.slice(0, 4)}…${token.slice(-4)}` : token;
+  const [before, after = ""] = t("auth.signup.inviteBody").split("{code}");
   return (
     <div className="mb-6 flex items-start gap-2 rounded-md border border-success/40 bg-success/5 px-3 py-2 text-xs text-success  ">
       <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <div>
-        <p className="font-semibold">Beta invite — completing signup</p>
+        <p className="font-semibold">{t("auth.signup.inviteTitle")}</p>
         <p className="mt-0.5 text-success/80 ">
-          Your invite is attached (<code className="font-mono">{fp}</code>). Finish below to create your workspace.
+          {before}<code className="font-mono">{fp}</code>{after}
         </p>
       </div>
     </div>
@@ -296,26 +336,26 @@ function InviteBanner({ token }: { token: string }) {
 }
 
 function BetaBlockedPanel() {
+  const { t } = useT();
+  const [hintBefore, hintAfter = ""] = t("auth.signup.betaInviteHint").split("{code}");
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold tracking-tight">Curf is in private beta.</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">{t("auth.signup.betaTitle")}</h1>
       <p className="text-sm text-muted-foreground">
-        Self-serve signup is closed for now. Drop your email on the home page and
-        we&apos;ll send a magic link within 24 hours.
+        {t("auth.signup.betaBody")}
       </p>
       <div className="flex gap-2 pt-2">
         <Button asChild>
           <Link href="/">
-            <ArrowLeft className="mr-1.5 h-4 w-4" /> Request access
+            <ArrowLeft className="mr-1.5 h-4 w-4" /> {t("auth.signup.requestAccess")}
           </Link>
         </Button>
         <Button asChild variant="outline">
-          <Link href="/login">Sign in</Link>
+          <Link href="/login">{t("action.signIn")}</Link>
         </Button>
       </div>
-      <p className="pt-4 text-[11px] text-muted-foreground">
-        If you already have an invite, make sure you opened the magic link directly —
-        it carries the <code className="font-mono">?invite=</code> token this page needs.
+      <p className="pt-4 text-2xs text-muted-foreground">
+        {hintBefore}<code className="font-mono">?invite=</code>{hintAfter}
       </p>
     </div>
   );

@@ -150,7 +150,7 @@ export function ScheduleDrawer({
             <Clock className="h-4 w-4 text-muted-foreground" />
             <div>
               <h2 className="text-sm font-semibold leading-tight">{t("schedules.breadcrumb")}</h2>
-              <p className="text-[11px] text-muted-foreground">{forPre}<span className="font-medium text-foreground">{reportName}</span>{forPost}</p>
+              <p className="text-2xs text-muted-foreground">{forPre}<span className="font-medium text-foreground">{reportName}</span>{forPost}</p>
             </div>
           </div>
           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} aria-label={t("action.close")}>
@@ -161,7 +161,7 @@ export function ScheduleDrawer({
         <div className="flex-1 overflow-y-auto">
           <section className="border-b border-border px-5 py-4">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {t("schedules.activeHeading")}
               </h3>
               {loading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
@@ -182,8 +182,8 @@ export function ScheduleDrawer({
                           <FormatBadge format={s.format} />
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-                          <code className="font-mono text-[11px]">{s.cron}</code>
-                          <span className="text-[11px]">
+                          <code className="font-mono text-2xs">{s.cron}</code>
+                          <span className="text-2xs">
                             {s.lastRunAt ? (
                               <span className={s.lastStatus === "ok" ? "text-success" : "text-destructive"}>
                                 {t("schedules.lastRunStatus")
@@ -194,13 +194,13 @@ export function ScheduleDrawer({
                           </span>
                         </div>
                         {s.recipients.length > 0 && (
-                          <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                          <div className="mt-1 truncate text-2xs text-muted-foreground">
                             {t("schedules.recipientsTo").replace("{recipients}", s.recipients.join(", "))}
                           </div>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-0.5">
-                        <label className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[11px] hover:bg-accent" title={t("schedules.colEnabled")}>
+                        <label className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-2xs hover:bg-accent" title={t("schedules.colEnabled")}>
                           <input
                             type="checkbox"
                             checked={s.enabled}
@@ -237,7 +237,7 @@ export function ScheduleDrawer({
           </section>
 
           <section className="px-5 py-4">
-            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <h3 className="mb-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               {t("schedules.newHeading")}
             </h3>
             <div className="grid gap-3">
@@ -265,9 +265,9 @@ export function ScheduleDrawer({
                   value={cron}
                   onChange={(e) => setCron(e.target.value)}
                   placeholder="0 7 * * 1"
-                  className="h-7 font-mono text-[11px]"
+                  className="h-7 font-mono text-2xs"
                 />
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {t("schedules.cronFieldsHint")}
                 </p>
               </div>
@@ -308,7 +308,7 @@ export function ScheduleDrawer({
 function FormatBadge({ format }: { format: "pdf" | "xlsx" | "docx" | "csv" }) {
   const Icon = format === "xlsx" ? FileSpreadsheet : format === "csv" ? FileCode : FileText;
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+    <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-2xs font-medium uppercase text-muted-foreground">
       <Icon className="h-3 w-3" />
       {format}
     </span>

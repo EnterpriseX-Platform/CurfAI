@@ -86,7 +86,7 @@ export function RetailPackCard({ dataKey, canSetUp }: {
           </span>
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">{t("tables.retail.heading")}</h2>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {missing ? t("tables.retail.subtext") : t("tables.retail.subtextReady")}
             </p>
             {status.reports.length > 0 && (

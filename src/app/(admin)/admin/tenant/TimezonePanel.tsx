@@ -51,7 +51,7 @@ export function TimezonePanel({ initial }: { initial: string | null }) {
 
   return (
     <section className="mb-8 rounded-lg border bg-card p-5 shadow-xs">
-      <p className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="mb-3 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         <Clock className="h-3.5 w-3.5" /> {t("adminTenant.timezone.title")}
       </p>
       <div className="flex flex-wrap items-end gap-3">

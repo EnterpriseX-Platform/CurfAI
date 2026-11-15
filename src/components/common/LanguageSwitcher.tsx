@@ -39,7 +39,7 @@ export function LanguageSwitcher({
       <DropdownMenuContent align="end" className="w-40">
         {LOCALES.map((l) => (
           <DropdownMenuItem key={l} onClick={() => setLocale(l)}>
-            <span className="mr-2 w-5 font-mono text-[10.5px] text-muted-foreground">{LOCALE_CODES[l]}</span>
+            <span className="mr-2 w-5 font-mono text-2xs text-muted-foreground">{LOCALE_CODES[l]}</span>
             {LOCALE_LABELS[l]}
             {l === locale && <span className="ml-auto text-primary">•</span>}
           </DropdownMenuItem>

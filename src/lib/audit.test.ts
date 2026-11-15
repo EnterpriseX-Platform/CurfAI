@@ -17,11 +17,15 @@ vi.mock("@/lib/db", () => ({
 const systemScope = vi.hoisted(() => vi.fn((fn: () => Promise<unknown>) => fn()));
 vi.mock("@/lib/dbContext", () => ({ withSystemDbContext: systemScope }));
 // The request being handled, as next/headers exposes it inside a route
-// handler; null = outside any request (cron script, test), where it throws.
+// handler (a promise since Next 15); null = outside any request (cron
+// script, test), where it throws.
 const current = vi.hoisted(() => ({ headers: null as Headers | null }));
 vi.mock("next/headers", () => ({
-  headers: () => { if (!current.headers) throw new Error("outside a request scope"); return current.headers; },
+  headers: () => { if (!current.headers) throw new Error("outside a request scope"); return Promise.resolve(current.headers); },
 }));
+
+// recordAudit returns at once and writes the row behind the request.
+const flush = () => new Promise((r) => setTimeout(r, 0));
 
 import { recordAudit, persistAudit } from "./audit";
 
@@ -32,22 +36,25 @@ beforeEach(() => {
 });
 
 describe("recordAudit — tenantId: null", () => {
-  it("writes the row with a null tenantId instead of a fake sentinel string", () => {
+  it("writes the row with a null tenantId instead of a fake sentinel string", async () => {
     recordAudit({ tenantId: null, userEmail: "a@b.com", kind: "waitlist.invite" as any });
+    await flush();
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(createMock.mock.calls[0][0].data.tenantId).toBeNull();
   });
 
-  it("still drops the event and warns when tenantId is merely omitted (no user either)", () => {
+  it("still drops the event and warns when tenantId is merely omitted (no user either)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     recordAudit({ kind: "signin" as any });
+    await flush();
     expect(createMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 
-  it("still falls back to user.tenantId when tenantId is omitted but a user is given", () => {
+  it("still falls back to user.tenantId when tenantId is omitted but a user is given", async () => {
     recordAudit({ user: { tenantId: "t1", email: "a@b.com" } as any, kind: "signin" as any });
+    await flush();
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(createMock.mock.calls[0][0].data.tenantId).toBe("t1");
   });
@@ -58,6 +65,7 @@ describe("recordAudit — tenantId: null", () => {
 describe("which scope an audit row is written in", () => {
   it("writes a platform-level row (tenantId null) in the system scope", async () => {
     recordAudit({ tenantId: null, userEmail: "a@b.com", kind: "waitlist.invite" as any });
+    await flush();
     await persistAudit({ tenantId: null, userEmail: "a@b.com", kind: "waitlist.invite" as any });
     expect(systemScope).toHaveBeenCalledTimes(2);
     expect(createMock).toHaveBeenCalledTimes(2);
@@ -65,6 +73,7 @@ describe("which scope an audit row is written in", () => {
 
   it("writes a workspace's row as the request, never in the system scope", async () => {
     recordAudit({ user: { tenantId: "t1", email: "a@b.com" } as any, kind: "signin" as any });
+    await flush();
     await persistAudit({ tenantId: "t1", kind: "incident.ack" as any });
     expect(systemScope).not.toHaveBeenCalled();
     expect(createMock).toHaveBeenCalledTimes(2);
@@ -74,21 +83,25 @@ describe("which scope an audit row is written in", () => {
 // BE-SEC-05 — NextAuth's signIn event and the failed-password path call
 // recordAudit with no request in hand; every sign-in row had ip NULL.
 describe("the caller's address on rows written without a request", () => {
-  it("is read from the request being handled", () => {
+  it("is read from the request being handled", async () => {
     current.headers = new Headers({ "x-forwarded-for": "203.0.113.9", "user-agent": "probe-agent" });
     recordAudit({ user: { tenantId: "t1", email: "a@b.com" } as any, kind: "signin" as any });
+    current.headers = null; // the request has ended: its headers were already taken
+    await flush();
     expect(createMock.mock.calls[0][0].data).toMatchObject({ ip: "203.0.113.9", userAgent: "probe-agent" });
   });
 
-  it("an explicit request still wins", () => {
+  it("an explicit request still wins", async () => {
     current.headers = new Headers({ "x-forwarded-for": "203.0.113.9" });
     const req = { headers: new Headers({ "x-forwarded-for": "198.51.100.7" }) } as any;
     recordAudit({ user: { tenantId: "t1", email: "a@b.com" } as any, kind: "report.create" as any, req });
+    await flush();
     expect(createMock.mock.calls[0][0].data.ip).toBe("198.51.100.7");
   });
 
-  it("outside any request the row is still written, without an address", () => {
+  it("outside any request the row is still written, without an address", async () => {
     recordAudit({ user: { tenantId: "t1", email: "a@b.com" } as any, kind: "signin" as any });
+    await flush();
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(createMock.mock.calls[0][0].data.ip).toBeNull();
   });

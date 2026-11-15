@@ -1,16 +1,15 @@
 /**
  * GET /i18n/<locale> — one language's words as a script the browser keeps,
- * compressed by the route itself (Next doesn't compress a route handler's
- * response; uncompressed, Thai is 758 KB).
+ * left to Next to compress (Next 15.5.29 drops a route handler's own
+ * Content-Encoding, so a body the route compressed itself is unreadable).
  */
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { GET } from "./route";
 import { DICT, messagesVersion } from "@/lib/i18n/dict";
 
 const get = (locale: string, query = "", acceptEncoding?: string) =>
-  GET(new NextRequest(`http://localhost/i18n/${locale}${query}`, { headers: acceptEncoding ? { "accept-encoding": acceptEncoding } : {} }), { params: { locale } });
+  GET(new NextRequest(`http://localhost/i18n/${locale}${query}`, { headers: acceptEncoding ? { "accept-encoding": acceptEncoding } : {} }), { params: Promise.resolve({ locale }) });
 const bytes = async (res: Response) => Buffer.from(await res.arrayBuffer());
 
 describe("GET /i18n/<locale>", () => {
@@ -25,19 +24,11 @@ describe("GET /i18n/<locale>", () => {
     expect(self.__CURF_I18N__.th).toEqual(DICT.th);
   });
 
-  it("is compressed for a browser that takes Brotli or gzip, and says which", async () => {
+  it("is the plain script whatever the browser accepts: compression is Next's", async () => {
     const plain = await bytes(await get("th"));
-    const br = await get("th", "", "gzip, deflate, br, zstd");
-    expect(br.headers.get("content-encoding")).toBe("br");
-    expect(br.headers.get("vary")).toBe("Accept-Encoding");
-    const brBody = await bytes(br);
-    expect(brotliDecompressSync(brBody).equals(plain)).toBe(true);
-    expect(brBody.length).toBeLessThan(plain.length / 4);
-    expect(br.headers.get("content-length")).toBe(String(brBody.length));
-
-    const gzRes = await get("th", "", "gzip, deflate");
-    expect(gzRes.headers.get("content-encoding")).toBe("gzip");
-    expect(gunzipSync(await bytes(gzRes)).equals(plain)).toBe(true);
+    const res = await get("th", "", "gzip, deflate, br, zstd");
+    expect(res.headers.get("content-encoding")).toBeNull();
+    expect((await bytes(res)).equals(plain)).toBe(true);
   });
 
   it("is kept for a year only when asked for with the current version", async () => {

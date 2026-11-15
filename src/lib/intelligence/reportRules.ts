@@ -15,13 +15,15 @@
  * the read-only scan of existing reports (scripts/report-rules/scan.ts,
  * bundled to run inside the pod) and the viewer's quality note.
  */
+import type { KpiAsk } from "./kpiMatch";
 import type { Report } from "@/lib/reporting/schema";
 import { formatCell } from "@/lib/reporting/format";
-import { detectNumberRules, type NumberRuleFix } from "./reportRulesNumbers";
+import { detectNumberRules, type NumberRuleFix, type RateParts } from "./reportRulesNumbers";
+import { absurdPercents, cleanScript, scriptLeaks } from "./narrativeChecks";
 
-export { applyRuleFix, targetFromLabel, type NumberRuleFix } from "./reportRulesNumbers";
+export { applyRuleFix, targetFromLabel, type NumberRuleFix, type RateParts } from "./reportRulesNumbers";
 
-export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10" | "R11" | "R12" | "R13" | "R14" | "R15" | "R16" | "R17" | "R18" | "R19" | "R20" | "R21" | "R22";
+export type RuleId = "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10" | "R11" | "R12" | "R13" | "R14" | "R15" | "R16" | "R17" | "R18" | "R19" | "R20" | "R21" | "R22" | "R23" | "R24" | "R25" | "R26" | "R27" | "R28" | "R29" | "R30" | "R31" | "R32" | "R33" | "R34" | "R35";
 
 export type ReportRule = {
   id: RuleId;
@@ -34,6 +36,12 @@ export type ReportRule = {
   check: string;
   /** What happens to a report that still breaks the rule after review. */
   onFail: string;
+  /**
+   * Where the rule applies: a report (the default — the gate, the design and
+   * review prompts), or the narrative written for executives around reports
+   * (the Brief's stories, an app's headline and goals: lib/brief.ts), or both.
+   */
+  surfaces?: Array<"report" | "executive">;
 };
 
 export const REPORT_RULES: ReportRule[] = [
@@ -130,8 +138,8 @@ export const REPORT_RULES: ReportRule[] = [
     title: "A target stated in a KPI's label is the KPI's plan",
     ai: "A KPI whose label states a target (\"target 85%\", \"เป้าหมาย ≤ 35%\") carries it as the KPI's \"plan\" (a rate as a fraction: 0.85) — set sparkPositive \"down\" when lower is better — so the card shows how far it is from plan.",
     enforcement: "code",
-    check: "A KPI label with a target (target / เป้าหมาย / 目标, an optional ≥ ≤ at least / not exceeding, a number and %) whose KPI is a percent or a number and has neither plan nor planField.",
-    onFail: "Fixed automatically — the plan is set from the label (lower-is-better targets set sparkPositive down).",
+    check: "A KPI label with a target (target / เป้าหมาย / 目标, an optional ≥ ≤ at least / not exceeding, a number and %) whose KPI is a percent or a number and has neither plan nor planField. When the brief named the KPI with a target (kpiAsks, matched by name in any language: kpiMatch.ts), that target is its plan — a rate target only on a percent KPI, a plain one only on a number.",
+    onFail: "Fixed automatically — the plan is set from the label or the brief (lower-is-better targets set sparkPositive down).",
   },
   {
     id: "R13",
@@ -213,7 +221,117 @@ export const REPORT_RULES: ReportRule[] = [
     check: "A bar, line, area or combo chart with a series that is blank in some rows while others have a value (a bar missing among bars); a table column with blanks (a note for the verifier); a chart value more than 10 times the median and 3 times the next (a note for the verifier).",
     onFail: "Kept with a note for a missing bar; the rest is a note for the repair brief.",
   },
+  {
+    id: "R23",
+    title: "A table on a card lists at most 25 rows",
+    ai: "A table block is a short list (the top 10-20 rows, ORDER BY the measure, LIMIT 25 at most): never 50 or 100 rows that scroll inside a card. The rest is one click away in a KPI's drill-down.",
+    enforcement: "code",
+    check: "A table block whose query returns more than 25 rows (TABLE_CARD_MAX_ROWS) — at 41px a row, 50 rows are 3,000px of list inside a card.",
+    onFail: "Fixed automatically — the query is limited to 25 rows, when only that table reads it, no drill-down opens it and its title does not promise more; otherwise flagged.",
+  },
+  {
+    id: "R24",
+    title: "One number sits on one card",
+    ai: "A figure appears on one KPI card. Two cards that read the same value (same column, same aggregate, same filters) are one card said twice: keep the better-labelled one, with its target and drill-down.",
+    enforcement: "code",
+    check: "Two or more KPI blocks whose value is the same select item with the same aggregate and format over the same query text (a repeated query under another id counts).",
+    onFail: "On a new report the repeat is dropped (its plan or drill-down moves to the card that stays), unless the brief named both or something else refers to it; on a saved report it is flagged and the verifier's repair drops it.",
+  },
+  {
+    id: "R25",
+    title: "A KPI's label says what its number is",
+    ai: "A KPI's words and its number agree: an amount is never read from a count of rows, and a unit phrase in the label (in hundreds of baht, in millions) is there only when the query divides by it. Money is stored in baht and the card compacts it, so leave unit phrases out.",
+    enforcement: "code",
+    check: "A KPI label with a unit phrase (หน่วยร้อยบาท, in thousands, 万元) whose query divides by another scale (or none), or a governed metric (always baht); a KPI whose label names an amount (ยอดเงิน, บาท, budget) with no count word, over a COUNT or a count column.",
+    onFail: "A unit phrase the number does not have is taken off the label (and its translations); an amount label over a count is flagged, and the verifier's recomputation and repair brief name the column that holds the amount.",
+  },
+  {
+    id: "R26",
+    title: "A rate is the sum of its parts, not an average of rates",
+    ai: "A rate, share or percent over many rows is SUM(numerator) * 1.0 / NULLIF(SUM(denominator), 0) from the amounts it is made of. Never AVG a rate or percent column: rows of different size count equally in an average, so it is not the overall rate (an average collection rate of 75.7% where the true rate is 88.0%).",
+    enforcement: "code",
+    check: "A KPI whose value is an AVG over a rate-like column (name ends or starts _pct, _percent, _rate, _ratio, _share) on a percent or share card, not governed by a metric.",
+    onFail: "On a new report the query is rewritten to the weighted ratio when the table holds the numerator and the denominator (found by testing which two columns reproduce the rate on every row); otherwise, and on a saved report, it is flagged and the verifier's repair brief names the rule.",
+  },
+  {
+    id: "R27",
+    title: "A KPI card shows a number",
+    ai: "Every KPI card has a value: its query returns a row whose value field is a number. A figure the data cannot give (a filter that matches nothing, a column that is empty) is left off, not drawn as a dash.",
+    enforcement: "code",
+    check: "A KPI block whose query returns rows but whose value field is empty or not a number in them (the card would read a dash).",
+    onFail: "On a new report the card is removed and named in the quality note (a KPI the brief asked for is then re-added by the build's completion when the data can answer it); on a saved report, or when something else refers to the card, it is flagged.",
+  },
+  {
+    id: "R28",
+    title: "A card labelled a rate shows a rate",
+    ai: "A KPI whose label says rate, share or ratio shows a ratio: its query divides one amount by another (SUM(part) * 1.0 / NULLIF(SUM(whole), 0)) and the card is formatted as a percent. Never label a baht total or a count \"rate\", and never read the numerator of a rate off as the card's value.",
+    enforcement: "code",
+    check: "A KPI, not governed by a metric, whose label names a rate, share or ratio (not a change or growth), whose format is not percent, whose query contains no division, and whose value is money or above 100.",
+    onFail: "On a new report the card is removed and named in the quality note (a KPI the brief asked for is then re-added by the build's completion from a governed metric or a model-written block that divides); on a saved report it is flagged and the verifier's repair brief names the rule.",
+  },
+  {
+    id: "R29",
+    title: "Text in a language is written in that language's script",
+    ai: "Write each language in its own script: Thai text holds no Chinese characters, Chinese text no Thai, English neither. Names quoted from the data stay as they are.",
+    enforcement: "code",
+    check: "Every translation (a block's i18n, the report's nameI18n/descriptionI18n), and the report's own words in the language it was built in, is scanned for letters of another script than its language's own and Latin (Han or kana inside Thai, Thai inside Chinese, either inside English); a run that is part of a value in the results or a name on the report is a quote and passes (narrativeChecks.ts scriptLeaks). The Brief's stories and an app's goals get the same check against the reader's language.",
+    onFail: "Fixed automatically: a translation with a leak is taken out, so the reader sees the report's own words; a leaked run in the report's own words is taken out when it is a minority of the text (a caption or subtitle that is mostly another script is left out); otherwise flagged. A goal or story shows another language's text, or nothing, instead.",
+    surfaces: ["report", "executive"],
+  },
+  {
+    id: "R30",
+    title: "No percentage a reader can't believe",
+    ai: "Never write a percentage beyond ±1000%, or a share of a whole (weight, contribution, \"of the total\") above 100%: those come from dividing by a near-zero base. Say the two values instead (\"from 0.3 to 43\").",
+    enforcement: "code",
+    check: "A percentage in a caption, subtitle or executive story beyond ±1000%, or above 100% next to a share word (weight, share, contribution, of the total, สัดส่วน, น้ำหนัก, 占比, 权重) — narrativeChecks.ts absurdPercents. The attribution that fed the Brief such shares (causal.ts) no longer states a segment's share when it exceeds the whole move, and a KPI change that large is described by its two values.",
+    onFail: "The clause holding it is dropped when its sentence stands without it, else the sentence; a caption or subtitle left empty is dropped, and a story whose title or lead is left empty is not shown.",
+    surfaces: ["report", "executive"],
+  },
+  {
+    id: "R31",
+    title: "A headline never says all is well while a number is behind plan",
+    ai: "Never write that everything is fine, quiet or on track while a headline number is behind its plan or flagged.",
+    enforcement: "code",
+    check: "The Brief's and an app's headline is chosen from the pinned numbers' statuses (lib/brief.ts composeHeadline): \"all quiet\" only when no number moved and none is behind its plan; a number behind plan makes the headline name it, and the stories fall back to the rule-based ones (which list it) when the AI's stories are empty.",
+    onFail: "Fixed automatically — the headline names the number behind plan.",
+    surfaces: ["executive"],
+  },
+  {
+    id: "R32",
+    title: "Executive stories use plain words",
+    ai: "Write for an executive, not an analyst: no \"attribution\", \"deltas\", \"near-zero\", \"cohort\", \"p-value\", \"regression\" or \"impact weight\" — say what moved, by how much, and why, in everyday words.",
+    enforcement: "code",
+    check: "A short deny-list of analyst words (attribution, delta, near-zero, cohort, p-value, z-score, standard deviation, confidence interval, regression, impact weight, numerator/denominator, and their Thai and Chinese forms) in a Brief story; a word a KPI or report is named with passes.",
+    onFail: "The clause or sentence holding it is dropped; a story whose title or lead is left empty is not shown.",
+    surfaces: ["executive"],
+  },
+  {
+    id: "R33",
+    title: "Words have no broken characters",
+    ai: "Every title, label and sentence is whole text: no replacement characters (U+FFFD, shown as a diamond with a question mark), no stray question marks inside a word, no Thai vowel or tone mark standing alone. If you cannot write a word correctly, choose a simpler word.",
+    enforcement: "code",
+    check: "A block's title, label, text or subtitle (and the report's name) holding U+FFFD, a Thai tone or vowel mark with no consonant before it, or a question mark between two letters of a word — brokenText() in reportRules.ts.",
+    onFail: "A new report loses the block (its title is the reader's first sight of it) and the build's completion can add it back; a saved report is flagged and the verifier's repair brief names the rule.",
+  },
+  {
+    id: "R34",
+    title: "A percent card shows a percent",
+    ai: "A KPI formatted as a percent holds a ratio (0.18 prints 18%). Never divide a baht total by 100 and call it a percent; divide one amount by another, or format the card as a number.",
+    enforcement: "code",
+    check: "A KPI formatted as a percent whose value is beyond ±10 (printing more than ±1000%) — reportRulesNumbers.ts percentCardViolations.",
+    onFail: "On a new report the card is removed and named in the quality note; on a saved report it is flagged and the verifier's repair brief names the rule.",
+  },
+  {
+    id: "R35",
+    title: "A chart over time has one point per date",
+    ai: "A line, area or bar chart over dates (days, months, years) shows one row per date: GROUP BY the date and add up the measure. Never leave one row per branch, product or channel under each date; to compare them, give each its own column (one series each) or a separate chart.",
+    enforcement: "code",
+    check: "A line, area or bar chart with no colour split, whose x is a date-like column, and whose rows repeat at least two of its x values — reportRulesNumbers.ts (R35).",
+    onFail: "On a new report the chart is removed and named in the quality note; on a saved report it is flagged and the verifier's repair brief names the rule.",
+  },
 ];
+
+const appliesTo = (r: ReportRule, s: "report" | "executive") => (r.surfaces ?? ["report"]).includes(s);
 
 /**
  * Who wrote a saved report's words, for checking one generated before the
@@ -228,7 +346,12 @@ export function authorshipOf(subtitle: string | undefined, planKind?: string): "
 
 /** The rules as prompt lines, for the models that design a report. */
 export function rulesForPrompt(): string[] {
-  return REPORT_RULES.map((r) => `- ${r.ai}`);
+  return REPORT_RULES.filter((r) => appliesTo(r, "report")).map((r) => `- ${r.ai}`);
+}
+
+/** The rules as prompt lines, for the models that write the narrative executives read (the Brief's stories). */
+export function narrativeRulesForPrompt(): string[] {
+  return REPORT_RULES.filter((r) => appliesTo(r, "executive")).map((r) => `- ${r.ai}`);
 }
 
 // ── Detection ──────────────────────────────────────────────────────────
@@ -243,8 +366,32 @@ export type Violation = {
   /** Short English description, for the reviewer and the logs. */
   detail: string;
   /** Deterministic repair the gate applies itself. */
-  fix?: { kind: "limit"; queryId: string; n: number } | { kind: "height"; h: number } | NumberRuleFix;
+  fix?: { kind: "limit"; queryId: string; n: number } | { kind: "height"; h: number } | ScriptFix | NumberRuleFix;
+  /** R26 with no fix yet: the rate column whose parts the gate should look for, then ask again with `rateParts`. */
+  probe?: { table: string; column: string };
 };
+
+/**
+ * R29: a leaked script taken out of the report's words. `lang` set: the
+ * translation at `key` (a block's i18n path, or "nameI18n"/"descriptionI18n"
+ * on the report when `blockId` is null) is deleted, so the reader sees the
+ * report's own words. `lang` null: the base field `key` becomes `to`.
+ */
+export type ScriptFix = { kind: "script"; blockId: string | null; lang: string | null; key: string; to: string | null };
+
+/** The most rows a table on a card lists: longer lists scroll in a card for thousands of pixels (R23). */
+export const TABLE_CARD_MAX_ROWS = 25;
+
+/** Cut a query to `n` rows — its own LIMIT when it ends with one, else wrapped. */
+export function withLimit(sql: string, n: number): string {
+  const trailing = /\blimit\s+\d+\s*;?\s*$/i;
+  return trailing.test(sql) ? sql.replace(trailing, `LIMIT ${n}`) : `SELECT * FROM (${sql.replace(/;\s*$/, "")}) AS limited LIMIT ${n}`;
+}
+
+/** Whether the table's query can be cut for it alone: no other block, and no drill-down, reads it. */
+export function limitableQuery(report: Report, queryId: string): boolean {
+  return JSON.stringify(report.pages).split(`"${queryId}"`).length - 1 === 1;
+}
 
 /** The count a title promises: "Top 10", "10 อันดับ", "อันดับ 1-10", "前10". */
 export function topNFromTitle(title: unknown): number | null {
@@ -528,6 +675,20 @@ export const queryIdOf = (b: { config?: unknown }): string | null => {
   const q = (b as any).config?.queryId;
   return typeof q === "string" ? q : null;
 };
+/** Grow a block and push everything below it down by the same amount. */
+export function resizeBlock(report: Report, id: string, h: number): Report {
+  return {
+    ...report,
+    pages: report.pages.map((p) => {
+      const target = p.blocks.find((b) => b.id === id);
+      if (!target) return p;
+      const bottom = target.y + target.h;
+      const delta = h - target.h;
+      return { ...p, blocks: p.blocks.map((b) => (b.id === id ? { ...b, h } : b.y >= bottom ? { ...b, y: b.y + delta } : b)) };
+    }),
+  };
+}
+
 export const blockTitle = (b: { config?: unknown; type: string; id: string }): string => {
   const c = (b as any).config ?? {};
   return c.title ?? c.label ?? c.text ?? `${b.type} ${b.id}`;
@@ -621,6 +782,12 @@ export function detectViolations(
     subtitle?: string;
     /** The columns of the tables the queries read, by table name — what tells a per-period table from a snapshot (R10). */
     tableColumns?: Record<string, string[]>;
+    /** The KPIs the brief named and the target it gave each (R12 sets a matching KPI's plan from it). */
+    kpiAsks?: KpiAsk[];
+    /** R26: the numerator and denominator of the rate columns the gate probed ("table.column"). */
+    rateParts?: Record<string, RateParts>;
+    /** The language the report was built in — its own words are checked against that script (R29). */
+    locale?: string;
   } = {},
 ): Violation[] {
   const out: Violation[] = [];
@@ -702,6 +869,15 @@ export function detectViolations(
         out.push({ rule: "R6", target: b.id, detail: `"${cfg.title}" has ${rows.length} slices` });
       }
     }
+    // R23 — a table on a card is a short list; the rest opens from a drill-down.
+    if (b.type === "table" && rows.length > TABLE_CARD_MAX_ROWS) {
+      const promised = topNFromTitle(cfg.title);
+      out.push({
+        rule: "R23", target: b.id,
+        detail: `"${cfg.title ?? b.id}" lists ${rows.length} rows on a card (more than ${TABLE_CARD_MAX_ROWS}): the card scrolls`,
+        ...(limitableQuery(report, qid) && (promised == null || promised <= TABLE_CARD_MAX_ROWS) ? { fix: { kind: "limit" as const, queryId: qid, n: TABLE_CARD_MAX_ROWS } } : {}),
+      });
+    }
     // A grid heatmap and a table are sized to the rows they show. Too short
     // grows; too tall shrinks only at full width — a half-width block's row
     // partner may still need the height.
@@ -718,7 +894,7 @@ export function detectViolations(
   }
 
   // R12-R18 — what the report's numbers and words say about each other.
-  out.push(...detectNumberRules(report, dataset, { tableColumns: opts.tableColumns }).filter((v) => !v.info));
+  out.push(...detectNumberRules(report, dataset, { tableColumns: opts.tableColumns, kpiAsks: opts.kpiAsks, rateParts: opts.rateParts }).filter((v) => !v.info));
 
   // R4 — figures in the prose.
   const ground = groundingFor(report, dataset);
@@ -732,8 +908,152 @@ export function detectViolations(
     }
     const missing = ungroundedNumbers(text, ground);
     if (missing.length > 0) out.push({ rule: "R4", target, detail: `the ${target} states ${missing.join(", ")}, which the results don't show` });
+    // R30 — a percentage no reader can believe.
+    const absurd = absurdPercents(text);
+    if (absurd.length > 0) out.push({ rule: "R30", target, detail: `the ${target} states ${absurd.join(", ")}, beyond any share or change a reader can use` });
+  }
+
+  out.push(...detectScriptLeaks(report, dataset, opts));
+  out.push(...detectBrokenText(report));
+  return out;
+}
+
+/** A Thai mark that cannot stand first: a vowel above/below or a tone mark with nothing before it, or after a space. */
+const THAI_ORPHAN_MARK = /(?:^|[\s(\[\-–/])[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/;
+/** A question mark with a letter on each side: a character lost on its way in ("จาดซื้?จาดจ้าง"), not a question. */
+const INNER_QUESTION = /[\p{L}\p{M}]\?[\p{L}\p{M}]/u;
+
+/** R33: what in `text` is broken, or null. */
+export function brokenText(text: string): string | null {
+  if (text.includes("\uFFFD")) return "a replacement character";
+  if (THAI_ORPHAN_MARK.test(text)) return "a Thai vowel or tone mark with no consonant";
+  if (INNER_QUESTION.test(text)) return "a question mark inside a word";
+  return null;
+}
+
+function detectBrokenText(report: Report): Violation[] {
+  const out: Violation[] = [];
+  const name = brokenText(report.name ?? "");
+  if (name) out.push({ rule: "R33", target: "report", detail: `the report's name holds ${name}` });
+  for (const b of report.pages.flatMap((p) => p.blocks)) {
+    const cfg = (b as any).config ?? {};
+    for (const key of TEXT_FIELDS) {
+      const text = cfg[key];
+      const broken = typeof text === "string" ? brokenText(text) : null;
+      if (broken) { out.push({ rule: "R33", target: b.id, detail: `"${blockTitle(b)}" ${key} holds ${broken}` }); break; }
+    }
   }
   return out;
+}
+
+/** Strings a report may quote in any script: values in its results, and its own names. */
+export function quotableStrings(dataset: Dataset): string[] {
+  const out = new Set<string>();
+  for (const rows of Object.values(dataset)) {
+    for (const row of rows.slice(0, 500)) {
+      for (const v of Object.values(row ?? {})) if (typeof v === "string" && v.length >= 2 && v.length <= 200) out.add(v);
+    }
+    if (out.size > 5000) break;
+  }
+  return [...out];
+}
+
+/** The base fields of a block that hold words a reader sees. */
+const TEXT_FIELDS = ["title", "label", "text", "subtitle"] as const;
+
+/**
+ * R29 — words for one language holding another script. Translations are
+ * always checked (each says which language it is); the report's own words
+ * only when the gate says which language it was built in. The caption and
+ * subtitle a model wrote are the gate's to rewrite, so they are reported by
+ * that name, not as a block.
+ */
+function detectScriptLeaks(report: Report, dataset: Dataset, opts: { caption?: string; subtitle?: string; locale?: string }): Violation[] {
+  const out: Violation[] = [];
+  let allow: string[] | null = null;
+  const leaks = (text: unknown, lang: string): string[] => {
+    if (typeof text !== "string" || !text) return [];
+    // Cheap first pass with nothing allowed; only text that leaks pays for the quote list.
+    if (scriptLeaks(text, lang).length === 0) return [];
+    allow ??= quotableStrings(dataset);
+    return scriptLeaks(text, lang, allow);
+  };
+  const base = (blockId: string | null, key: string, text: unknown, name: string) => {
+    if (!opts.locale) return;
+    const found = leaks(text, opts.locale);
+    if (found.length === 0) return;
+    const to = cleanScript(text as string, opts.locale, allow ?? undefined);
+    out.push({
+      rule: "R29", target: blockId ?? "report",
+      detail: `${name} is meant to be ${opts.locale} but holds ${found.join(", ")}`,
+      ...(to ? { fix: { kind: "script" as const, blockId, lang: null, key, to } } : {}),
+    });
+  };
+  const translated = (blockId: string | null, lang: string, key: string, text: unknown, name: string) => {
+    const found = leaks(text, lang);
+    if (found.length === 0) return;
+    out.push({ rule: "R29", target: blockId ?? "report", detail: `${name} (${lang}) holds ${found.join(", ")}`, fix: { kind: "script", blockId, lang, key, to: null } });
+  };
+
+  for (const map of ["nameI18n", "descriptionI18n"] as const) {
+    for (const [lang, text] of Object.entries(((report as any)[map] ?? {}) as Record<string, string>)) {
+      translated(null, lang, map, text, `the report's ${map === "nameI18n" ? "name" : "description"}`);
+    }
+  }
+  base(null, "name", report.name, "the report's name");
+  base(null, "description", report.description, "the report's description");
+  for (const b of report.pages.flatMap((p) => p.blocks)) {
+    const cfg = (b as any).config ?? {};
+    const name = `"${blockTitle(b)}"`;
+    for (const [lang, entries] of Object.entries(((b as any).i18n ?? {}) as Record<string, Record<string, string>>)) {
+      for (const [path, text] of Object.entries(entries ?? {})) translated(b.id, lang, path, text, `${name} ${path}`);
+    }
+    for (const key of TEXT_FIELDS) {
+      const text = cfg[key];
+      if (typeof text !== "string") continue;
+      const prose = key === "text" && b.type === "text" && opts.caption && text === opts.caption ? "caption"
+        : key === "subtitle" && b.type === "title" && opts.subtitle && text === opts.subtitle ? "subtitle"
+        : null;
+      if (prose) {
+        const found = opts.locale ? leaks(text, opts.locale) : [];
+        if (found.length) out.push({ rule: "R29", target: prose, detail: `the ${prose} holds ${found.join(", ")}` });
+        continue;
+      }
+      base(b.id, key, text, `${name} ${key}`);
+    }
+  }
+  return out;
+}
+
+/** Apply an R29 fix: a translation with a leak is deleted, a base field takes its cleaned text. Null when there was nothing to change. */
+export function applyScriptFix(report: Report, fix: ScriptFix): { report: Report; title: string } | null {
+  const next = structuredClone(report);
+  if (fix.blockId == null) {
+    if (fix.lang) {
+      const map = (next as any)[fix.key] as Record<string, string> | undefined;
+      if (!map || !(fix.lang in map)) return null;
+      delete map[fix.lang];
+    } else {
+      if (fix.to == null || (next as any)[fix.key] === fix.to) return null;
+      (next as any)[fix.key] = fix.to;
+    }
+    return { report: next, title: next.name };
+  }
+  for (const p of next.pages) {
+    const b = p.blocks.find((x) => x.id === fix.blockId) as any;
+    if (!b) continue;
+    if (fix.lang) {
+      const entries = b.i18n?.[fix.lang];
+      if (!entries || !(fix.key in entries)) return null;
+      delete entries[fix.key];
+      if (Object.keys(entries).length === 0) delete b.i18n[fix.lang];
+    } else {
+      if (fix.to == null || b.config?.[fix.key] === fix.to) return null;
+      b.config[fix.key] = fix.to;
+    }
+    return { report: next, title: blockTitle(b) };
+  }
+  return null;
 }
 
 /** Words a caption uses when it was written from the sample rows it was shown. */

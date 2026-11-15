@@ -7,11 +7,12 @@ import { SchedulesManager } from "./SchedulesManager";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { canBuild } from "@/lib/roles";
+import { ee } from "@/ee";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -19,7 +20,7 @@ export default async function SchedulesPage() {
   const session = await getSession();
   const user = (session?.user as any) ?? null;
   if (!session) redirect("/login?callbackUrl=/schedules");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   const reports = await prisma.report.findMany({
     where: { tenantId: user.tenantId }, orderBy: { name: "asc" },
@@ -28,16 +29,17 @@ export default async function SchedulesPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "schedules.breadcrumb") }]}>
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "schedules.pageTitle")} description={t(locale, "schedules.pageSubtitle")} />
 
         <SchedulesManager reports={reports} canManage={canBuild(user.role)} />
+        {ee.briefs ? await ee.briefs.scheduledBriefs() : null}
         <div className="mt-10 rounded-lg border border-dashed bg-muted/30 p-5 text-xs text-muted-foreground">
           <p className="mb-2 font-semibold text-foreground">{t(locale, "schedules.cronRunnerTitle")}</p>
           <p className="mb-2">
             {t(locale, "schedules.cronRunnerBody")}
           </p>
-          <pre className="overflow-auto rounded bg-background p-2 font-mono text-[11px]">
+          <pre className="overflow-auto rounded bg-background p-2 font-mono text-2xs">
 {`# Example cron entry: every Monday 07:00
 0 7 * * 1  curl -sX POST https://reports.example.com/api/schedules/<id>/run \\
              -H "Authorization: Bearer $API_TOKEN" -o - \\

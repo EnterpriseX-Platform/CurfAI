@@ -73,6 +73,26 @@ model Tenant {
   // Subscription tier - source of truth for feature gates. Updated by the
   // Stripe webhook on subscription lifecycle events. See src/lib/billing.ts.
   tier                     String        @default("community") // community | growth | business | enterprise
+  // Whether the workspace may be used. "suspended" ends access for its
+  // members, its API keys and its scheduled jobs at once; nothing is deleted.
+  // Set only by a Curf operator (lib/platform/tenants.ts), always with a
+  // reason, and audited against the workspace.
+  status                   String        @default("active") // active | suspended | pending_deletion
+  suspendedAt              DateTime?
+  suspendedReason          String?
+  // Set while status = "pending_deletion": who asked (email), when, and when the
+  // purge may run (lib/lifecycle/deletion.ts). Closed to everyone like a
+  // suspension; restoring clears all three.
+  deletionRequestedBy      String?
+  deletionRequestedAt      DateTime?
+  deletionPurgeAt          DateTime?
+  // What the workspace was before it was scheduled ("active" or "suspended"), so cancelling the deletion puts it back
+  // exactly there — a workspace suspended for abuse must not come back active just because a deletion was withdrawn.
+  deletionPriorStatus      String?
+  exports                  WorkspaceExport[]
+  // An operator-set tier and limit overrides (a signed contract, a granted
+  // trial). No row = Stripe decides the tier, exactly as before.
+  entitlement              TenantEntitlement?
   // Cached Stripe state. Empty until the tenant first opens a checkout.
   stripeCustomerId         String?       @unique
   stripeSubscriptionId     String?       @unique
@@ -250,11 +270,11 @@ model Tenant {
   publicShareTokens        PublicShareToken[]
   apiKeys                  ApiKey[]
   passwordResetTokens      PasswordResetToken[]
-  auditEvents              AuditEvent[]
   dashboards               Dashboard[]
   dashboardKioskTokens     DashboardKioskToken[]
   onScreenDisplays         OnScreenDisplay[]
   onScreenKioskTokens      OnScreenDisplayKioskToken[]
+  onScreenPairingCodes     OnScreenPairingCode[]
   snippets                 Snippet[]
   apps                     App[]
   appScenarios             AppScenario[]
@@ -262,6 +282,9 @@ model Tenant {
   lakeTables               LakeTable[]
   lakeImportMappings       LakeImportMapping[]
   strategistQuestions      StrategistQuestion[]
+  agentBriefs              AgentBrief[]
+  inboxItemStates          InboxItemState[]
+  recentViews              RecentView[]
   companyProfileVersions   CompanyProfileVersion[]
   aiJobs                   AiJob[]
   lakeIngestTokens         LakeIngestToken[]
@@ -300,6 +323,21 @@ model User {
   // When the password was last set by a reset. Sessions authenticated before
   // it are signed out on their next periodic re-check (lib/auth.ts jwt()).
   passwordChangedAt DateTime?
+  // When this email address was shown to belong to the person: they followed
+  // the link we mailed (EmailVerificationToken), set a password through a
+  // reset or invite link, signed in with a provider that verified it, or
+  // signed up from a waitlist invite sent to it. null = never proven.
+  emailVerifiedAt   DateTime?
+  // Existed before email verification shipped (migration
+  // 20261113120000_email_verification): unverified, but never locked out of
+  // password sign-in. A new account that is unverified is, once the platform
+  // can send mail (lib/emailVerification.ts).
+  emailVerifyGrandfathered Boolean         @default(false)
+  // The Keycloak subject (`sub`) this account is linked to (lib/identity, CURF_AUTH=keycloak). Set on the first Keycloak
+  // sign-in, matched by verified email only; after that the sub, not the email, identifies the person.
+  keycloakSub       String?            @unique
+  // When a password account was moved into Keycloak (the local bcrypt hash was verified once and handed over).
+  identityMigratedAt DateTime?
   // Per-user preferences. JSON shape:
   //   { themeOverride?: Theme | null,    // forces this theme regardless of report.theme
   //     mode?: "light" | "dark" | "auto",
@@ -319,6 +357,26 @@ model User {
   attributes        UserAttribute[]
   memberships       Membership[]
   orgMemberships    OrgMembership[]
+  emailVerificationTokens EmailVerificationToken[]
+}
+
+// ---------- Thai billing (src/lib/invoicing, docs/THAI_BILLING.md) ----------
+
+// Who is invoiced: the organisation's legal identity for tax documents. One per organisation; the workspaces under it share it.
+// Organisation-scoped (no tenantId), so row-level security does not cover it: access goes through the organisation-admin check.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // The address this link proves. If the account's email has changed since,
+  // the link verifies nothing.
+  email     String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
 }
 
 // Which workspaces a User belongs to, and their role (+ custom roles) in
@@ -886,31 +944,35 @@ model AppScenario {
 // (P3) are rows with no userId. Reporting lines (managerId) decide "my team",
 // who someone may delegate to, and who an overdue item escalates to.
 model AuditEvent {
-  id             String   @id @default(cuid())
+  id               String   @id @default(cuid())
   // Nullable for a genuine platform-level action with no tenant yet
   // (waitlist invite/approve/deny — see WaitlistRequest's own "not
   // tenant-scoped" note). recordAudit() only writes null here when the
   // caller explicitly passes `tenantId: null`; every other call site keeps
   // requiring a real tenantId, so this doesn't loosen the normal case.
-  tenantId       String?
-  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userId         String?
-  userEmail      String?
+  //
+  // Deliberately NOT a foreign key to Tenant: deleting a workspace used to
+  // cascade its whole audit trail away, including the "tenant.delete" row
+  // itself. The id stays on each row after the workspace is gone, so the
+  // trail of who deleted it, and what happened before, survives.
+  tenantId         String?
+  userId           String?
+  userEmail        String?
   // Dotted action namespace: signin, signout, report.create, report.delete,
   // schedule.create, schedule.delete, schedule.update, share.mint, share.revoke,
   // export.pdf, export.xlsx, export.docx, export.csv, role.assign, etc.
-  kind           String
-  target         String?
-  ip             String?
-  userAgent      String?
-  metaJson       String   @default("{}")
-  createdAt      DateTime @default(now())
+  kind             String
+  target           String?
+  ip               String?
+  userAgent        String?
+  metaJson         String   @default("{}")
+  createdAt        DateTime @default(now())
   // Set alongside `tenantId` (still required — pick the tenant active in
   // the actor's session) for an org-level action that isn't naturally
   // scoped to one tenant (granting/revoking Platform Admin, changing a
   // role in a DIFFERENT tenant than the actor's own). Lets an org-wide
   // audit view surface these even though `tenantId` alone can't.
-  organizationId String?
+  organizationId   String?
   // Executive journey P5: an assistant acted for this person (userId is the
   // assistant). Null for everything done in person.
   onBehalfOfUserId String?
@@ -1025,7 +1087,8 @@ model OnScreenDisplay {
   updatedAt          DateTime @updatedAt
   createdById        String
 
-  kioskTokens OnScreenDisplayKioskToken[]
+  kioskTokens  OnScreenDisplayKioskToken[]
+  pairingCodes OnScreenPairingCode[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -1046,6 +1109,26 @@ model OnScreenDisplayKioskToken {
   expiresAt   DateTime?
   revokedAt   DateTime?
   lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime        @default(now())
+
+  @@index([tenantId, onScreenId])
+}
+
+// A short code an admin reads out (or types) on a wall screen, which trades it
+// for that display's kiosk link without anyone pasting a long token into a TV
+// browser. Only a hash of the code is stored; it is single use and lives for
+// minutes. Redeeming it mints an ordinary OnScreenDisplayKioskToken, so
+// revoking the screen is the existing token revoke.
+model OnScreenPairingCode {
+  id          String          @id @default(cuid())
+  tenantId    String
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  onScreenId  String
+  onScreen    OnScreenDisplay @relation(fields: [onScreenId], references: [id], onDelete: Cascade)
+  codeHash    String          @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
   createdById String?
   createdAt   DateTime        @default(now())
 
@@ -1372,6 +1455,22 @@ model LakePull {
 // Each destination can be wired to one or more snapshot kinds (auto +
 // manual). Failures are stored on the BackupShipment row so the admin
 // UI can surface "destination X has been failing for 3 days".
+model StripeEvent {
+  id          String    @id
+  type        String
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([receivedAt])
+}
+
+// Why durable instead of "ask the provider dashboard": each row is
+// already attributed to a tenant + feature + user. Provider consoles
+// only know about the API key — we can't reconstruct who spent it.
+//
+// Cost: stored in micro-USD (millionths of a dollar) so an Int column
+// holds three decimal places of precision without floating-point grief.
+// Per-1M-token rates live in lib/llm/pricing.ts (one table per provider).
 model LlmTokenUsage {
   id                String   @id @default(cuid())
   tenantId          String
@@ -1404,6 +1503,8 @@ model LlmTokenUsage {
   // Optional pointer to the report this call was scoped to (so the
   // usage page can link "$0.32 spent on report X this month").
   reportId          String?
+  // The Master Builder build the call was made for (lib/llm/spendScope.ts), so a build's cost can be summed.
+  buildId           String?
   // Wall-clock duration of the API call in ms. Useful for spotting
   // misconfigured timeouts and provider latency regressions.
   durationMs        Int?
@@ -1421,6 +1522,153 @@ model LlmTokenUsage {
   @@index([tenantId, provider, createdAt])
   @@index([keySource, createdAt])
   @@index([reportId])
+  @@index([buildId])
+}
+
+// The models Curf's own AI runs on, set by a platform admin (/admin/platform/models) instead of the CURF_LLM_* env.
+// Platform-level: no tenantId, so no row-level-security policy; read and written under withSystemDbContext.
+// A workspace on its own key never uses these (lib/llm/credentials.ts).
+model PlatformModel {
+  id             String              @id @default(cuid())
+  // What the platform admin calls it ("Curf AI Trial - Qwen"); never shown to a workspace.
+  name           String
+  // 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
+  provider       String
+  baseUrl        String?
+  // AES-256-GCM (lib/secrets.ts); never returned by the API, only a masked preview.
+  keyEnc         String
+  model          String
+  // Optional model for Q&A-shaped calls (isFastKind in lib/llm).
+  fastModel      String?
+  // Ask the host not to think on every call (CURF_LLM_THINKING=off, per model).
+  thinkingOff    Boolean             @default(false)
+  // Metering rate in USD per 1M tokens; null = the list price in lib/llm/pricing.ts. A self-hosted model has no list price.
+  inputPer1M     Float?
+  outputPer1M    Float?
+  cacheReadPer1M Float?
+  // A trial model: the app tells its users so, next to their credits (GET /api/me/ai-status).
+  trial          Boolean             @default(false)
+  // How many calls may wait for a slot on this model's host, and the longest one may wait (null = unlimited).
+  // Past either, a short call is refused at once ("the trial model is busy") and a long job is refused at its start.
+  maxQueue       Int?
+  maxWaitSec     Int?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  tiers          PlatformTierModel[]
+}
+
+// Which platform model each subscription tier runs on. A tier with no row runs on the CURF_LLM_* env model.
+model PlatformTierModel {
+  tier            String        @id // community | growth | business | enterprise
+  platformModelId String
+  platformModel   PlatformModel @relation(fields: [platformModelId], references: [id], onDelete: Cascade)
+  updatedAt       DateTime      @updatedAt
+}
+
+// What an operator agreed with one workspace, outside self-serve billing: a contract tier or a granted trial, with optional
+// overrides of the plan's limits (lib/entitlements.ts validates limitsJson). Written only by operators, under
+// withSystemDbContext; read by every quota check for the workspace. `source` decides who may change the tier afterwards:
+// "contract" is never overwritten by the Stripe webhook; "trial" gives way to a real paid subscription. validUntil null =
+// no end; once it passes the limits stop applying at once and the cron sweep puts the tier back (lib/platform/tenants.ts).
+model TenantEntitlement {
+  tenantId   String    @id
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source     String // contract | trial
+  tier       String
+  limitsJson String    @default("{}")
+  validUntil DateTime?
+  // Contract number, PO or who agreed it — free text for the operator's own trail.
+  reference  String?
+  updatedBy  String // operator email
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+// A copy of a workspace's own data, as a zip an admin downloads (lib/lifecycle/export.ts). Built in the background; the
+// file lives on disk under the lake directory until expiresAt, or until the workspace is purged. Secrets (keys, tokens,
+// passwords, webhook secrets) are never in it.
+model WorkspaceExport {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedBy String // admin's email
+  // manual | before_deletion (made automatically when a deletion is requested, so nothing is lost)
+  reason      String    @default("manual")
+  status      String    @default("queued") // queued | running | ready | failed | expired
+  filePath    String?
+  sizeBytes   Int?
+  fileCount   Int?
+  error       String?
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  expiresAt   DateTime?
+
+  @@index([tenantId, createdAt])
+  @@index([status, expiresAt])
+}
+
+// The record of a workspace deletion, kept after the workspace is gone: who asked, when, what the purge removed (database
+// rows by cascade, files on disk, backups) and what it could not (copies at an off-site destination). Platform-level and
+// deliberately not a foreign key — targetTenantId is a plain id so the record outlives the workspace. The evidence a
+// customer or an auditor asks for ("was my data deleted, and when?").
+model WorkspaceDeletion {
+  id             String    @id @default(cuid())
+  targetTenantId String    @unique
+  slug           String
+  name           String
+  requestedBy    String
+  requestedAt    DateTime
+  purgeAt        DateTime
+  status         String    @default("scheduled") // scheduled | cancelled | purged
+  cancelledBy    String?
+  cancelledAt    DateTime?
+  purgedAt       DateTime?
+  // JSON: what was removed, step by step (lib/lifecycle/purge.ts).
+  stepsJson      String    @default("[]")
+  // When the workspace's audit rows were removed after their own retention (lib/lifecycle/purge.ts).
+  auditPurgedAt  DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([status, purgeAt])
+}
+
+// A person's request about their own data (export a copy / erase me), with the date it must be answered by. Platform-level
+// like WorkspaceDeletion. Self-service requests from /account are carried out at once and recorded here; a request that
+// arrived by email is logged by an operator and carried out from the console. subjectUserId is a plain id (the account may
+// be erased); subjectEmail is what the person was called when they asked.
+model DataSubjectRequest {
+  id            String    @id @default(cuid())
+  kind          String // export | erasure
+  status        String    @default("received") // received | completed | failed | rejected
+  subjectEmail  String
+  subjectUserId String?
+  channel       String    @default("self_service") // self_service | operator
+  receivedAt    DateTime  @default(now())
+  // PDPA/GDPR: without undue delay, one month at most.
+  dueAt         DateTime
+  completedAt   DateTime?
+  handledBy     String?
+  notes         String?
+
+  @@index([status, dueAt])
+  @@index([subjectUserId])
+}
+
+// A change to a workspace's entitlement, waiting for a second platform operator to approve it (it changes what a customer
+// is billed for or may use). Platform row read and written under withSystemDbContext; targetTenantId is a plain id, not a
+// foreign key, so the record outlives the workspace. Applied by lib/platform/tenants.ts when someone other than the
+// proposer approves; with a single operator there is nobody to wait for and the change applies at once.
+model PlatformModelChange {
+  id              String    @id @default(cuid())
+  tier            String
+  platformModelId String?
+  status          String    @default("pending") // pending | approved | rejected | cancelled
+  proposedBy      String // operator email
+  decidedBy       String?
+  decidedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([status, tier])
 }
 
 // ---------- Outbound webhooks ----------
@@ -1528,21 +1776,21 @@ model WebhookDelivery {
 // surface on /marketplace + are importable. Removal is soft (`status`
 // flip + `removedAt`) so import audit trails remain meaningful.
 model MarketplaceTemplate {
-  id               String                            @id @default(cuid())
+  id                     String                            @id @default(cuid())
   // URL-safe slug used in /marketplace/<slug> + /reports/import?slug=…
   // Unique across the whole platform — collision retry on publish.
-  slug             String                            @unique
+  slug                   String                            @unique
   // Author tenant — used for the "By Acme Inc." attribution and so the
   // author can unpublish their own template later.
-  authorTenantId   String
-  authorTenant     Tenant                            @relation("TemplateAuthor", fields: [authorTenantId], references: [id], onDelete: Cascade)
+  authorTenantId         String
+  authorTenant           Tenant                            @relation("TemplateAuthor", fields: [authorTenantId], references: [id], onDelete: Cascade)
   // Display attribution — workspace name at publish time. Captured
   // because tenant rename shouldn't retroactively re-attribute.
-  authorName       String
+  authorName             String
   // Optional pointer back to the source Report so the author UI can
   // show "Already published" + "Update" affordances. Null when the
   // source was deleted or the template was imported and re-published.
-  sourceReportId   String?
+  sourceReportId         String?
   // Same idea as sourceReportId, for kind="operate" rows (published from
   // an ActionTemplate, not a Report — the two source kinds don't share a
   // table so this needed its own column rather than overloading
@@ -1553,47 +1801,47 @@ model MarketplaceTemplate {
   sourceActionTemplateId String?
   // User-facing fields. `description` supports markdown; rendered with
   // the same renderer the report viewer uses (no script execution).
-  name             String
-  description      String                            @default("")
+  name                   String
+  description            String                            @default("")
   // Free-form category bucket for the picker. Loose taxonomy — we
   // don't enforce a closed enum so new domains (HR, ops, finance)
   // self-organise. Indexed for the category landing page.
-  category         String                            @default("general")
+  category               String                            @default("general")
   // Comma-separated tag list for fuzzy search. SQLite-friendly.
-  tags             String                            @default("")
+  tags                   String                            @default("")
   // Sanitized ReportSchema JSON. See lib/marketplace/sanitize.ts.
-  definitionJson   String
+  definitionJson         String
   // Optional preview image URL. We don't host uploads here yet; if set
   // it's expected to be a public URL the author already has.
-  thumbnailUrl     String?
+  thumbnailUrl           String?
   // What kind of template this is. "report" = a Curf ReportSchema (the
   // historical default; back-compat for every existing row). "operate"
   // = an ActionTemplate definition for the workflow engine. The two
   // share the slug namespace + review/follow/version surface but
   // import to different destinations (/reports/import vs.
   // /operate/templates/import).
-  kind             String                            @default("report")
+  kind                   String                            @default("report")
   // Catalog stats for sorting / showcase.
-  downloads        Int                               @default(0)
+  downloads              Int                               @default(0)
   // Per-template version pointer. Bumped on every republish (UI or
   // v1 API upsert). Subscribers fire a webhook when this changes.
-  currentVersion   Int                               @default(1)
+  currentVersion         Int                               @default(1)
   // Pre-extracted searchable tokens — all block titles, KPI labels,
   // query names, and SQL keywords. JSON-array string. Built at publish
   // time so search queries are a single SQL `contains` against this
   // column instead of a JSON walk per row.
-  searchTokensJson String                            @default("[]")
+  searchTokensJson       String                            @default("[]")
   // Cached aggregate of MarketplaceReview rows for fast card render
   // without a per-card joins. Updated by a setImmediate hook on
   // review create/delete (best-effort; eventually-consistent).
-  ratingAvg        Float                             @default(0)
-  ratingCount      Int                               @default(0)
+  ratingAvg              Float                             @default(0)
+  ratingCount            Int                               @default(0)
   // Lifecycle.
-  status           String                            @default("published") // draft | published | removed
-  publishedAt      DateTime                          @default(now())
-  removedAt        DateTime?
-  createdAt        DateTime                          @default(now())
-  updatedAt        DateTime                          @updatedAt
+  status                 String                            @default("published") // draft | published | removed
+  publishedAt            DateTime                          @default(now())
+  removedAt              DateTime?
+  createdAt              DateTime                          @default(now())
+  updatedAt              DateTime                          @updatedAt
 
   @@index([status, category, publishedAt])
   @@index([authorTenantId])
@@ -1910,20 +2158,22 @@ model JobRun {
 // Lets users rename Salesforce.Opportunity.Owner_c → opp_owner without
 // touching their report SQL.
 model StrategistQuestion {
-  id          String    @id @default(cuid())
-  tenantId    String
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdById String
-  question    String
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdById  String
+  question     String
   // planning | plan_ready | researching | ready | failed | closed
-  status      String    @default("planning")
+  status       String    @default("planning")
   // { steps: [{ title, how }], estimateMinutes }
-  planJson    String?
+  planJson     String?
   // What the research found ({ reply, queries, evidence }), kept so a memo
   // that fails can be written again without redoing the research.
   researchJson String?
+  // As on AskRun: the research's last checkpoint, cleared when the research is saved.
+  checkpointJson String?
   // { answer, checks[], options[], nextSteps[] } — see StrategistMemo
-  memoJson    String?
+  memoJson     String?
   // The company context the memo was written with (StrategistContextStamp):
   // profile version, plans as of, counts — "Based on …" on the memo and paper.
   contextJson  String?
@@ -1936,13 +2186,13 @@ model StrategistQuestion {
   // one: background for the plan and the memo, never evidence it may cite.
   briefing     String?
   // What it did, in order: [{ at, text }]
-  logJson     String    @default("[]")
-  error       String?
+  logJson      String    @default("[]")
+  error        String?
   // Model tokens spent, for the budget line.
-  tokensUsed  Int       @default(0)
-  approvedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  tokensUsed   Int       @default(0)
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   deckVersions StrategistDeckVersion[]
 
@@ -1975,20 +2225,97 @@ model StrategistDeckVersion {
 // person approves its plan — the same run as the Strategist's
 // (lib/agent/deepRun.ts), answering what and why on the workspace's data
 // rather than writing a strategy memo. lib/ask/deepAsk.ts.
+model AgentBrief {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Runs as this person: their access decides what the research can read.
+  createdById          String
+  name                 String
+  question             String
+  // The approved plan ({ steps, estimateMinutes }), as Deep Ask wrote it.
+  planJson             String
+  // daily | weekly
+  cadence              String
+  // 0 = Sunday ... 6 = Saturday; only for weekly.
+  weekday              Int?
+  // Minutes after local midnight, in tz.
+  minutes              Int
+  tz                   String
+  locale               String    @default("en")
+  // Members of this workspace who receive the answer: ["userId", ...]. Never an address, so never outside it.
+  recipientsJson       String    @default("[]")
+  enabled              Boolean   @default(true)
+  // The local day a run was last started: the claim that keeps overlapping ticks from running it twice.
+  lastRunDay           String?
+  // The AskRun of the latest run, and the one already delivered.
+  lastRunId            String?
+  lastDeliveredRunId   String?
+  // started | delivered | failed | skipped_credits | skipped_busy | skipped_plan | disabled
+  lastStatus           String?
+  lastError            String?
+  // Runs that failed in a row; three disable the brief.
+  failureCount         Int       @default(0)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([tenantId, enabled])
+  @@index([enabled, lastStatus])
+}
+
+// The workspace's company profile for the Strategist (Business): what it
+// sells and to whom, where, this year's priorities, what's off-limits.
+// Append-only — each save is a new version, so a memo can say which one it
+// used. The newest row carries the review date and the person who keeps it.
+// lib/executive/companyProfile.ts.
 model CompanyProfileVersion {
-  id           String   @id @default(cuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  version      Int
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  version     Int
   // { sell, customers, markets, priorities: string[], offLimits }
-  bodyJson     String
-  createdById  String
+  bodyJson    String
+  createdById String
   // Who keeps it current — reminded when it goes unreviewed.
-  ownerUserId  String?
+  ownerUserId String?
   // Set when saved, and again when someone confirms it's still right.
-  reviewedAt   DateTime @default(now())
-  createdAt    DateTime @default(now())
+  reviewedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   @@unique([tenantId, version])
   @@index([tenantId, createdAt])
+}
+
+// One person's own handling of an Inbox item (lib/inbox): snoozed until a
+// time, or cleared. Only the person's own view changes; the item itself (an
+// approval, an incident) is untouched and still waits for whoever else it
+// names. itemKey is "<kind>:<source id>" from lib/inbox/items.ts.
+model InboxItemState {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId       String
+  itemKey      String
+  snoozedUntil DateTime?
+  clearedAt    DateTime?
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([tenantId, userId, itemKey])
+}
+
+// What a person opened, for Home's "Pick up where you left off"
+// (lib/home/recent.ts). Only the reference is kept: the title is read again,
+// through the same access rules, whenever the list is shown.
+model RecentView {
+  id       String   @id @default(cuid())
+  tenantId String
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId   String
+  // report | dashboard | table | notebook
+  kind     String
+  refId    String
+  viewedAt DateTime @default(now())
+
+  @@unique([tenantId, userId, kind, refId])
+  @@index([tenantId, userId, viewedAt])
 }

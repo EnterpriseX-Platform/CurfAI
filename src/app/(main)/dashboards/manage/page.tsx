@@ -30,12 +30,12 @@ export default async function DashboardsManagePage() {
   // for non-Business tenants. Same rationale as /data-sources/page.tsx.
   const tier = await loadTenantTier(user.tenantId);
 
-  const cookieLocale = cookies().get("rd_locale")?.value;
+  const cookieLocale = (await cookies()).get("rd_locale")?.value;
   const locale = (cookieLocale && (LOCALES as readonly string[]).includes(cookieLocale) ? cookieLocale : "en") as Locale;
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.dashboards"), href: "/dashboards" }, { label: t(locale, "dashboardsMgr.manage") }]}>
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "nav.dashboards")} description={<>{t(locale, "dashboards.subtitle")} {isAdmin ? t(locale, "dashboards.subtitle.admin") : t(locale, "dashboards.subtitle.viewer")}</>} />
 
         <Suspense fallback={null}>

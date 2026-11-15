@@ -88,7 +88,7 @@ export async function SuggestedTemplates({ tenantId }: { tenantId: string }) {
     <section className="mt-10">
       <div className="mb-4 flex items-end justify-between gap-2">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
             {showMatchHint ? "Suggested for your connections" : "Popular on the marketplace"}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -121,15 +121,15 @@ export async function SuggestedTemplates({ tenantId }: { tenantId: string }) {
               )}
               <div className="p-3">
                 <div className="mb-1 flex items-center gap-2">
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
                     {t.category}
                   </span>
                   {t.matchScore > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success ">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-2xs font-semibold text-success ">
                       Wires to your data
                     </span>
                   )}
-                  <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="ml-auto inline-flex items-center gap-1 text-2xs text-muted-foreground">
                     <Download className="h-3 w-3" /> {t.downloads.toLocaleString()}
                   </span>
                 </div>

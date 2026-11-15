@@ -38,7 +38,7 @@ export function TemplateGallery({ templates }: { templates: GalleryTemplate[] })
   const safeLocale = (locale === "th" || locale === "zh" ? locale : "en") as TemplateLocale;
 
   return (
-    <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
+    <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
       <PageHeader title={t("templates.title")} description={t("templates.subtitle")} />
 
 
@@ -74,7 +74,7 @@ export function TemplateGallery({ templates }: { templates: GalleryTemplate[] })
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
                   {t(`templates.industry.${tpl.industry}`)}
                 </span>
               </div>

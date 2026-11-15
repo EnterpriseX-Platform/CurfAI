@@ -101,7 +101,7 @@ export function UpgradeLock({
     return (
       <span
         className={
-          "inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground " +
+          "inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground " +
           (className ?? "")
         }
         title={t("upgradeLock.inlineTitleTemplate").replace("{feature}", featureLabel).replace("{plan}", requiredPlan.name)}
@@ -128,7 +128,7 @@ export function UpgradeLock({
         {/* Center overlay with the upgrade CTA. Blur backdrop so it floats
             cleanly over busy background content (e.g. a chart preview). */}
         <div className="absolute inset-0 z-10 grid place-items-center p-4">
-          <div className="max-w-sm rounded-2xl border border-border bg-background/95 p-5 text-center shadow-xl backdrop-blur-md">
+          <div className="max-w-sm rounded-2xl border border-border bg-background p-5 text-center shadow-xl">
             <div className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-full bg-muted text-muted-foreground">
               <Sparkles className="h-5 w-5" />
             </div>

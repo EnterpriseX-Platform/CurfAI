@@ -45,7 +45,7 @@ export function ChartHoverTip({ children, className }: { children: ReactNode; cl
       {tip && (
         <div
           role="tooltip"
-          className="pointer-events-none absolute z-30 max-w-xs whitespace-pre-line rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] leading-snug text-popover-foreground shadow-md"
+          className="pointer-events-none absolute z-30 max-w-xs whitespace-pre-line rounded-md border border-border bg-popover px-2.5 py-1.5 text-2xs leading-snug text-popover-foreground shadow-md"
           style={style}
         >
           {tip.text}

@@ -1,16 +1,10 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { signOut, useSession } from "next-auth/react";
-import { useEffect, useRef, useState } from "react";
+import { signOut } from "next-auth/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  Cpu,
-  FileText, Database, LogOut, ChevronDown, Plus, Search, LayoutTemplate, Clock,
-  Shield, ShieldCheck, Users, Radio, KeyRound, History, Building2, Check, CreditCard, Sparkles,
-  Monitor, Mail, Layers, Activity, Webhook, Globe, Zap, Bot, NotebookText,
-  Workflow, LayoutDashboard, Wand2, Menu, Ruler, Target, Rocket, Terminal, Tv, Library, Loader2,
-} from "lucide-react";
+import { LogOut, ChevronDown, Plus, Check, Sparkles, Monitor, Menu, Loader2, UserRound } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -23,8 +17,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { LanguageSwitcher } from "@/components/common/LanguageSwitcher";
+import { AiCreditsChip } from "@/components/layout/AiCreditsChip";
 import { MenuHelpDialog } from "@/components/layout/MenuHelpDialog";
-import { CommandPalette } from "@/components/layout/CommandPalette";
+import { CommandPalette, type LocalPaletteItem } from "@/components/layout/CommandPalette";
+import { SectionColumn, SystemRail, SystemSwitcher, TabBar, useConsoleNav } from "@/components/layout/SystemsNav";
 import { eeClient } from "@/ee/client";
 
 /** Community edition: paid nav, palette and count badges are absent. */
@@ -35,12 +31,10 @@ const IS_COMMUNITY = eeClient.edition === "community";
 // (see src/lib/ee/clientTypes.ts).
 const PastDueBanner = eeClient.layout?.PastDueBanner ?? null;
 import { CurfLogo } from "@/components/common/CurfLogo";
-import { loadNavCounts, onNavCountsRefresh, peekNavCounts, type NavCounts } from "@/lib/navCounts";
 import { useResilientSession } from "@/lib/useResilientSession";
 import { useWorkspaceSwitch } from "@/lib/useWorkspaceSwitch";
 import { RELEASE_LOG } from "@/lib/releaseLog";
 import { useT } from "@/lib/i18n/LocaleContext";
-import { canUseOperateInbox } from "@/lib/roles";
 
 // Single source of truth for the version badge — RELEASE_LOG[0] is always
 // the newest entry (see releaseLog.ts's own "add one entry per version
@@ -60,25 +54,32 @@ export function AppShell({
   children,
   breadcrumbs,
   actions,
+  navExtra,
 }: {
   children: React.ReactNode;
   breadcrumbs?: Array<{ label: string; href?: string }>;
   actions?: React.ReactNode;
+  /** The page's own content under its system's sections (the Ask chat's threads). */
+  navExtra?: React.ReactNode;
 }) {
-  // Below lg the rail left only ~125px of content on a phone — KPI values
-  // rendered as "$7…". The rail becomes an off-canvas drawer there.
+  // The sections column is a static column from lg; below it, a drawer
+  // (beside the rail on a tablet, alone on a phone, where the tab bar
+  // replaces the rail).
   const [navOpen, setNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   // Community tenants never hold a Stripe subscription — skip the fetch
   // entirely rather than have it always resolve to "not past due".
   const { role } = useResilientSession();
+  const nav = useConsoleNav();
 
   // Close on navigation so tapping a link doesn't leave the drawer covering
   // the page it just opened.
   useEffect(() => { setNavOpen(false); }, [pathname]);
   // On desktop the page body scrolls inside <main>, not the window (so the
-  // sidebar stays put). The browser's scroll-to-top on navigation only
+  // rail stays put). The browser's scroll-to-top on navigation only
   // applies to the window, so reset the scroll container ourselves.
   const mainRef = useRef<HTMLElement>(null);
   useEffect(() => { mainRef.current?.scrollTo({ top: 0 }); }, [pathname]);
@@ -88,455 +89,70 @@ export function AppShell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [navOpen]);
-  // `/` opens the command palette from anywhere — the top bar's ask field
-  // advertises it. Never while the person is typing, and never with a
-  // modifier held. The palette itself owns Escape/Enter/arrow keys once open.
+  // `/` opens the command palette (paid) and `g` the systems switcher, from
+  // anywhere — never while the person is typing, never with a modifier held.
   useEffect(() => {
-    if (IS_COMMUNITY) return; // no palette in Community
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || el?.isContentEditable) return;
-      e.preventDefault();
-      setPaletteOpen(true);
+      if (e.key === "/" && !IS_COMMUNITY) { e.preventDefault(); setPaletteOpen(true); }
+      else if (e.key === "g" || e.key === "G") { e.preventDefault(); setSwitcherOpen(true); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Every section is a jump target in the palette, named with its system.
+  const sectionItems = useMemo<LocalPaletteItem[]>(
+    () => nav.systems.flatMap((s) => s.sections.map((x) => ({
+      id: `${s.id}/${x.id}`, label: nav.sectionName(s, x), hint: nav.sysName(s), onSelect: () => router.push(x.href),
+    }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- nav's helpers are rebuilt each render; the systems and labels are what change
+    [nav.systems, nav.t],
+  );
+
   return (
-    // `lg:h-screen` pins the shell to the viewport: the sidebar column keeps
-    // its own scroll (nav inside <Sidebar> is overflow-y-auto) and the page
-    // body scrolls inside <main>, so the left nav never scrolls away.
-    <div className="min-h-screen bg-background lg:grid lg:h-screen lg:grid-cols-[224px_1fr] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-      {/* Desktop: a static grid column. Small screens: a slide-in panel. */}
+    // `md:h-screen` pins the shell to the viewport: the rail and the sections
+    // keep their own scroll and the page body scrolls inside <main>.
+    <div className="min-h-screen bg-background md:grid md:h-screen md:grid-cols-[64px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden lg:grid-cols-[64px_248px_minmax(0,1fr)]">
+      {!IS_COMMUNITY && <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} localItems={sectionItems} localNeedsQuery />}
+      <SystemSwitcher nav={nav} open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+      <div className="hidden md:block md:min-h-0">
+        <SystemRail nav={nav} onOpenSwitcher={() => setSwitcherOpen(true)} footer={<ProfileBlock compact />} />
+      </div>
+      {/* A link in the drawer closes it, even one that keeps the path (/ask?thread=…). */}
       <div
+        onClick={(e) => { if ((e.target as HTMLElement).closest("a")) setNavOpen(false); }}
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-[224px] transition-transform duration-200 ease-out lg:static lg:z-auto lg:w-auto lg:translate-x-0",
-          navOpen ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 left-0 z-50 transition-transform duration-200 ease-out md:left-16 lg:static lg:z-auto lg:min-h-0 lg:translate-x-0",
+          navOpen ? "translate-x-0" : "-translate-x-[calc(100%_+_4rem)]",
         )}
       >
-        <Sidebar />
+        <SectionColumn nav={nav} onOpenSwitcher={() => setSwitcherOpen(true)} extra={navExtra} footer={<div className="md:hidden"><ProfileBlock /></div>} />
       </div>
       {navOpen && (
         <button
           type="button"
-          aria-label="Close navigation"
+          aria-label={nav.t("nav.closeSections")}
           onClick={() => setNavOpen(false)}
           className="fixed inset-0 z-40 bg-foreground/30 backdrop-blur-[1px] lg:hidden"
         />
       )}
-      <div className="flex min-h-screen min-w-0 flex-col overflow-hidden lg:min-h-0">
+      <div className="flex min-h-screen min-w-0 flex-col overflow-hidden md:min-h-0">
         <TopBar breadcrumbs={breadcrumbs} actions={actions} onOpenNav={() => setNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         {PastDueBanner && <PastDueBanner isAdmin={role === "admin"} />}
-        <main ref={mainRef} className="flex-1 overflow-auto">{children}</main>
+        {/* pb clears the phone's tab bar. */}
+        <main ref={mainRef} className="flex-1 overflow-auto pb-20 md:pb-0">{children}</main>
       </div>
+      <TabBar nav={nav} onOpenSections={() => setNavOpen(true)} />
     </div>
   );
 }
 
-type NavItem = {
-  href: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  match?: (pathname: string) => boolean;
-  badge?: string | number | null;
-  /**
-   * The count needs a human (e.g. requests awaiting *my* approval), so it
-   * renders in the critical colour. Everything else stays faint — a count is
-   * information, not an alarm.
-   */
-  critical?: boolean;
-  disabled?: boolean;
-};
-
-type NavSection = {
-  label?: string;
-  items: NavItem[];
-  adminOnly?: boolean;
-  /** Hide this section entirely for role="viewer" - they're consumers, not editors. */
-  editorPlus?: boolean;
-};
-type NavItemExt = NavItem & { editorPlus?: boolean };
-
-/** Nav entries that exist in the Community edition (everything else is a
- *  paid route, or — API keys — a Growth feature the pricing page lists). */
-const COMMUNITY_NAV = [
-  "/reports", "/on-screen", "/dashboards", "/tables", "/connections", "/templates",
-  "/admin/tenant", "/admin/users", "/admin/audit", "/admin/compliance", "/admin/release-log",
-];
-
-/** One empty value, so resetting to "no counts yet" twice doesn't re-render. */
-const NO_COUNTS: NavCounts = {};
-
-function Sidebar() {
-  const { t } = useT();
-  // See useResilientSession() for why this isn't a plain useSession() call:
-  // it self-heals next-auth's client from a stuck-null-session state (the
-  // "sidebar menu disappeared" bug) instead of requiring a hard refresh.
-  const { role, session } = useResilientSession();
-  // Platform-admin (NOT tenant-admin) — only Curf ops staff. Read straight
-  // off the session's own `isPlatformAdmin` (baked in server-side by
-  // auth.ts's jwt callback, same computation @/lib/platformAdmin does for
-  // the route guards) rather than calling isPlatformAdmin(email) here.
-  // That function reads CURF_PLATFORM_ADMIN_EMAILS, a server-only env var:
-  // Next still server-renders this "use client" component once for the
-  // initial HTML, where that env var IS set, but the same code then runs
-  // again in the browser bundle where it's stripped — so the two passes
-  // disagreed on whether these nav items exist at all, a guaranteed
-  // hydration mismatch on every page for any platform-admin session. The
-  // session itself doesn't have this problem: it's fetched the same way
-  // on both passes (see useResilientSession.ts), exactly like `role`.
-  const isPlatAdmin = !!(session?.user as any)?.isPlatformAdmin;
-  // Badge counts: one GET /api/nav/counts, kept per workspace for a moment
-  // (lib/navCounts.ts), so moving between pages — each renders its own
-  // AppShell — doesn't count everything again. The route applies the role
-  // and plan rules; the inbox count (requests whose current step is *mine*)
-  // is the one number here that needs a human, which is why it alone
-  // renders in the critical colour.
-  const activeTenantId = (session?.user as any)?.activeTenantId ?? (session?.user as any)?.tenantId;
-  const countsKey = activeTenantId ? `${(session?.user as any)?.id}:${activeTenantId}:${role}` : null;
-  const [counts, setCounts] = useState<NavCounts>(() => (countsKey && peekNavCounts(countsKey)) || NO_COUNTS);
-
-  useEffect(() => {
-    if (!countsKey) return;
-    let live = true;
-    const load = () => void loadNavCounts(countsKey).then((c) => { if (live && c) setCounts(c); });
-    setCounts(peekNavCounts(countsKey) ?? NO_COUNTS);
-    load();
-    // Same-page create/delete flows (e.g. the Dashboards manager) call
-    // refreshNavCounts() so this badge doesn't stay stale until a reload.
-    const off = onNavCountsRefresh(load);
-    return () => { live = false; off(); };
-  }, [countsKey]);
-
-  // ── Reorganized 5-group structure ──────────────────────────────────
-  // The sidebar grew organically as we shipped 200+ features. This pass
-  // re-groups every item by *who uses it* and *what stage of the workflow
-  // it's in*, instead of by author convenience.
-  //
-  //   WORKSPACE — read + author       (Brief, Reports, Dashboards, Notebooks)
-  //   OPERATE   — take action         (Inbox, Templates, Action Center, Watchers)
-  //   DATA      — where data lives    (Tables, Catalog, Connections, Agent, Quality)
-  //   DISCOVER  — share + import      (Marketplace, Block templates)
-  //   ADMIN     — governance + infra  (Tenant, Users, Billing, Integrations, Audit, …)
-  //
-  // The big move: Operate + Action Center + Watchers come OUT of Admin
-  // and into a top-level Operate group, because directors approving
-  // requests aren't admins. Admin shrinks 24 → ~9 by merging settings
-  // pages and putting modern-stack/integrations/access into umbrella
-  // entries (each links to a tabbed page that subsumes the old siblings).
-  const sections: NavSection[] = [
-    {
-      label: t("nav.section.workspace"),
-      items: [
-        // Master Builder — generative entry point. Sits at the very top
-        // because it's the "I'm new and want a working workspace fast"
-        // path, plus it's the recurring iteration surface for ongoing
-        // builds. Editor + admin only — viewers (and executives) don't author.
-        ...(role !== "viewer" && role !== "executive" ? [
-          { href: "/build", label: t("nav.masterBuilder"), icon: Wand2,
-            match: (p: string) => p === "/build" || p.startsWith("/build/") } as NavItemExt,
-        ] : []),
-        // Brief — daily exec narrative; primary "what changed" surface.
-        { href: "/brief", label: t("nav.brief"), icon: Zap,
-          match: (p: string) => p === "/brief" || p.startsWith("/brief/") } as NavItemExt,
-        // Ask Curf (workspace-wide) — the "ask from anywhere" entry point,
-        // no report picked first. Gated Business+ server-side; the page
-        // itself renders the UpgradeLock for tenants below that tier.
-        { href: "/ask", label: t("nav.askCurf"), icon: Sparkles, badge: counts.askUnread ?? null,
-          match: (p: string) => p === "/ask" || p.startsWith("/ask/") } as NavItemExt,
-        { href: "/reports", label: t("nav.reports"), icon: FileText, badge: counts.reports ?? null,
-          match: (p) => p === "/reports" || p.startsWith("/reports/") },
-        // On Screen — always-passive wall display, a separate menu from
-        // Dashboards (not a toggle on it): drill-through/Why?/Comment/Ask/
-        // Embed/forecast controls never appear here. Visibility ACL gates
-        // which displays each user sees, same as Dashboards.
-        { href: "/on-screen", label: t("nav.onScreen"), icon: Tv, badge: counts.onScreen ?? null,
-          match: (p: string) => p === "/on-screen" || p.startsWith("/on-screen/") } as NavItemExt,
-        // Dashboards are wall-display surfaces — visible to viewers too, since
-        // a dashboard is just a curated read-only view of reports they can
-        // already access. Visibility ACL gates which dashboards each user
-        // sees. /dashboards itself is the grid/KPI hub (Analysis App roadmap
-        // Day 1); /dashboards/manage (linked from the hub, not from the
-        // sidebar) has the full create/edit/kiosk-token CRUD screen — kept
-        // as one nav entry since both are views over the same rows.
-        { href: "/dashboards", label: t("nav.dashboards"), icon: Monitor, badge: counts.dashboards ?? null,
-          match: (p: string) => p === "/dashboards" || p.startsWith("/dashboards/") } as NavItemExt,
-        // Notebooks moved up from Data — they're exploratory authoring
-        // (SQL/chart/markdown/agent cells), conceptually closer to Reports
-        // than to "where data lives".
-        ...(role !== "viewer" && role !== "executive" ? [
-          { href: "/notebooks", label: t("nav.notebooks"), icon: NotebookText, badge: counts.notebooks ?? null,
-            match: (p: string) => p.startsWith("/notebooks") } as NavItemExt,
-        ] : []),
-      ],
-    },
-    // ── OPERATE ─────────────────────────────────────────────────────
-    // New top-level group. The unicorn pitch surface — every path from
-    // "noticed something" to "took action" lives here. The Inbox is for
-    // builders and executives (canUseOperateInbox — executives are who
-    // approval chains usually name); authoring items (Templates/Insights/
-    // Action Center) stay builder-only.
-    // Watchers + Decisions are the exception (2026-08 role restructure):
-    // both are visible read-only to every role, including viewer and
-    // executive — the pages themselves (not the sidebar) gate the actual
-    // mutating actions (create/edit/run a watcher, log a decision).
-    {
-      label: t("nav.section.operate"),
-      items: [
-        ...(canUseOperateInbox(role) ? [
-          // The inbox is the home base — what's awaiting me, what I sent,
-          // what's in flight, what's done.
-          { href: "/operate", label: t("nav.inbox"), icon: Workflow, badge: counts.inbox ?? null, critical: true,
-            match: (p: string) => p === "/operate" || (p.startsWith("/operate/") && !p.startsWith("/operate/templates") && !p.startsWith("/operate/incidents") && !p.startsWith("/operate/watchers") && !p.startsWith("/operate/insights")) } as NavItemExt,
-        ] : []),
-        ...(role !== "viewer" && role !== "executive" ? [
-          { href: "/operate/templates", label: t("nav.operateTemplates"), icon: LayoutTemplate, badge: counts.templates ?? null,
-            match: (p: string) => p.startsWith("/operate/templates") } as NavItemExt,
-          // Insights — tenant-wide rollups (volume, SLA hit rate, value
-          // through Curf). The C-suite view of Operate. Sits right under
-          // Templates because it visualises template performance.
-          { href: "/operate/insights", label: t("nav.insights"), icon: LayoutDashboard,
-            match: (p: string) => p.startsWith("/operate/insights") } as NavItemExt,
-          // Action Center — incident timeline (watcher fires + dispatched
-          // activations + human acks). Was buried in Admin; promoted here
-          // because it's an exec-facing "what fired and who handled it" view.
-          { href: "/operate/incidents", label: t("nav.actionCenter"), icon: Activity,
-            match: (p: string) => p.startsWith("/operate/incidents") } as NavItemExt,
-        ] : []),
-        // Watchers — the auto-trigger engine. Naturally adjacent to the
-        // manual-approval inbox; both are paths into the same Operate runtime.
-        { href: "/operate/watchers", label: t("nav.watchers"), icon: Radio, badge: counts.watchers ?? null,
-          match: (p: string) => p.startsWith("/operate/watchers") } as NavItemExt,
-        // Decisions — did the action someone logged actually move the
-        // number? Closes the loop Operate's other views only open.
-        { href: "/decisions", label: t("nav.decisions"), icon: Target, badge: counts.decisions ?? null,
-          match: (p: string) => p.startsWith("/decisions") } as NavItemExt,
-      ],
-    },
-    // ── DATA ────────────────────────────────────────────────────────
-    ...(role !== "viewer" && role !== "executive" ? [{
-      label: t("nav.section.data"),
-      items: [
-        // Curf Tables (managed table store) — first in the group because
-        // for a no-warehouse customer this is the entry point.
-        { href: "/tables", label: t("nav.tables"), icon: Database, badge: null,
-          match: (p: string) => p.startsWith("/tables") } as NavItemExt,
-        // Cross-resource search: lake tables + MVs + reports + saved views
-        // + connections. The unified browser tenants reach for once their
-        // catalog grows past 50 rows.
-        { href: "/catalog", label: t("nav.catalog"), icon: Search, badge: null,
-          match: (p: string) => p.startsWith("/catalog") } as NavItemExt,
-        // Semantic Metric Layer — one governed number per name, so Ask/
-        // Brief/Watcher all agree on what "Revenue" means. Sits next to
-        // Catalog: both are about naming things consistently, not raw data.
-        { href: "/metrics", label: t("nav.metrics"), icon: Ruler, badge: counts.metrics ?? null,
-          match: (p: string) => p.startsWith("/metrics") } as NavItemExt,
-        // Connections — collapses old /data-sources + /connectors into one
-        // entry. The page itself has "Managed" / "Available" tabs.
-        { href: "/connections", label: t("nav.connections"), icon: Database, badge: counts.sources ?? null,
-          match: (p: string) => p.startsWith("/connections") || p.startsWith("/data-sources") || p.startsWith("/connectors") } as NavItemExt,
-        // Knowledge Centre (D2) — PDF/DOCX/text corpus + grounded Q&A.
-        // Sits next to Connections: both are "bring your own content" surfaces.
-        { href: "/knowledge", label: t("nav.knowledge"), icon: Library, badge: null,
-          match: (p: string) => p.startsWith("/knowledge") } as NavItemExt,
-        // Agent — multi-turn tool-using conversation over data.
-        { href: "/agent", label: t("nav.agent"), icon: Bot, badge: null,
-          match: (p: string) => p.startsWith("/agent") } as NavItemExt,
-        // Data quality — moved out of Admin. It's data-plane concern, not
-        // governance. Lives next to Tables + Catalog where DQ rules apply.
-        { href: "/data/quality", label: t("nav.dataQuality"), icon: ShieldCheck, badge: counts.dataQuality ?? null,
-          match: (p: string) => p.startsWith("/data/quality") || p.startsWith("/admin/quality") } as NavItemExt,
-      ],
-    }] : []),
-    // ── DISCOVER ────────────────────────────────────────────────────
-    // Cross-tenant share/import surfaces. Stays light (2 items) on purpose
-    // — these are "lookup something to start with" not "things I work in".
-    ...(role !== "viewer" && role !== "executive" ? [{
-      label: t("nav.section.discover"),
-      items: [
-        { href: "/marketplace", label: t("nav.marketplace"), icon: Globe,
-          match: (p: string) => p.startsWith("/marketplace") } as NavItemExt,
-        // Block templates for the report designer. Distinct from Operate
-        // templates (which are workflow recipes). Renamed in label-only
-        // to "Block library" to disambiguate.
-        { href: "/templates", label: t("nav.blockLibrary"), icon: LayoutTemplate,
-          match: (p: string) => p.startsWith("/templates") } as NavItemExt,
-      ],
-    }] : []),
-    // ── ADMIN ───────────────────────────────────────────────────────
-    // Slimmed from 24 to 9. Each item that *could* live here but is used
-    // by non-admins moved out. What's left is genuine governance + infra.
-    {
-      label: t("nav.section.admin"),
-      adminOnly: true,
-      items: [
-        // Platform-admin-only: invite-only beta queue. Gated behind
-        // isPlatformAdmin (Anthropic ops staff), so even tenant admins
-        // don't see this entry. The page itself 404s for non-platform-admins
-        // — sidebar visibility is just a polish layer.
-        ...(isPlatAdmin ? [
-          { href: "/admin/waitlist", label: t("nav.waitlist"), icon: Mail,
-            match: (p: string) => p.startsWith("/admin/waitlist") } as NavItemExt,
-          { href: "/admin/platform/ai-costs", label: t("nav.aiCosts"), icon: Cpu,
-            match: (p: string) => p.startsWith("/admin/platform/ai-costs") } as NavItemExt,
-        ] : []),
-        // Tenant settings — rolls in old "Brief settings" + "Digest" as
-        // tabs on the same page (settings, branding, brief config, digest).
-        { href: "/admin/tenant", label: t("nav.tenant"), icon: Building2,
-          match: (p) => p.startsWith("/admin/tenant") || p.startsWith("/admin/brief") || p.startsWith("/admin/digest") },
-        // Users + Roles merged. The page has tabs for both.
-        { href: "/admin/users", label: t("nav.usersRoles"), icon: Users,
-          match: (p) => p.startsWith("/admin/users") || p.startsWith("/admin/roles") },
-        // Org chart — reporting lines, assignment policy, assistants and LINE
-        // for the Executive view (executive journey P2+).
-        { href: "/admin/org", label: t("nav.orgChart"), icon: Building2,
-          match: (p) => p.startsWith("/admin/org") },
-        // Access — points directly at the API-keys page since the unified
-        // /admin/access tabbed shell hasn't shipped yet. Sidebar still
-        // highlights the right tab when the user lands on /api-keys, /sso,
-        // or the eventual /access page.
-        { href: "/admin/api-keys", label: t("nav.access"), icon: KeyRound,
-          match: (p) => p.startsWith("/admin/access") || p.startsWith("/admin/sso") || p.startsWith("/admin/api-keys") },
-        // API Explorer — Swagger-style live tester for the public /api/v1
-        // surface. Sits right after Access since minting a key there is
-        // the first step to actually calling anything from here.
-        { href: "/admin/api-explorer", label: t("nav.apiExplorer"), icon: Terminal,
-          match: (p) => p.startsWith("/admin/api-explorer") },
-        { href: "/admin/billing", label: t("nav.billing"), icon: CreditCard,
-          match: (p) => p.startsWith("/admin/billing") },
-        // Integrations umbrella — Slack/Teams/Discord + Webhooks (HMAC) +
-        // Activations (reverse-ETL push). All "Curf reaching outside" surfaces.
-        { href: "/admin/integrations", label: t("nav.integrations"), icon: Webhook,
-          match: (p) => p.startsWith("/admin/integrations") || p.startsWith("/admin/webhooks") || p.startsWith("/admin/activations") },
-        // (Schedules entry removed — there's no dedicated /admin/schedules
-        // page. Delivery schedules live inside report viewer "Schedule"
-        // dialogs; watcher schedules live on /operate/watchers; brief
-        // delivery cron lives in /admin/brief/delivery. The Schedule
-        // model itself doesn't need its own admin surface.)
-        // Modern data stack — points at /admin/external-tables until the
-        // unified tabbed shell lands. Both External tables + dbt highlight
-        // the same nav entry via the match() fallback.
-        { href: "/admin/external-tables", label: t("nav.modernStack"), icon: Layers,
-          match: (p) => p.startsWith("/admin/modern-stack") || p.startsWith("/admin/external-tables") || p.startsWith("/admin/dbt") },
-        // Observability — points at /admin/audit until the unified
-        // tabbed Observability shell lands. Sidebar still highlights for
-        // /audit, /usage, /lineage so navigation feels consistent across
-        // the three related pages.
-        { href: "/admin/audit", label: t("nav.observability"), icon: Activity,
-          match: (p) => p.startsWith("/admin/observability") || p.startsWith("/admin/audit") || p.startsWith("/admin/usage") || p.startsWith("/admin/lineage") || p.startsWith("/admin/actions") },
-        // Workspace setup — one-click bootstrap (B2B SaaS preset, etc.).
-        { href: "/admin/workspace-templates", label: t("nav.workspaceSetup"), icon: Sparkles,
-          match: (p) => p.startsWith("/admin/workspace-templates") },
-        // Compliance — public-facing security/compliance summary.
-        { href: "/admin/compliance", label: t("nav.compliance"), icon: Shield,
-          match: (p) => p.startsWith("/admin/compliance") },
-        // Release log — what shipped in each version. Hand-maintained,
-        // see src/lib/releaseLog.ts.
-        { href: "/admin/release-log", label: t("nav.releaseLog"), icon: Rocket,
-          match: (p) => p.startsWith("/admin/release-log") },
-      ],
-    },
-  ];
-
-  // The rail is deliberately quiet: the workspace block doubles as the
-  // brand and the switcher, the primary "New report" action lives in the
-  // Reports page header where the object lives (once), and there is no
-  // search box until there is a real command palette behind it. The 10px
-  // side padding is load-bearing — the active item's 2px accent mark is
-  // offset by exactly that much so it sits flush on the rail's edge.
-  // Community edition: only the surfaces that exist in that build. Paid
-  // pages aren't gated here, they're absent (see scripts/community-export),
-  // so a link would just 404. Sections left empty disappear with them.
-  const visibleSections = IS_COMMUNITY
-    ? sections
-        .map((section) => ({ ...section, items: section.items.filter((item) => COMMUNITY_NAV.some((p) => item.href === p || item.href.startsWith(p + "/"))) }))
-        .filter((section) => section.items.length > 0)
-    : sections;
-
-  return (
-    <aside className="flex h-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <TenantSwitcher />
-
-      <nav className="flex-1 overflow-y-auto px-2.5 pb-3">
-        {visibleSections.map((section, si) => {
-          if (section.adminOnly && role !== "admin") return null;
-          return <Section key={si} section={section} />;
-        })}
-      </nav>
-
-      <ProfileBlock />
-    </aside>
-  );
-}
-
-function Section({ section }: { section: NavSection }) {
-  const { t } = useT();
-  const pathname = usePathname() ?? "";
-  return (
-    <div>
-      {section.label && (
-        // The label's top padding is the only separator between groups —
-        // no rules, no extra gaps.
-        <p className="px-3 pb-2 pt-4 text-[11px] font-medium uppercase tracking-[.06em] text-faint">
-          {section.label}
-        </p>
-      )}
-      <div className="space-y-0.5">
-      {section.items.map((it) => {
-        const Icon = it.icon;
-        const active = it.match
-          ? it.match(pathname)
-          : pathname === it.href || pathname.startsWith(it.href + "/");
-        // Active = ink weight plus a 2px accent mark on the rail's edge, not
-        // a filled pill. The accent is reserved for what you can act on;
-        // "where am I" is answered by weight alone.
-        const base = "relative flex h-9 items-center gap-2.5 rounded-md pl-3 pr-2 text-[13px] font-medium transition-colors";
-        const classes = cn(
-          base,
-          active
-            ? "font-semibold text-foreground before:absolute before:-left-2.5 before:bottom-2 before:top-2 before:w-0.5 before:rounded-[1px] before:bg-primary before:content-['']"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground",
-          it.disabled && "cursor-not-allowed opacity-75 hover:bg-transparent hover:text-muted-foreground"
-        );
-        // A count of zero is not information; render nothing.
-        const n = typeof it.badge === "number" ? it.badge : Number(it.badge ?? 0);
-
-        const content = (
-          <>
-            <Icon className="h-4 w-4 shrink-0" />
-            <span className="truncate">{it.label}</span>
-            {n > 0 && (
-              <span
-                className={cn(
-                  "ml-auto font-mono text-xs tabular-nums",
-                  it.critical ? "font-medium text-destructive" : "text-faint",
-                )}
-                title={it.critical ? t("nav.awaitingTitle").replace("{n}", String(n)) : undefined}
-              >
-                {n}
-              </span>
-            )}
-            {it.disabled && (
-              <span className="ml-auto font-mono text-[11px] text-faint">
-                {t("nav.soon")}
-              </span>
-            )}
-          </>
-        );
-
-        if (it.disabled) return <div key={it.href} className={classes}>{content}</div>;
-        return <Link key={it.href} href={it.href} className={classes}>{content}</Link>;
-      })}
-      </div>
-    </div>
-  );
-}
-
-function ProfileBlock() {
+/** The person's own menu: a round avatar at the foot of the rail (compact), or a full row at the foot of the phone's section drawer. */
+function ProfileBlock({ compact }: { compact?: boolean }) {
   const { t } = useT();
   // See useResilientSession() for why this isn't a plain useSession() call
   // — without it, a session-fetch blip leaves this block (and its avatar)
@@ -558,6 +174,7 @@ function ProfileBlock() {
   // Same footprint while the session loads — no "Signed in" placeholder
   // text that then gets replaced by a name.
   if (!user) {
+    if (compact) return <div className="h-[34px] w-[34px] shrink-0 rounded-full bg-primary-soft" aria-hidden="true" />;
     return (
       <div className="border-t border-sidebar-border px-2.5 py-2.5" aria-hidden="true">
         <div className="flex items-center gap-2.5 px-2 py-1.5">
@@ -571,12 +188,22 @@ function ProfileBlock() {
     );
   }
 
+  const trigger = compact ? (
+    <button
+      type="button"
+      aria-label={`${user?.name ?? user?.email ?? t("account.signedIn")}, ${roleLabel}`}
+      className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-primary-soft text-xs font-semibold text-primary-ink transition-shadow hover:ring-2 hover:ring-border"
+    >
+      {monogram}
+    </button>
+  ) : null;
+
   return (
-    <div className="border-t border-sidebar-border px-2.5 py-2.5">
+    <div className={compact ? undefined : "border-t border-sidebar-border px-2.5 py-2.5"}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary-ink">
+          {trigger ?? <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-2xs font-semibold text-primary-ink">
               {monogram}
             </div>
             <div className="min-w-0 flex-1">
@@ -584,19 +211,17 @@ function ProfileBlock() {
               <p className="truncate text-xs text-faint">{roleLabel}</p>
             </div>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-faint" />
-          </button>
+          </button>}
         </DropdownMenuTrigger>
-        <DropdownMenuContent side="top" align="start" className="w-56">
+        <DropdownMenuContent side={compact ? "right" : "top"} align={compact ? "end" : "start"} className="w-56">
           <DropdownMenuLabel className="flex items-center justify-between gap-2">
             <span className="truncate">{user?.name ?? t("account.fallback")}</span>
-            <span className="shrink-0 font-mono text-[10px] font-normal text-faint">v{CURRENT_VERSION}</span>
+            <span className="shrink-0 font-mono text-2xs font-normal text-faint">v{CURRENT_VERSION}</span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => router.push("/reports")}>
-            <FileText className="mr-2 h-4 w-4" /> {t("nav.reports")}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push("/data-sources")}>
-            <Database className="mr-2 h-4 w-4" /> {t("nav.connections")}
+          {compact && <p className="truncate px-2 pb-1.5 text-xs text-faint">{roleLabel}</p>}
+          <DropdownMenuItem onClick={() => router.push("/account")}>
+            <UserRound className="mr-2 h-4 w-4" /> {t("nav.account")}
           </DropdownMenuItem>
           {/* The Executive view (/executive) — what executives see; not in the Community edition. */}
           {!IS_COMMUNITY && (
@@ -605,7 +230,7 @@ function ProfileBlock() {
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/" })}>
+          <DropdownMenuItem onClick={() => signOut({ redirect: false }).then(() => window.location.assign("/api/auth/end-session"))}>
             <LogOut className="mr-2 h-4 w-4" /> {t("action.signOut")}
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -649,24 +274,23 @@ function TenantSwitcher() {
   // jumps down by 44px on every cold load once the name arrives.
   if (!data?.user) {
     return (
-      <div className="px-2.5 pb-1 pt-3" aria-hidden="true">
-        <div className="flex items-center gap-2.5 px-2 py-1.5">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
-            <CurfLogo variant="icon" size={18} mono />
-          </span>
-          <div className="min-w-0 flex-1 space-y-1.5">
-            <div className="skeleton h-3 w-24" />
-            <div className="skeleton h-2.5 w-14" />
-          </div>
+      <div className="flex shrink-0 items-center gap-2.5 px-1.5 py-1" aria-hidden="true">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background md:hidden">
+          <CurfLogo variant="icon" size={18} mono />
+        </span>
+        <div className="hidden space-y-1.5 sm:block">
+          <div className="skeleton h-3 w-24" />
+          <div className="skeleton h-2.5 w-14" />
         </div>
       </div>
     );
   }
 
-  // Land on Brief, not wherever the switch was clicked from — a page scoped to
-  // the old tenant is jarring context. A full navigation (inside the hook), not
-  // router.push()+refresh(): that silently dropped from a closing Radix item.
-  const switchTo = (tenantId: string) => switchWorkspace(tenantId, "/brief");
+  // Land where that workspace's role lands ("/" redirects through
+  // landingPathFor), not wherever the switch was clicked from — a page scoped
+  // to the old tenant is jarring context. A full navigation (inside the hook),
+  // not router.push()+refresh(): that silently dropped from a closing Radix item.
+  const switchTo = (tenantId: string) => switchWorkspace(tenantId, "/");
 
   /**
    * Create another workspace for the signed-in account. Previously this
@@ -700,16 +324,15 @@ function TenantSwitcher() {
       setBusy(true);
       // Full navigation, not router.push()+refresh() — see switchTo()'s
       // comment above for why the soft-nav version doesn't reliably fire.
-      window.location.href = "/brief";
+      window.location.href = "/";
     } catch (e: any) {
       setCreateError(e?.message ?? "Could not create workspace");
     } finally { setCreating(false); }
   }
 
   return (
-    // The workspace block: Curf mark in an ink square, workspace name, tier.
-    // It is the rail's brand row and its switcher at once.
-    <div className="px-2.5 pb-1 pt-3">
+    // The workspace block in the top bar: workspace name and tier (the Curf mark is at the head of the rail; on a phone, which has no rail, it stays here).
+    <div className="min-w-0 shrink-0">
       {/* window.location.href below is a full page unload — the trigger
           button's own disabled/dim state (further down) is easy to miss and
           leaves the screen looking frozen for however long the new page
@@ -726,10 +349,10 @@ function TenantSwitcher() {
         <DropdownMenuTrigger asChild>
           <button
             disabled={busy}
-            className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted disabled:opacity-60"
+            className="flex max-w-[220px] items-center gap-2.5 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-muted disabled:opacity-60 max-sm:max-w-[170px]"
             title={t("nav.switchWorkspace")}
           >
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background md:hidden">
               <CurfLogo variant="icon" size={18} mono />
             </span>
             <div className="min-w-0 flex-1">
@@ -738,13 +361,13 @@ function TenantSwitcher() {
               </p>
               {/* Tier once the session carries it; the slug for older tokens
                   (opening this menu refreshes memberships and back-fills it). */}
-              <p className="truncate text-xs text-faint">{tierLabel(active?.tenantTier) ?? active?.tenantSlug ?? ""}</p>
+              <p className="truncate text-xs text-faint max-sm:hidden">{tierLabel(active?.tenantTier) ?? active?.tenantSlug ?? ""}</p>
             </div>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-faint" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="bottom" align="start" className="w-60">
-          <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          <DropdownMenuLabel className="text-2xs uppercase tracking-wider text-muted-foreground">
             {t("nav.yourWorkspaces")}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
@@ -766,12 +389,12 @@ function TenantSwitcher() {
                   <p className="truncate text-xs font-medium">
                     {m.tenantName}
                     {m.isVirtual && (
-                      <span className="ml-1.5 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-primary" title={t("nav.orgOversightHint")}>
+                      <span className="ml-1.5 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide text-primary" title={t("nav.orgOversightHint")}>
                         {t("nav.orgOversight")}
                       </span>
                     )}
                   </p>
-                  <p className="truncate text-[10px] text-muted-foreground">
+                  <p className="truncate text-2xs text-muted-foreground">
                     {m.tenantSlug} - <span className="capitalize">{m.role}</span>
                   </p>
                 </div>
@@ -832,26 +455,31 @@ function TopBar({
   onOpenNav?: () => void;
   onOpenPalette?: () => void;
 }) {
+  const { t } = useT();
   const crumbs = breadcrumbs ?? [];
   return (
-    // h-14 is a fixed height, so nothing in here may wrap — a long report
-    // name used to break onto three lines and spill out of the bar, and the
-    // action row (up to ~9 controls on a report) pushed past the right edge.
-    // Breadcrumbs truncate, actions keep their size and scroll if the viewport
-    // genuinely can't fit them.
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-4 sm:px-5">
+    // From md the bar is one fixed h-14 row, so nothing in it may wrap — a long
+    // report name used to break onto three lines and spill out of the bar.
+    // Breadcrumbs truncate, and the page's actions (up to ~9 controls on a
+    // report) keep their size and scroll if the viewport can't fit them. On a
+    // phone the page's actions take a second row and wrap, because a hidden
+    // sideways scroll cut "Generate" and "New" off at the edge.
+    <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-background px-4 py-2 sm:px-5 md:h-14 md:flex-nowrap md:py-0">
+      {/* Tablet only: a phone opens the same drawer from More in its tab bar. */}
       <button
         type="button"
         onClick={onOpenNav}
-        aria-label="Open navigation"
-        className="-ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
+        aria-label={t("nav.openSections")}
+        className="-ml-1 hidden shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground md:block lg:hidden"
       >
         <Menu className="h-5 w-5" />
       </button>
+      <TenantSwitcher />
+      <span className="hidden h-5 w-px shrink-0 bg-border sm:block" aria-hidden="true" />
       {/* min-w keeps the current page readable even when the action row is
           long — otherwise a report with ~9 controls squeezed the breadcrumb
-          down to a single character. */}
-      <nav aria-label="Breadcrumb" className="flex min-w-[7rem] flex-1 items-center gap-1.5 text-sm">
+          down to a single character. A phone shows no crumb, so none there. */}
+      <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1.5 text-sm sm:min-w-[7rem]">
         {crumbs.map((b, i) => {
           const isLast = i === crumbs.length - 1;
           return (
@@ -859,7 +487,7 @@ function TopBar({
               key={i}
               // Only the current page's crumb survives on narrow screens;
               // the ancestors are still reachable from the sidebar.
-              className={cn("flex min-w-0 items-center gap-1.5", !isLast && "hidden sm:flex")}
+              className={cn("flex min-w-0 items-center gap-1.5", !isLast && "hidden md:flex", isLast && "max-sm:hidden")}
             >
               {i > 0 && <span className="shrink-0 text-muted-foreground/60">/</span>}
               {b.href ? (
@@ -881,8 +509,13 @@ function TopBar({
       </nav>
       {/* The palette searches the catalog and hands off to Ask Curf — both paid. */}
       {!IS_COMMUNITY && <AskBar onOpen={onOpenPalette} />}
-      <div className="flex min-w-0 shrink items-center gap-2 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {actions}
+      {actions && (
+        <div className="order-last flex w-full flex-wrap items-center gap-2 md:order-none md:w-auto md:min-w-0 md:shrink md:flex-nowrap md:overflow-x-auto md:whitespace-nowrap md:[-ms-overflow-style:none] md:[scrollbar-width:none] md:[&::-webkit-scrollbar]:hidden">
+          {actions}
+        </div>
+      )}
+      <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+        {!IS_COMMUNITY && <AiCreditsChip />}
         <MenuHelpDialog />
         <LanguageSwitcher compact />
       </div>
@@ -898,6 +531,9 @@ function TopBar({
  */
 function AskBar({ onOpen }: { onOpen?: () => void }) {
   const { t } = useT();
+  // The Ask page is itself the ask field (the "/" shortcut still opens the palette).
+  const onAsk = usePathname()?.startsWith("/ask");
+  if (onAsk) return null;
   return (
     <button
       type="button"
@@ -907,7 +543,7 @@ function AskBar({ onOpen }: { onOpen?: () => void }) {
     >
       <Sparkles className="h-[15px] w-[15px] shrink-0 text-primary" />
       <span className="min-w-0 flex-1 truncate text-left">{t("nav.askPlaceholder")}</span>
-      <kbd className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] text-faint">/</kbd>
+      <kbd className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-2xs text-faint">/</kbd>
     </button>
   );
 }

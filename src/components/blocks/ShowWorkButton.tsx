@@ -72,7 +72,7 @@ export function ShowWorkButton({
                     <div key={k} className="flex items-baseline justify-between gap-3">
                       <dt className="font-mono text-muted-foreground">:{k}</dt>
                       <dd className="min-w-0 truncate">
-                        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{formatValue(v)}</code>
+                        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs">{formatValue(v)}</code>
                       </dd>
                     </div>
                   ))}
@@ -104,7 +104,7 @@ function CodeBlock({ label, code }: { label: string; code: string }) {
       <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <pre className="whitespace-pre-wrap break-words rounded-md bg-muted px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
+      <pre className="whitespace-pre-wrap break-words rounded-md bg-muted px-3 py-2 font-mono text-2xs leading-relaxed text-foreground">
         {code}
       </pre>
     </div>
@@ -115,20 +115,20 @@ function RestDetails({ ds }: { ds: DataSourceDef }) {
   return (
     <div className="space-y-2 px-3 py-2">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Request</div>
-      <div className="rounded-md bg-muted px-3 py-2 font-mono text-[11px]">
+      <div className="rounded-md bg-muted px-3 py-2 font-mono text-2xs">
         <span className="font-semibold text-primary-ink">{ds.method ?? "GET"}</span>{" "}
         <span className="text-foreground">{ds.path ?? "/"}</span>
       </div>
       {ds.body && (
         <>
           <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Body template</div>
-          <pre className="whitespace-pre-wrap break-words rounded-md bg-muted px-3 py-2 font-mono text-[11px]">{ds.body}</pre>
+          <pre className="whitespace-pre-wrap break-words rounded-md bg-muted px-3 py-2 font-mono text-2xs">{ds.body}</pre>
         </>
       )}
       {ds.jsonPath && (
         <div className="flex items-baseline justify-between gap-2 text-xs">
           <span className="text-muted-foreground">JSON path</span>
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{ds.jsonPath}</code>
+          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs">{ds.jsonPath}</code>
         </div>
       )}
     </div>
@@ -143,7 +143,7 @@ function RowsPreview({ rows, max }: { rows: Row[]; max: number }) {
   const cols = Object.keys(preview[0]);
   return (
     <div className="overflow-x-auto rounded-md border border-border">
-      <table className="w-full border-collapse text-[11px]">
+      <table className="w-full border-collapse text-2xs">
         <thead className="bg-muted text-muted-foreground">
           <tr>
             {cols.map((c) => (

@@ -31,7 +31,8 @@ const MAX_FETCH_BYTES = 1_000_000; // 1MB cap on external definitions
 
 type SearchParams = { slug?: string; from?: string };
 
-export default async function ImportPage({ searchParams }: { searchParams: SearchParams }) {
+export default async function ImportPage(props: { searchParams: Promise<SearchParams> }) {
+  const searchParams = await props.searchParams;
   const user = await requireUser();
   if (!user) {
     const next = `/reports/import?${new URLSearchParams(searchParams as Record<string, string>).toString()}`;
@@ -59,7 +60,7 @@ export default async function ImportPage({ searchParams }: { searchParams: Searc
             </Link>
           </div>
           <form method="GET" className="mt-8">
-            <p className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">Or import from URL</p>
+            <p className="mb-2 text-2xs uppercase tracking-wider text-muted-foreground">Or import from URL</p>
             <div className="flex items-center gap-2">
               <input
                 name="from"
@@ -72,7 +73,7 @@ export default async function ImportPage({ searchParams }: { searchParams: Searc
                 Fetch
               </button>
             </div>
-            <p className="mt-2 text-[10px] text-muted-foreground">
+            <p className="mt-2 text-2xs text-muted-foreground">
               We'll validate the JSON against the Curf report schema before importing.
             </p>
           </form>
@@ -125,7 +126,7 @@ export default async function ImportPage({ searchParams }: { searchParams: Searc
 
   return (
     <AppShell breadcrumbs={[{ label: "Reports", href: "/reports" }, { label: "Import" }]}>
-      <div className="mx-auto max-w-3xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-4xl px-8 pb-12 pt-7">
         <PageHeader
           eyebrow={
             <Link href="/reports" className="inline-flex items-center gap-1 hover:text-foreground">

@@ -167,20 +167,20 @@ export function DrillPanel({ state, onClose }: { state: DrillState; onClose: () 
       >
         <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               {t("drillPanel.title")}
             </p>
             <h2 className="mt-0.5 truncate text-base font-semibold">{state.title}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               {/* A KPI's drill has no filter: the rows behind the whole number. */}
               {state.filterParam && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
+                <span className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-2xs text-primary">
                   <Filter className="h-3 w-3" />
                   {String(state.filterValue)}
                 </span>
               )}
               {!state.loading && !state.error && (
-                <span className="text-[11px]">
+                <span className="text-2xs">
                   {state.rowCount === 1
                     ? t("drillPanel.rowCountOne").replace("{n}", String(state.rowCount))
                     : t("drillPanel.rowCountMany").replace("{n}", String(state.rowCount))}
@@ -199,7 +199,7 @@ export function DrillPanel({ state, onClose }: { state: DrillState; onClose: () 
            at. Hidden when no chart_click templates exist for this tenant. */}
         {actions && actions.length > 0 && (
           <section className="border-b border-border bg-muted/40 px-5 py-3">
-            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="mb-2 flex items-center gap-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Workflow className="h-3 w-3" /> {t("drillPanel.runActionHeading")}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -317,7 +317,7 @@ function DrillRows({ columns, rows }: { columns: DrillColumn[]; rows: Record<str
       : formatTyped(v, c.type, c.format, currency, dateStyle);
   return (
     <table className="w-full text-xs">
-      <thead className="sticky top-0 bg-muted/95 backdrop-blur">
+      <thead className="sticky top-0 bg-muted">
         <tr>
           {columns.map((c) => (
             <th key={c.key} className={"border-b border-border px-3 py-2 font-semibold text-muted-foreground " + (numeric(c) ? "text-right" : "text-left")}>

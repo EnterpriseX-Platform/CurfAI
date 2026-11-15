@@ -103,7 +103,7 @@ export function BackupsPanel({ canAdmin }: { canAdmin: boolean }) {
           </span>
           <div>
             <h2 className="text-sm font-semibold">Backups & restore</h2>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Nightly snapshots of your lake. Restore any point-in-time. Free 30 days · Team 90 · Business 365.
             </p>
           </div>
@@ -140,7 +140,7 @@ export function BackupsPanel({ canAdmin }: { canAdmin: boolean }) {
 
           {items === null && <p className="text-xs text-muted-foreground">Loading…</p>}
           {items !== null && items.length === 0 && (
-            <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-3 text-center text-[11px] text-muted-foreground">
+            <p className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-3 text-center text-2xs text-muted-foreground">
               No snapshots yet. The first nightly snapshot runs at 02:00 UTC, or hit "Snapshot now" to take one immediately.
             </p>
           )}
@@ -153,7 +153,7 @@ export function BackupsPanel({ canAdmin }: { canAdmin: boolean }) {
                       <Clock className="h-3 w-3 text-muted-foreground" />
                       <span className="font-medium">{new Date(b.createdAt).toLocaleString()}</span>
                       <span className={
-                        "rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
+                        "rounded-full px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider " +
                         (b.kind === "manual"
                           ? "bg-primary/10 text-primary"
                           : "bg-muted text-muted-foreground")
@@ -161,12 +161,12 @@ export function BackupsPanel({ canAdmin }: { canAdmin: boolean }) {
                         {b.kind}
                       </span>
                       {b.restoredFromId && (
-                        <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
+                        <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider text-warning">
                           pre-restore
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    <div className="mt-0.5 text-2xs text-muted-foreground">
                       {(b.sizeBytes / 1024).toFixed(1)} KB · {b.tableCountAtSnapshot} table{b.tableCountAtSnapshot === 1 ? "" : "s"}
                     </div>
                   </div>
@@ -176,7 +176,7 @@ export function BackupsPanel({ canAdmin }: { canAdmin: boolean }) {
                         type="button"
                         onClick={() => restore(b.id)}
                         disabled={!!busy}
-                        className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-[11px] hover:bg-muted disabled:opacity-50"
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-2xs hover:bg-muted disabled:opacity-50"
                         title="Replace current lake with this snapshot"
                       >
                         {busy === `restore-${b.id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}

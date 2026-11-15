@@ -31,6 +31,7 @@ import {
 import { computeForecastBoundary, computeForecastRangeSummary, predictionDecorElements } from "./charts/PredictionOverlay";
 import { formatValue } from "./charts/shared";
 import { buildSnapshotCandidates } from "@/lib/reporting/forecastSnapshot";
+import { dataAsOf, partialLastPeriod } from "@/lib/reporting/partialPeriod";
 import { BlockEmptyState } from "./BlockEmptyState";
 import { renderScatterChart, renderFunnelChart } from "./charts/scatterFunnelRenderers";
 import { renderTreemapChart, renderWaterfallChart } from "./charts/treemapWaterfallRenderers";
@@ -48,6 +49,7 @@ import { renderParallelChart } from "./charts/parallelRenderer";
 import { Scatter3D } from "./three/Scatter3D";
 import { ChartHoverTip } from "./charts/ChartHoverTip";
 import { ChartZoom } from "./charts/ChartZoom";
+import { barsHorizontal } from "./charts/barOrientation";
 
 /** A gauge or bullet is one number, and the 3D scatter turns its own camera (Stage3D) — nothing for ChartZoom to add. */
 const UNZOOMABLE = new Set(["gauge", "bullet", "scatter3d"]);
@@ -264,7 +266,7 @@ function ForecastControl({
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">{t("forecast.title")}</p>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+            <p className="mt-0.5 text-2xs leading-snug text-muted-foreground">
               {t("forecast.description")}
             </p>
           </div>
@@ -290,7 +292,7 @@ function ForecastControl({
         {enabled && (
           <>
             <div className="space-y-1.5 border-t border-border pt-3">
-              <p className="text-[11px] font-medium text-muted-foreground">{t("forecast.howToPredict")}</p>
+              <p className="text-2xs font-medium text-muted-foreground">{t("forecast.howToPredict")}</p>
               {FORECAST_METHOD_OPTIONS.map((opt) => {
                 const active = method === opt.slug;
                 return (
@@ -331,7 +333,7 @@ function ForecastControl({
                   className="h-7 w-14 rounded border border-border bg-background px-1.5 text-center text-xs"
                 />
                 {unit !== "point" && (
-                  <span className="text-[11px] text-muted-foreground">{unitWord}</span>
+                  <span className="text-2xs text-muted-foreground">{unitWord}</span>
                 )}
               </div>
             </div>
@@ -339,7 +341,7 @@ function ForecastControl({
               <button
                 type="button"
                 onClick={() => setShowMethodology((s) => !s)}
-                className="flex w-full items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                className="flex w-full items-center gap-1 text-2xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
                 <HelpCircle className="h-3 w-3 shrink-0" />
                 {t("forecast.methodologyToggle")}
@@ -357,7 +359,7 @@ function ForecastControl({
               )}
             </div>
             {accuracy && accuracy.total > 0 && (
-              <div className="rounded-md border border-primary/20 bg-primary/5 px-2.5 py-2 text-[11px] text-foreground">
+              <div className="rounded-md border border-primary/20 bg-primary/5 px-2.5 py-2 text-2xs text-foreground">
                 {t("forecast.accuracyBadge")
                   .replace("{pct}", String(accuracy.hitRatePct))
                   .replace("{n}", String(accuracy.total))}
@@ -543,6 +545,25 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // control — a customer clicks it expecting a line and gets nothing.
   const forecastControlUseful = forecastEligible && enoughHistory && (!!reportForecast || forecastCadence.unit !== "point");
 
+  // A time chart whose last bucket is the week/month/quarter still running
+  // (today falls in it, or the rows' own as-of date stops short of its end):
+  // the renderers draw that bucket dashed and lighter and its tooltip says
+  // "Incomplete period", so three days of a week don't read as a crash.
+  // Found on the real rows only; projected rows come after them, so the
+  // index holds in `data` too. Declared before the projections: they fit on
+  // the finished periods only (a half-counted week would drag the trend).
+  const partialPeriod = useMemo(() => {
+    if (chartType !== "bar" && chartType !== "line" && chartType !== "area" && chartType !== "combo") return null;
+    return partialLastPeriod(baseRows.map((r) => r?.[xField]), { asOf: dataAsOf(baseRows, xField) });
+  }, [chartType, baseRows, xField]);
+
+  // The rows a projection learns from: every finished period. When the last
+  // bucket is still running, the fit stops before it and projects one extra
+  // step, dropping the step that lands on the running bucket — so the drawn
+  // projection still starts after the last real row, on the same x labels.
+  const fitRows = useMemo(() => (partialPeriod ? baseRows.slice(0, partialPeriod.index) : baseRows), [baseRows, partialPeriod]);
+  const skipSteps = partialPeriod ? 1 : 0;
+
   // Instant, always-available projection — appended for line/area/combo/bar
   // charts. The projection uses the FIRST yField as the basis (multi-series
   // forecast is more complex and rare in practice; ship the common case
@@ -550,15 +571,15 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // style them differently (dashed continuation, shaded band).
   const linearProjected = useMemo(() => {
     if (!canForecast) return [];
-    return projectSeries(baseRows, firstYField, forecast!.periods, {
+    return projectSeries(fitRows, firstYField, forecast!.periods + skipSteps, {
       xField,
       // Default labeler — "+1", "+2", … unless we can pattern-match the
       // last label as a quarter (2025-Q3 → 2025-Q4) or month (2025-04 →
       // 2025-05). Worth doing because charts mostly use these formats;
       // fallback keeps the projection visible regardless.
       xLabeler: (lastValue, k) => smartXLabel(lastValue, k, forecastCadence.stepDays),
-    });
-  }, [canForecast, baseRows, forecast, xField, firstYField, forecastCadence.stepDays]);
+    }).slice(skipSteps);
+  }, [canForecast, fitRows, skipSteps, forecast, xField, firstYField, forecastCadence.stepDays]);
 
   // Exponential smoothing — same instant, deterministic profile as the OLS
   // path above (no network round trip), just a different fit. See
@@ -566,11 +587,11 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // would pick this over "linear".
   const etsProjected = useMemo(() => {
     if (!canForecast || forecast?.method !== "ets") return [];
-    return projectSeriesETS(baseRows, firstYField, forecast!.periods, {
+    return projectSeriesETS(fitRows, firstYField, forecast!.periods + skipSteps, {
       xField,
       xLabeler: (lastValue, k) => smartXLabel(lastValue, k, forecastCadence.stepDays),
-    });
-  }, [canForecast, forecast?.method, baseRows, forecast, xField, firstYField, forecastCadence.stepDays]);
+    }).slice(skipSteps);
+  }, [canForecast, forecast?.method, fitRows, skipSteps, forecast, xField, firstYField, forecastCadence.stepDays]);
 
   // Business-tier upgrade: when forecast.method is "llm", ask the server
   // for a pattern-aware projection (see lib/reporting/llmForecast.ts) and
@@ -585,22 +606,22 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   useEffect(() => {
     setLlmValues(null);
     if (!canForecast || forecast?.method !== "llm") return;
-    const history = baseRows.map((r) => Number(r?.[firstYField])).filter((n) => Number.isFinite(n));
+    const history = fitRows.map((r) => Number(r?.[firstYField])).filter((n) => Number.isFinite(n));
     if (history.length < 2) return;
     let cancelled = false;
     fetch("/api/reports/forecast-llm", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ history, periods: forecast!.periods }),
+      body: JSON.stringify({ history, periods: forecast!.periods + skipSteps }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        const values = modelForecastValues(j, forecast!.periods);
-        if (!cancelled && values) setLlmValues(values);
+        const values = modelForecastValues(j, forecast!.periods + skipSteps);
+        if (!cancelled && values) setLlmValues(values.slice(skipSteps));
       })
       .catch(() => { /* stays on the linear projection already shown */ });
     return () => { cancelled = true; };
-  }, [canForecast, forecast?.method, forecast?.periods, baseRows, firstYField]);
+  }, [canForecast, forecast?.method, forecast?.periods, fitRows, skipSteps, firstYField]);
   // What the drawn projection really is — the label and the accuracy record
   // say this, not the method that was asked for.
   const drawnMethod = forecast ? drawnForecastMethod(forecast.method, !!llmValues) : undefined;
@@ -616,6 +637,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
     if (projected.length === 0) return baseRows;
     return [...baseRows, ...projected];
   }, [baseRows, projected]);
+
   const proof = !print && provenance ? provenance[queryId] : undefined;
   const ds = !print ? report.dataSources.find((d) => d.id === queryId) ?? null : null;
 
@@ -770,14 +792,22 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   // resolve to one that actually exists. renderComboChart passes "left" for
   // exactly that reason; every other renderer omits it and keeps the old
   // (working) default.
+  //
+  // Bars the renderer laid down on its own (barsHorizontal: many categories,
+  // no orientation chosen) swap axes, and a line drawn against the value
+  // axis swaps with them — a "y" line on lying-down bars is NaN to Recharts.
+  const autoHorizontal = chartType === "bar" && cfg.orientation == null
+    && barsHorizontal(undefined, (data as any[]).map((r) => r?.[xField]));
   function renderReferenceLines(yAxisId?: string) {
     if (!referenceLines || referenceLines.length === 0) return null;
-    return referenceLines.map((rl: any, i: number) => (
+    return referenceLines.map((rl: any, i: number) => {
+      const axis = autoHorizontal ? (rl.axis === "y" ? "x" : "y") : rl.axis;
+      return (
       <ReferenceLine
         key={"rl" + i}
         yAxisId={yAxisId}
-        x={rl.axis === "x" ? rl.value : undefined}
-        y={rl.axis === "y" ? rl.value : undefined}
+        x={axis === "x" ? rl.value : undefined}
+        y={axis === "y" ? rl.value : undefined}
         stroke={theme.semantic[rl.variant as keyof typeof theme.semantic] ?? theme.semantic.neutral}
         strokeWidth={1.5}
         strokeDasharray="6 3"
@@ -787,13 +817,14 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
           // Inside the plot, just above a horizontal line at its left end. "right" put the
           // label outside the plot area, where anything longer than a word was cut off
           // ("เป้าห…") — the chart's right margin only fits a few characters.
-          position: rl.axis === "y" ? "insideTopLeft" : "insideTop",
+          position: axis === "y" ? "insideTopLeft" : "insideTop",
           fill: theme.semantic[rl.variant as keyof typeof theme.semantic] ?? theme.semantic.neutral,
           fontSize: 10,
           fontWeight: 500,
         } : undefined}
       />
-    ));
+      );
+    });
   }
 
   // Forecast decoration — see PredictionOverlay.tsx. Draws three extras
@@ -860,6 +891,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
 
   // Donut is just a Pie with a bigger hole - keep one component, two visual modes.
   const isDonut = chartType === "donut";
+  const partial = partialPeriod ? { index: partialPeriod.index, note: t("chart.partialPeriod.tooltip") } : undefined;
 
   return (
     <div className={cn(
@@ -907,10 +939,11 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
         <header className="mb-2 flex items-start justify-between gap-3 pr-8">
           <div className="min-w-0">
             {title && (
-              <h3 className="flex items-center gap-2 truncate text-base font-semibold tracking-tight text-foreground">
+              // Two lines before an ellipsis: a long Thai or Chinese title is read, not cut at the caption beside it.
+              <h3 className="line-clamp-2 break-words text-base font-semibold tracking-tight text-foreground" title={title}>
                 {title}
                 {drillEnabled && (
-                  <span data-drill-chip className="rounded-md border border-primary/30 bg-primary-soft px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary-ink">
+                  <span data-drill-chip className="ml-2 inline-block align-middle rounded-md border border-primary/30 bg-primary-soft px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary-ink">
                     {t("drill.chip")}
                   </span>
                 )}
@@ -918,7 +951,8 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
             )}
             {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
           </div>
-          <span className="shrink-0 pt-1 font-mono text-xs text-faint">{chartType} · {data.length} {t("kpi.rows")}</span>
+          {/* Build detail for whoever is working on the block; at rest a reader sees only the title. */}
+          <span className="shrink-0 pt-1 font-mono text-xs text-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 print:hidden">{chartType} · {data.length} {t("kpi.rows")}</span>
         </header>
       )}
       {/* In bare mode there's no header reserving space below the floating
@@ -993,23 +1027,23 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
           ) : chartType === "bar" ? (
             renderBarChart({
               data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
-              gid, stacked, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+              gid, stacked, forecast, partial, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "line" ? (
             renderLineChart({
               data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
-              forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+              forecast, partial, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "area" ? (
             renderAreaChart({
               data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend,
-              gid, stacked, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+              gid, stacked, forecast, partial, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "combo" ? (
             renderComboChart({
               data, xField, yFields, cfg, palette, style: chartStyle, fmt, currency, dateStyle, print, showLegend, showDataLabels,
               text: { abcA: t("chart.pareto.a"), abcB: t("chart.pareto.b"), abcC: t("chart.pareto.c") },
-              gid, lineFields, forecast, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
+              gid, lineFields, forecast, partial, handleClick, renderReferenceLines, renderAnnotations, renderForecastDecor,
             })
           ) : chartType === "treemap" ? (
             renderTreemapChart({
@@ -1048,6 +1082,10 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
         )}
         </ChartZoom>
       </ChartHoverTip>
+      {/* The dashed last bucket explained in words — a PDF has no tooltip. */}
+      {partial && (
+        <p data-partial-period className="mt-1 text-[10.5px] leading-snug text-faint">{t("chart.partialPeriod.note")}</p>
+      )}
       {/* AI caption strip — only renders when (a) the block has aiCaption: true,
           (b) the tenant is on Business (the API 402s otherwise — we never
           show the strip in that case), and (c) the caption call returned
@@ -1055,7 +1093,7 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
           readers don't confuse it with hand-edited copy. */}
       {/* AI caption strip rendered when present. */}
       {caption && !print && (
-        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-primary/30 bg-primary-soft px-2.5 py-1.5 text-[11px] leading-relaxed text-primary-ink   ">
+        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-primary/30 bg-primary-soft px-2.5 py-1.5 text-2xs leading-relaxed text-primary-ink   ">
           <Sparkles className="mt-[1px] h-3 w-3 shrink-0 text-primary" />
           <span className="italic">
             {caption.text}

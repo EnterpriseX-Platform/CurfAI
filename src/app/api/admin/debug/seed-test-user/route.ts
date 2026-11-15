@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   const target = await withSystemDbContext(() => prisma.user.upsert({
     where: { email: body.email! },
     update: { passwordHash, name: body.name ?? null },
-    create: { email: body.email!, name: body.name ?? null, passwordHash },
+    create: { email: body.email!, name: body.name ?? null, passwordHash, emailVerifiedAt: new Date() },
   }));
   const membership = await prisma.membership.upsert({
     where: { userId_tenantId: { userId: target.id, tenantId: user.tenantId } },

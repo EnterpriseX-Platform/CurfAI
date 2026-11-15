@@ -55,7 +55,7 @@ export function RulerH({
           />
           {t.label && (
             <span
-              className="absolute bottom-2 -translate-x-1/2 text-[9px] font-medium tabular-nums text-muted-foreground"
+              className="absolute bottom-2 -translate-x-1/2 text-2xs font-medium tabular-nums text-muted-foreground"
               style={{ left: 0 }}
             >
               {t.label}
@@ -113,7 +113,7 @@ export function RulerV({
           />
           {t.label && (
             <span
-              className="absolute right-2 top-1/2 -translate-y-1/2 rotate-180 text-[9px] font-medium tabular-nums text-muted-foreground"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rotate-180 text-2xs font-medium tabular-nums text-muted-foreground"
               style={{ writingMode: "vertical-rl" }}
             >
               {t.label}

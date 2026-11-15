@@ -161,7 +161,7 @@ export function ChartPinOverlay({
             "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium shadow-sm transition-colors " +
             (pinMode
               ? "border-primary bg-primary text-primary-foreground"
-              : "border-border text-muted-foreground opacity-0 backdrop-blur hover:bg-muted hover:text-foreground group-hover:opacity-100")
+              : "border-border text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100")
           }
           title={pinMode ? "Cancel pin mode" : "Drop a comment pin"}
         >

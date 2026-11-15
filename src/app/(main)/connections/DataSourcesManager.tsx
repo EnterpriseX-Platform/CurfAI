@@ -1,5 +1,7 @@
 "use client";
 import { useT } from "@/lib/i18n/LocaleContext";
+import { sourceFreshness, type PullLite } from "@/lib/connections/freshness";
+import { relative } from "@/lib/i18n/formatDate";
 
 /**
  * Full-page Connections manager. Mirrors the modal drawer's Connections tab
@@ -17,12 +19,15 @@ import type {
 } from "@/components/connections/types";
 
 export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean; currentTier: string }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const { push } = useToast();
+  const [pulls, setPulls] = useState<PullLite[]>([]);
   const [items, setItems] = useState<DataSourceListItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<EditingConnection | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // The reports that read from the connection being deleted, so the confirm says what stops working.
+  const [impact, setImpact] = useState<string[] | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const formRef = useRef<HTMLDivElement | null>(null);
   // One hidden file input shared by every Excel row; the row id is captured
@@ -38,6 +43,10 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
     setBusy(false);
   }
   useEffect(() => { refresh(); }, []);
+  // What feeds the lake from each source, for the freshness line. Best-effort: a failure leaves every source reading as live.
+  useEffect(() => {
+    fetch("/api/lake/pulls").then((r) => (r.ok ? r.json() : null)).then((j) => { if (Array.isArray(j?.items)) setPulls(j.items); }).catch(() => {});
+  }, []);
 
   // Role catalog for the visibility picker. Only admins can read /api/admin/roles,
   // which is fine — only admins can create/edit connections anyway.
@@ -66,6 +75,12 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
     if (editing?.id === id) setEditing(null);
     setDeletingId(null);
     refresh();
+  }
+
+  function askDelete(id: string) {
+    setDeletingId(id);
+    setImpact(null);
+    fetch(`/api/data-sources/${id}/impact`).then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && Array.isArray(j.reports)) setImpact(j.reports.map((x: { name: string }) => x.name)); }).catch(() => {});
   }
 
   function startExcelRefresh(id: string) {
@@ -139,7 +154,18 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
             <tbody>
               {items.map((it) => (
                 <tr key={it.id} className={`border-t ${editing?.id === it.id ? "bg-primary/5" : ""}`}>
-                  <td className="px-4 py-2.5 font-medium">{it.name}</td>
+                  <td className="px-4 py-2.5 font-medium">
+                    {it.name}
+                    {(() => {
+                      const f = sourceFreshness(it.id, pulls);
+                      const tone = f.state === "failing" ? "text-destructive" : f.state === "fresh" ? "text-success" : "text-muted-foreground";
+                      return (
+                        <div className={`mt-0.5 text-2xs font-normal ${tone}`} data-testid="conn-freshness" title={f.error}>
+                          {t(`connFresh.${f.state}`).replace("{ago}", f.lastRunAt ? relative(f.lastRunAt, locale) : "")}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="px-4 py-2.5">
                     <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs">
                       {it.kind === "rest" ? <Globe className="h-3.5 w-3.5" />
@@ -193,7 +219,12 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
                           </Button>
                         )}
                         {deletingId === it.id ? (
-                          <div className="flex gap-1">
+                          <div className="flex flex-wrap justify-end gap-1">
+                            {impact && impact.length > 0 && (
+                              <p className="basis-full text-right text-2xs text-warning" data-testid="conn-delete-impact">
+                                {t("connections.deleteImpact").replace("{n}", String(impact.length)).replace("{names}", impact.slice(0, 3).join(", "))}
+                              </p>
+                            )}
                             <Button size="sm" variant="destructive" onClick={() => removeConnection(it.id)}>
                               {t("action.confirm")}
                             </Button>
@@ -202,7 +233,7 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
                             </Button>
                           </div>
                         ) : (
-                          <Button size="icon" variant="ghost" onClick={() => setDeletingId(it.id)} title={t("action.delete")}>
+                          <Button size="icon" variant="ghost" onClick={() => askDelete(it.id)} title={t("action.delete")}>
                             <Trash2 className="h-4 w-4 text-destructive/80" />
                           </Button>
                         )}
@@ -232,6 +263,7 @@ export function DataSourcesManager({ isAdmin, currentTier }: { isAdmin: boolean;
             )}
           </div>
           <ConnectionForm
+            chooseKind
             editing={editing}
             roleOptions={roleOptions}
             onRoleOptionsChange={setRoleOptions}

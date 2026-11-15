@@ -29,7 +29,7 @@ import { DELETE, GET, POST, PUT } from "./[...path]/route";
 
 const req = (method: string, path: string, query = "dataSourceId=ds1", body?: string) =>
   new NextRequest(`http://curf.test/api/engine/admin/${path}?${query}`, { method, body, headers: body ? { "content-type": "application/json" } : undefined });
-const ctxFor = (path: string) => ({ params: { path: path.split("/") } });
+const ctxFor = (path: string) => ({ params: Promise.resolve({ path: path.split("/") }) });
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
 const run = (handler: typeof GET, method: string, path: string, query?: string, body?: string) => handler(req(method, path, query, body), ctxFor(path));
 

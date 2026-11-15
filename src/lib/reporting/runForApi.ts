@@ -45,7 +45,7 @@ export async function runReportForApi(
   url: URL,
   opts: { cacheBust?: boolean } = {},
 ): Promise<RunReportForApiResult> {
-  const limited = ensureLimit("run", `t:${user.tenantId}`, 60, 60_000);
+  const limited = await ensureLimit("run", `t:${user.tenantId}`, 60, 60_000);
   if (limited) return { ok: false, response: limited };
 
   // reportWhere() also honors a scoped API key's report allowlist (Phase

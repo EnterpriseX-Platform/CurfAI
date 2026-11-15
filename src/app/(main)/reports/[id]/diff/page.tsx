@@ -15,8 +15,8 @@ import { diffDatasets, type QueryDiff, type FieldChange } from "@/lib/reporting/
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/reporting/format";
 import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -30,13 +30,15 @@ function readLocale(): Locale {
 
 export const dynamic = "force-dynamic";
 
-export default async function DiffPage({
-  params, searchParams,
-}: {
-  params: { id: string };
-  searchParams: { from?: string; to?: string };
-}) {
-  const locale = readLocale();
+export default async function DiffPage(
+  props: {
+    params: Promise<{ id: string }>;
+    searchParams: Promise<{ from?: string; to?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
+  const locale = await readLocale();
   const user = await requireUser();
   if (!user) redirect(`/login?callbackUrl=/reports/${params.id}/diff`);
 
@@ -117,7 +119,7 @@ export default async function DiffPage({
       ]}
       actions={<BackButton reportId={params.id} locale={locale} />}
     >
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader
           eyebrow={t(locale, "reportDiff.eyebrow")}
           title={report.name}
@@ -148,7 +150,7 @@ export default async function DiffPage({
           ))}
         </div>
 
-        <p className="mt-10 text-[11px] text-muted-foreground">
+        <p className="mt-10 text-2xs text-muted-foreground">
           {t(locale, "reportDiff.footerNote")}
         </p>
       </div>
@@ -190,9 +192,9 @@ function QuerySection({ q, label, locale }: { q: QueryDiff; label: string; local
     <section className="rounded-lg border bg-card p-5 shadow-xs">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold">
-          {label} <span className="ml-2 font-mono text-[11px] font-normal text-muted-foreground">{q.queryId}</span>
+          {label} <span className="ml-2 font-mono text-2xs font-normal text-muted-foreground">{q.queryId}</span>
         </h2>
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
           {q.shape === "scalar" ? t(locale, "reportDiff.kpiRow") : t(locale, "reportDiff.rowsCount").replace("{n}", String(q.counts.added + q.counts.removed + q.counts.changed + unchanged))}
           {unchanged > 0 && <span className="text-muted-foreground/60">· {t(locale, "reportDiff.unchanged").replace("{n}", String(unchanged))}</span>}
         </div>
@@ -248,7 +250,7 @@ function RowChanges({ q, locale }: { q: QueryDiff; locale: Locale }) {
               <Plus className="mt-0.5 h-3.5 w-3.5 text-success shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="mb-0.5 font-medium text-success">{t(locale, "reportDiff.newRow")}</div>
-                <div className="font-mono text-[11px] text-muted-foreground break-words">{summarise(r.row)}</div>
+                <div className="font-mono text-2xs text-muted-foreground break-words">{summarise(r.row)}</div>
               </div>
             </div>
           );
@@ -259,7 +261,7 @@ function RowChanges({ q, locale }: { q: QueryDiff; locale: Locale }) {
               <Minus className="mt-0.5 h-3.5 w-3.5 text-destructive shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="mb-0.5 font-medium text-destructive">{t(locale, "reportDiff.removedRow")}</div>
-                <div className="font-mono text-[11px] text-muted-foreground break-words">{summarise(r.row)}</div>
+                <div className="font-mono text-2xs text-muted-foreground break-words">{summarise(r.row)}</div>
               </div>
             </div>
           );
@@ -269,7 +271,7 @@ function RowChanges({ q, locale }: { q: QueryDiff; locale: Locale }) {
           <div key={i} className="flex items-start gap-3 bg-warning/5 px-3 py-2 text-xs">
             <Equal className="mt-0.5 h-3.5 w-3.5 text-warning shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="mb-0.5 font-medium text-warning font-mono text-[11px]">{r.id}</div>
+              <div className="mb-0.5 font-medium text-warning font-mono text-2xs">{r.id}</div>
               <ul className="space-y-0.5">
                 {r.changes.map((c) => (
                   <li key={c.key} className="flex flex-wrap items-baseline gap-x-2 text-muted-foreground">

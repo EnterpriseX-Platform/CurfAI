@@ -36,7 +36,7 @@ const DEFINITION = JSON.stringify({
 });
 const get = (cookie?: string) => GET(
   new NextRequest("http://localhost:3100/api/reports/r1/export/pdf", { headers: cookie ? { cookie } : undefined }),
-  { params: { id: "r1" } },
+  { params: Promise.resolve({ id: "r1" }) },
 );
 
 beforeEach(() => {

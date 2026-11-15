@@ -29,7 +29,8 @@ const PreviewSchema = z.object({
   textRepair: z.enum(["mac_roman", "cp1252"]).nullable().optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 

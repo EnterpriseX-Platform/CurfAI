@@ -83,7 +83,7 @@ export function ExternalImportPanel({
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-card p-5">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Step 1 — Name</p>
+        <p className="mb-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Step 1 — Name</p>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -94,7 +94,7 @@ export function ExternalImportPanel({
 
       {wiringRequired.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-5">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
             Step 2 — Wire {wiringRequired.length} connection{wiringRequired.length === 1 ? "" : "s"}
           </p>
 
@@ -118,7 +118,7 @@ export function ExternalImportPanel({
                     <div className="mb-1.5 flex items-center gap-1.5 text-xs">
                       <Database className="h-3 w-3 text-muted-foreground" />
                       <span className="font-medium">{w.label}</span>
-                      <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{w.kind}</span>
+                      <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">{w.kind}</span>
                     </div>
                     <select
                       value={wiring[w.placeholder] ?? ""}

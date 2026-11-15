@@ -116,21 +116,21 @@ export function SmtpPanel() {
   return (
     <section className="mb-8 rounded-lg border bg-card p-5 shadow-xs">
       <div className="mb-1 flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("admin.smtp.title")}
         </p>
         {loading ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : status?.configured ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-[11px] font-medium text-success">
+          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-2xs font-medium text-success">
             <CheckCircle2 className="h-3 w-3" /> {t("admin.smtp.configured")}
           </span>
         ) : status?.fallbackEnv ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2.5 py-0.5 text-[11px] font-medium text-warning">
+          <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2.5 py-0.5 text-2xs font-medium text-warning">
             <AlertCircle className="h-3 w-3" /> {t("admin.smtp.fallbackEnv")}
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-2xs font-medium text-muted-foreground">
             <AlertCircle className="h-3 w-3" /> {t("admin.smtp.notConfigured")}
           </span>
         )}

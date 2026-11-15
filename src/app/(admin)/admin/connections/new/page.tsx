@@ -15,8 +15,8 @@ import { t, LOCALES, type Locale } from "@/lib/i18n/dict";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -24,7 +24,7 @@ export default async function NewConnectionPage() {
   const user = await requireUser();
   if (!user) redirect("/login?next=/admin/connections/new");
   if (user.role !== "admin") redirect("/");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   return (
     <AppShell breadcrumbs={[
@@ -32,7 +32,7 @@ export default async function NewConnectionPage() {
       { label: t(locale, "nav.connections"), href: "/admin/connections" },
       { label: t(locale, "breadcrumb.new") },
     ]}>
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-4xl px-8 pb-12 pt-7">
         <NewConnectionWizard />
       </div>
     </AppShell>

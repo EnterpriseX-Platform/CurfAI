@@ -68,6 +68,7 @@ export const FEATURE_TIERS = {
   "ai.talks_back":     "growth",
   "ai.suggest_charts": "growth",         // Claude looks at your data, proposes the next viz
   "ai.why_everywhere": "growth",         // Click any number → narrative explanation of what's driving it
+  "agent.briefs": "growth",             // A saved Deep Ask question that runs on a schedule and goes to members (lib/briefs/)
   "ai.cross_workspace_ask": "business",  // Ask without picking a report first — fans out to several, costs more per question
 
   // ---- Analytic Apps (Slice — distribution surface) ----
@@ -228,6 +229,7 @@ const FEATURE_LABELS = {
   "ai.talks_back":          "Ask Curf",
   "ai.suggest_charts":      "AI chart suggestions",
   "ai.why_everywhere":      "The Why? explainer",
+  "agent.briefs":           "Scheduled agent briefs",
   "ai.cross_workspace_ask": "Asking across workspaces",
 
   // ---- Analytic Apps ----

@@ -37,7 +37,7 @@ const DEFINITION = JSON.stringify({
   version: 1, name: "Sales", parameters: [], dataSources: [],
   pages: [{ id: "p1", size: "A4", orientation: "portrait", blocks: [] }],
 });
-const edit = () => EditorPage({ params: { id: "r1" } }) as Promise<any>;
+const edit = () => EditorPage({ params: Promise.resolve({ id: "r1" }) }) as Promise<any>;
 const ranAs = () => vi.mocked(runReport).mock.calls[0][0].viewer;
 
 beforeEach(() => {

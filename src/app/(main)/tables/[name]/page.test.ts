@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const h = vi.hoisted(() => ({ user: null as any, roles: [] as string[], row: null as any, meta: null as any, panelProps: null as any }));
+const h = vi.hoisted(() => ({ user: null as any, roles: [] as string[], row: null as any, meta: null as any, panelProps: null as any, metrics: [] as any[] }));
 
 vi.mock("next/navigation", () => ({
   notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }),
@@ -35,11 +35,18 @@ vi.mock("@/lib/lake/tables", () => ({
   typedColumnsEnabled: vi.fn(() => false),
 }));
 vi.mock("@/lib/lake/freshness", () => ({ freshnessIssueForOne: vi.fn(async () => null) }));
-vi.mock("@/ee", () => ({ ee: {} }));
+// The paid side (src/ee/tableDetail.ts, tested there) finds the metrics; here it hands back the ones in h.metrics.
+vi.mock("@/ee", () => ({
+  ee: {
+    metrics: { readingTable: vi.fn(async () => h.metrics.map((m: any) => ({ slug: m.slug, label: m.label }))) },
+    dataQuality: { tableChecks: vi.fn(async () => []) },
+  },
+}));
 vi.mock("@/lib/i18n/dict", () => ({ LOCALES: ["en"], t: (_l: string, k: string) => k }));
 vi.mock("@/components/layout/AppShell", () => ({ AppShell: ({ children }: { children: ReactNode }) => createElement("div", null, children) }));
 vi.mock("./DeleteTableButton", () => ({ DeleteTableButton: () => null }));
 vi.mock("./AutoGenerateButton", () => ({ AutoGenerateButton: () => null }));
+vi.mock("./SuggestedChecks", () => ({ SuggestedChecks: () => null }));
 vi.mock("./AddColumnButton", () => ({ AddColumnButton: () => null }));
 vi.mock("./SpreadsheetView", () => ({ SpreadsheetView: () => null }));
 vi.mock("./TableManagePanel", () => ({ TableManagePanel: (props: any) => { h.panelProps = props; return null; } }));
@@ -56,7 +63,7 @@ const tableRow = (over: Record<string, unknown> = {}) => ({
   ownerUserId: null, visibleToRolesJson: "[]", schemaJson: JSON.stringify(SCHEMA), ...over,
 });
 
-const render = async () => renderToStaticMarkup(await TableDetailPage({ params: { name: "people" } }) as any);
+const render = async () => renderToStaticMarkup(await TableDetailPage({ params: Promise.resolve({ name: "people" }) }) as any);
 /** The markup of the preview-rows section (after its heading). */
 const previewSection = (html: string) => html.slice(html.indexOf("tableDetail.previewHeading"));
 /** The markup of the schema section (column / type / sample). */
@@ -69,6 +76,7 @@ beforeEach(() => {
   h.row = tableRow();
   h.meta = null;
   h.panelProps = null;
+  h.metrics = [];
   vi.mocked(previewRows).mockImplementation(async () => [
     { email: "ann@example.com", region: "North" },
     { email: "bob@example.com", region: "South" },
@@ -140,5 +148,23 @@ describe("/tables/[name] — what the page shows of a table's rows", () => {
     h.row = tableRow({ visibleToRolesJson: JSON.stringify(["hr"]) });
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(previewRows).not.toHaveBeenCalled();
+  });
+
+  it("profiles each column from the rows shown, and names the published metrics whose query reads the table", async () => {
+    h.metrics = [{ slug: "people_count", label: "People", sql: "SELECT COUNT(*) AS value FROM people" }];
+    const html = await render();
+    expect(schemaSection(html)).toContain("100%");
+    expect(html).toContain("read-by-metrics");
+    expect(html).toContain("People");
+    const { ee } = await import("@/ee");
+    expect(vi.mocked(ee.metrics!.readingTable!).mock.calls.at(-1)).toEqual(["t1", "people"]);
+  });
+
+  it("names no metrics to someone who cannot read the table's rows", async () => {
+    h.user = { id: "u-admin", role: "admin", tenantId: "t1", email: "a@test.dev" };
+    h.roles = ["finance"];
+    h.row = tableRow({ visibleToRolesJson: JSON.stringify(["hr"]) });
+    h.metrics = [{ slug: "people_count", label: "People", sql: "SELECT COUNT(*) AS value FROM people" }];
+    expect(await render()).not.toContain("read-by-metrics");
   });
 });

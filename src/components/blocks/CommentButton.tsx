@@ -269,7 +269,7 @@ function Thread({
         <button
           type="button"
           onClick={() => setShowReply((v) => !v)}
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Reply className="h-3 w-3" /> Reply
         </button>
@@ -277,7 +277,7 @@ function Thread({
           type="button"
           onClick={toggleResolve}
           className={cn(
-            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium",
+            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium",
             resolved ? "text-success hover:bg-success/10" : "text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
@@ -316,7 +316,7 @@ function CommentRow({
     )}>
       <Avatar initials={monogram} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2 text-[11px]">
+        <div className="flex items-baseline justify-between gap-2 text-2xs">
           <span className="font-medium text-foreground">
             {comment.author?.name ?? comment.author?.email ?? "Unknown"}
           </span>

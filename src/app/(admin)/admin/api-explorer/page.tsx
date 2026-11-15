@@ -15,8 +15,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
@@ -24,11 +24,11 @@ export default async function ApiExplorerPage() {
   const user = await requireUser();
   if (!user) redirect("/login?next=/admin/api-explorer");
   if (user.role !== "admin") redirect("/");
-  const locale = readLocale();
+  const locale = await readLocale();
 
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "nav.section.admin"), href: "/admin/tenant" }, { label: t(locale, "nav.apiExplorer") }]}>
-      <div className="mx-auto max-w-5xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "apiExplorer.pageTitle")} description={t(locale, "apiExplorer.pageSubtitle")} />
 
 

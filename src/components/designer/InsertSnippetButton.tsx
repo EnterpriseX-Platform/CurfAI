@@ -54,7 +54,7 @@ export function InsertSnippetButton({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-2xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Sparkles className="h-3 w-3" />
           {t("insertSnippet.button")}
@@ -80,9 +80,9 @@ export function InsertSnippetButton({
           >
             <span className="text-sm font-medium">{s.name}</span>
             {s.description && (
-              <span className="line-clamp-1 text-[10px] text-muted-foreground">{s.description}</span>
+              <span className="line-clamp-1 text-2xs text-muted-foreground">{s.description}</span>
             )}
-            <code className="mt-1 line-clamp-2 max-w-full whitespace-pre-wrap break-all rounded bg-muted px-1.5 py-1 text-[10px] text-muted-foreground/80">
+            <code className="mt-1 line-clamp-2 max-w-full whitespace-pre-wrap break-all rounded bg-muted px-1.5 py-1 text-2xs text-muted-foreground/80">
               {s.body.slice(0, 120)}{s.body.length > 120 ? "…" : ""}
             </code>
           </DropdownMenuItem>

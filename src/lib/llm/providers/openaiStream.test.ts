@@ -205,3 +205,30 @@ describe("thinking cap (opt-in)", () => {
     expect((await call(req({ maxTokens: 1500, thinkingCap: 0.5 }), ctx)).status).toBe("ok");
   });
 });
+
+describe("system messages", () => {
+  it("joins every system instruction into one leading message (vLLM chat templates reject a later one)", async () => {
+    process.env.CURF_LLM_STREAM = "off";
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: "stop" }] }), { status: 200 }));
+    await call(req({
+      system: "Be brief.",
+      responseFormat: "json",
+      messages: [{ role: "user", content: "hi" }, { role: "system", content: "Mind the year." }, { role: "user", content: "again" }],
+    }) as any, ctx as any);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body).messages;
+    expect(sent.map((m: any) => m.role)).toEqual(["system", "user", "user"]);
+    expect(sent[0].content).toBe("Be brief.\n\nMind the year.\n\nRespond with a single valid JSON object.");
+  });
+});
+
+describe("hosts that name the thinking field `reasoning`", () => {
+  it("counts it as thinking when a streamed answer never arrives", async () => {
+    const r = await readChatStream(bodyOf(sse(
+      { choices: [{ delta: { reasoning: "let me think " } }] },
+      { choices: [{ delta: { reasoning: "more" }, finish_reason: "length" }] },
+      "[DONE]",
+    )), () => {});
+    expect(r.choices?.[0]?.message?.reasoning_content).toBe("let me think more");
+    expect(r.choices?.[0]?.message?.content).toBe("");
+  });
+});

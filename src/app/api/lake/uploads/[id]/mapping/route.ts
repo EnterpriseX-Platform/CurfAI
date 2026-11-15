@@ -44,7 +44,8 @@ const MappingSchema = z.object({
   ai: z.object({ current: z.record(z.string(), FieldSourceSchema) }).optional(),
 });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const user = await requireAdminOrEditor(req);
   if (user instanceof NextResponse) return user;
 

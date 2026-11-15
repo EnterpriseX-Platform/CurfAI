@@ -220,11 +220,11 @@ function DateRangeChip({
           <Calendar className="h-3 w-3 opacity-60" />
           <span className="text-muted-foreground">{param.label}:</span>
           <span>{display}</span>
-          <span className="text-[10px] opacity-50">▾</span>
+          <span className="text-2xs opacity-50">▾</span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("filterBar.presets")}
         </DropdownMenuLabel>
         {DATE_PRESETS.map((p) => (
@@ -238,7 +238,7 @@ function DateRangeChip({
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("filterBar.customRange")}
         </DropdownMenuLabel>
         <CustomRangePicker value={current} onChange={onChange} />
@@ -258,14 +258,14 @@ function CustomRangePicker({ value, onChange }: { value: string; onChange: (v: s
 
   return (
     <div className="grid gap-1.5 px-2 py-1.5">
-      <label className="grid gap-0.5 text-[11px] text-muted-foreground">
+      <label className="grid gap-0.5 text-2xs text-muted-foreground">
         {t("filterBar.from")}
         <input
           type="date" value={f} onChange={(e) => setF(e.target.value)}
           className="h-7 rounded border border-border bg-background px-2 text-xs"
         />
       </label>
-      <label className="grid gap-0.5 text-[11px] text-muted-foreground">
+      <label className="grid gap-0.5 text-2xs text-muted-foreground">
         {t("filterBar.to")}
         <input
           type="date" value={until} onChange={(e) => setUntil(e.target.value)}
@@ -308,7 +308,7 @@ function SelectChip({
         <button type="button" className={chipClass} title={param.label}>
           <span className="text-muted-foreground">{param.label}:</span>
           <span>{display || "—"}</span>
-          <span className="text-[10px] opacity-50">▾</span>
+          <span className="text-2xs opacity-50">▾</span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-48">

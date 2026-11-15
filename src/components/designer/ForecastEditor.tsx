@@ -53,8 +53,8 @@ export function ForecastEditor({
     <div className="space-y-3 rounded-md border border-border bg-muted/30 p-2.5">
       <div className="flex items-center justify-between">
         <div>
-          <Label className="text-[11px]">{t("forecastEditor.title")}</Label>
-          <p className="text-[10px] text-muted-foreground">{t("forecastEditor.hint")}</p>
+          <Label className="text-2xs">{t("forecastEditor.title")}</Label>
+          <p className="text-2xs text-muted-foreground">{t("forecastEditor.hint")}</p>
         </div>
         <input
           type="checkbox"
@@ -83,12 +83,12 @@ export function ForecastEditor({
                 >
                   <div className="flex items-center gap-1.5">
                     <Icon className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-[11px] font-medium">{t(`forecast.method.${opt.slug}.label`)}</span>
-                    <span className="rounded-full bg-muted px-1.5 py-0 text-[9px] uppercase tracking-wider text-muted-foreground">
+                    <span className="text-2xs font-medium">{t(`forecast.method.${opt.slug}.label`)}</span>
+                    <span className="rounded-full bg-muted px-1.5 py-0 text-2xs uppercase tracking-wider text-muted-foreground">
                       {planForTier(FEATURE_TIERS[opt.feature]).name}
                     </span>
                   </div>
-                  <p className="text-[10px] leading-snug text-muted-foreground">{t(`forecastEditor.method.${opt.slug}.hint`)}</p>
+                  <p className="text-2xs leading-snug text-muted-foreground">{t(`forecastEditor.method.${opt.slug}.hint`)}</p>
                 </button>
               );
             })}
@@ -96,7 +96,7 @@ export function ForecastEditor({
 
           {/* Periods stepper */}
           <div className="grid gap-1">
-            <Label className="text-[10px]">{t("forecastEditor.periods")}</Label>
+            <Label className="text-2xs">{t("forecastEditor.periods")}</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="number"
@@ -106,7 +106,7 @@ export function ForecastEditor({
                 onChange={(e) => patch({ periods: Math.max(1, Math.min(24, Number(e.target.value))) })}
                 className="h-7 w-20 text-xs"
               />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-2xs text-muted-foreground">
                 ~{fc.periods === 4 ? t("forecastEditor.aQuarter") : fc.periods === 12 ? t("forecastEditor.aYear") : fc.periods === 52 ? t("forecastEditor.aYearWeekly") : t("forecastEditor.nSteps").replace("{n}", String(fc.periods))}
               </p>
             </div>
@@ -115,8 +115,8 @@ export function ForecastEditor({
           {/* Bands toggle */}
           <div className="flex items-center justify-between rounded-md border border-border bg-background px-2.5 py-1.5">
             <div>
-              <Label className="text-[11px]">{t("forecastEditor.band")}</Label>
-              <p className="text-[10px] text-muted-foreground">{t("forecastEditor.bandHint")}</p>
+              <Label className="text-2xs">{t("forecastEditor.band")}</Label>
+              <p className="text-2xs text-muted-foreground">{t("forecastEditor.bandHint")}</p>
             </div>
             <input
               type="checkbox"

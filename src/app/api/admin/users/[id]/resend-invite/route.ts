@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
-import { mintAndSendInvite } from "@/lib/invites";
+import { mintAndSendInvite, isPendingInvite } from "@/lib/invites";
 import { appBase } from "@/lib/http/appBase";
 
 /**
@@ -15,17 +15,18 @@ import { appBase } from "@/lib/http/appBase";
  *
  * Refuses to resend for users who have already accepted (passwordHash set).
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
 
   const membership = await prisma.membership.findUnique({
     where: { userId_tenantId: { userId: params.id, tenantId: u.tenantId } },
-    include: { user: { select: { id: true, email: true, name: true, passwordHash: true } } },
+    include: { user: { select: { id: true, email: true, name: true, passwordHash: true, emailVerifiedAt: true, keycloakSub: true } } },
   });
   if (!membership) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const target = { ...membership.user, role: membership.role };
-  if (target.passwordHash) {
+  if (!isPendingInvite(target)) {
     return NextResponse.json(
       { error: "User has already accepted their invite. Use password reset instead." },
       { status: 409 },

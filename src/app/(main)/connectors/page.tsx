@@ -26,16 +26,16 @@ const ICONS = {
   Database, Globe, Cloud, FileSpreadsheet, Layers, Zap, CreditCard, Users, BarChart3,
 } as const;
 
-function readLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+async function readLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return (LOCALES as readonly string[]).includes(v ?? "") ? (v as Locale) : "en";
 }
 
-export default function ConnectorsPage() {
-  const locale = readLocale();
+export default async function ConnectorsPage() {
+  const locale = await readLocale();
   return (
     <AppShell breadcrumbs={[{ label: t(locale, "connectors.title") }]}>
-      <div className="mx-auto max-w-6xl px-8 pb-12 pt-7">
+      <div className="mx-auto max-w-[1264px] px-8 pb-12 pt-7">
         <PageHeader title={t(locale, "connectors.title")} description={t(locale, "connectors.subtitle")} />
 
 
@@ -65,7 +65,7 @@ export default function ConnectorsPage() {
                       href={r.docsUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                      className="inline-flex items-center gap-1 text-2xs font-medium text-muted-foreground hover:text-foreground"
                     >
                       {t(locale, "connectors.docsLink")} <ExternalLink className="h-2.5 w-2.5" />
                     </a>
@@ -125,7 +125,7 @@ function KindCard({ kind, locale }: { kind: ConnectorKindMeta; locale: Locale })
           <div className="flex items-center gap-1.5">
             <h3 className="text-sm font-semibold">{kind.label}</h3>
             {kind.feature && (
-              <span className="rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9px] font-medium text-warning ">
+              <span className="rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning ">
                 {t(locale, "connectors.paidBadge")}
               </span>
             )}
@@ -133,7 +133,7 @@ function KindCard({ kind, locale }: { kind: ConnectorKindMeta; locale: Locale })
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{kind.blurb}</p>
         </div>
       </div>
-      <div className="mt-3 flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="mt-3 flex items-center justify-between text-2xs uppercase tracking-wider text-muted-foreground">
         <span>{kind.capabilities.join(" · ")}</span>
         <span className="inline-flex items-center gap-0.5 font-semibold text-primary opacity-0 group-hover:opacity-100">
           <Plus className="h-2.5 w-2.5" /> {t(locale, "connectors.connectHover")}

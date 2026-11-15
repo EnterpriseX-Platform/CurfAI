@@ -9,7 +9,8 @@ import { canBuild } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
-export default async function EditorPage({ params }: { params: { id: string } }) {
+export default async function EditorPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = await getSession();
   const user = (session?.user as any) ?? null;
   if (!session) redirect("/login?callbackUrl=/reports/" + params.id + "/edit");

@@ -80,6 +80,7 @@ export function execAppHref(slug: string): string {
 
 /** Where a signed-in member lands (login and "/"). */
 export function landingPathFor(role: string | null | undefined): string {
-  // The Community edition has no Executive view.
-  return EDITION !== "community" && usesExecutiveView(role) ? "/executive" : "/brief";
+  // The Community edition has no Executive view and no Brief: it opens on Reports.
+  if (EDITION === "community") return "/reports";
+  return usesExecutiveView(role) ? "/executive" : "/brief";
 }

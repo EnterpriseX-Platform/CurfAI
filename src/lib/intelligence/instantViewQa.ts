@@ -34,6 +34,7 @@
 import { ReportSchema, type Report } from "@/lib/reporting/schema";
 import { callLLM } from "@/lib/llm";
 import { DEFAULT_CURRENCY } from "@/lib/reporting/currency";
+import { neededQueries } from "@/lib/reporting/queryRefs";
 import { blockTitle as titleOf, queryIdOf, rulesForPrompt, REPORT_RULES, type RuleId, type Violation } from "./reportRules";
 
 /** The rule ids a reviewer may confirm — every rule there is, R10 and on included. */
@@ -122,12 +123,11 @@ export async function qaInstantView(args: {
     return { verdict: "fail", checks, report, removed, empty, caption: args.caption, subtitle: args.subtitle, review: NO_REVIEW };
   }
   if (removed.length > 0) {
-    const usedQueries = new Set(keep.map(queryIdOf).filter(Boolean));
-    report = {
-      ...report,
-      pages: [{ ...page!, blocks: keep }, ...report.pages.slice(1)],
-      dataSources: report.dataSources.filter((d) => usedQueries.has(d.id)),
-    };
+    const pages = [{ ...page!, blocks: keep }, ...report.pages.slice(1)];
+    // Every query a kept block reads, directly or not - a KPI's drill-down, its sparkline, a map's pins, a join -
+    // not only the one in config.queryId (this used to cut a drill-down's query loose from the card that opens it).
+    const used = neededQueries(report.dataSources, pages);
+    report = { ...report, pages, dataSources: report.dataSources.filter((d) => used.has(d.id)) };
     checks.push({ id: "data", label: "Every block has data", status: "warn", detail: `removed ${removed.map((r) => `“${r.title}”`).join(", ")}` });
   } else if (empty.length > 0) {
     checks.push({ id: "data", label: "Every block has data", status: "warn", detail: `no data now in ${empty.map((e) => `“${e.title}”`).join(", ")}` });

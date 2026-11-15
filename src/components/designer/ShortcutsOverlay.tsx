@@ -71,7 +71,7 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
           <div className="flex items-center gap-2">
             <Keyboard className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("shortcuts.title")}</h2>
-            <span className="text-[11px] text-muted-foreground">{closePre}<Kbd>Esc</Kbd>{closePost}</span>
+            <span className="text-2xs text-muted-foreground">{closePre}<Kbd>Esc</Kbd>{closePost}</span>
           </div>
           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} aria-label={t("action.close")}>
             <X className="h-4 w-4" />
@@ -80,7 +80,7 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
         <div className="grid max-h-[70vh] gap-5 overflow-y-auto p-5">
           {SECTIONS.map((section) => (
             <section key={section.titleKey}>
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {t(section.titleKey)}
               </h3>
               <div className="overflow-hidden rounded-md border border-border/60 bg-muted/30">
@@ -94,21 +94,21 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
                     <div className="flex flex-wrap items-center gap-1">
                       {(s.keys ?? [t(s.gestureKey!)]).map((k, idx) => (
                         <span key={idx} className="contents">
-                          {idx > 0 && <span className="text-[10px] text-muted-foreground">+</span>}
+                          {idx > 0 && <span className="text-2xs text-muted-foreground">+</span>}
                           <Kbd>{k}</Kbd>
                         </span>
                       ))}
                     </div>
                     <div className="min-w-0">
                       <div className="text-xs font-medium text-foreground">{t(s.labelKey)}</div>
-                      <div className="text-[11px] text-muted-foreground">{t(s.descKey)}</div>
+                      <div className="text-2xs text-muted-foreground">{t(s.descKey)}</div>
                     </div>
                   </div>
                 ))}
               </div>
             </section>
           ))}
-          <p className="px-1 text-[11px] text-muted-foreground">
+          <p className="px-1 text-2xs text-muted-foreground">
             {notePre}<Kbd>⌘</Kbd>{noteMid}<Kbd>Ctrl</Kbd>{notePost}
           </p>
         </div>
@@ -119,7 +119,7 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex min-w-[20px] items-center justify-center rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] font-medium text-foreground shadow-xs">
+    <kbd className="inline-flex min-w-[20px] items-center justify-center rounded border border-border bg-background px-1.5 py-0.5 font-mono text-2xs font-medium text-foreground shadow-xs">
       {children}
     </kbd>
   );

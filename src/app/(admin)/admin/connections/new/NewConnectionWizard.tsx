@@ -318,7 +318,7 @@ export function NewConnectionWizard() {
 
           {kind === "salesforce" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-2xs text-muted-foreground">
                 <p>
                   {(() => {
                     const s = t("admin.newConnectionWizard.sfTokenModeBody");
@@ -361,7 +361,7 @@ export function NewConnectionWizard() {
 
           {kind === "line" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-[11px] text-success">
+              <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-2xs text-success">
                 {t("admin.newConnectionWizard.lineTokenModeBody")}
               </div>
               <Field label={t("admin.newConnectionWizard.lineChannelAccessToken")} hint={t("admin.newConnectionWizard.lineChannelAccessTokenHint")}>
@@ -497,7 +497,7 @@ export function NewConnectionWizard() {
                 }
               >
                 <div className="font-medium">{s.label}</div>
-                <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{s.cron}</div>
+                <div className="mt-0.5 font-mono text-2xs text-muted-foreground">{s.cron}</div>
               </button>
             ))}
           </div>
@@ -519,7 +519,7 @@ export function NewConnectionWizard() {
               to validate against — empty input shows nothing rather than
               "parse error" before the user has typed. */}
           {(advancedOpen ? customCron.trim() : schedule).length > 0 && (
-            <div className="mt-3 flex items-start gap-2 text-[11px]">
+            <div className="mt-3 flex items-start gap-2 text-2xs">
               <Clock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
               {cronPreview.ok ? (
                 <span className="text-muted-foreground" suppressHydrationWarning>
@@ -614,11 +614,11 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 function Field({ label, hint, small, children }: { label: string; hint?: string; small?: boolean; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className={"block " + (small ? "text-[10px] font-medium uppercase tracking-wider text-muted-foreground" : "text-xs font-medium text-foreground/80")}>
+      <span className={"block " + (small ? "text-2xs font-medium uppercase tracking-wider text-muted-foreground" : "text-xs font-medium text-foreground/80")}>
         {label}
       </span>
       <div className={small ? "mt-1" : "mt-1.5"}>{children}</div>
-      {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+      {hint && <p className="mt-1 text-2xs text-muted-foreground">{hint}</p>}
     </label>
   );
 }
@@ -647,7 +647,7 @@ function KindCard({
         <Icon className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-semibold text-foreground">{label}</span>
       </div>
-      <p className="mt-1.5 text-[11px] text-muted-foreground">{blurb}</p>
+      <p className="mt-1.5 text-2xs text-muted-foreground">{blurb}</p>
     </button>
   );
 }

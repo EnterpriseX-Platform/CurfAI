@@ -41,7 +41,7 @@ function post(body: unknown) {
     new NextRequest("http://localhost:3100/api/lake/tables/subs/typed-conversion", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     }),
-    { params: { name: "subs" } },
+    { params: Promise.resolve({ name: "subs" }) },
   );
 }
 const APPLY = { columns: ["amount"], confirmedLossy: { amount: 0 } };

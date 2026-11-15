@@ -35,7 +35,7 @@ vi.mock("@/lib/audit", () => ({ recordAudit: vi.fn() }));
 import { prisma } from "@/lib/db";
 import { DELETE, PATCH } from "./route";
 
-const ctx = { params: { id: "s1" } };
+const ctx = { params: Promise.resolve({ id: "s1" }) };
 const del = () => DELETE(new NextRequest("http://localhost:3100/api/schedules/s1", { method: "DELETE" }), ctx);
 const patch = (body: unknown) => PATCH(
   new NextRequest("http://localhost:3100/api/schedules/s1", { method: "PATCH", body: JSON.stringify(body) }),

@@ -18,12 +18,14 @@ import { savedRunReader, parseSavedRun } from "@/lib/reporting/snapshotAccess";
 
 export const dynamic = "force-dynamic";
 
-export default async function ViewerPage({
-  params, searchParams,
-}: {
-  params: { id: string };
-  searchParams: Record<string, string | undefined>;
-}) {
+export default async function ViewerPage(
+  props: {
+    params: Promise<{ id: string }>;
+    searchParams: Promise<Record<string, string | undefined>>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const print = searchParams.print === "1";
   // A print render comes from our own PDF/XLSX worker, which has no user
   // cookie to forward on the cron and schedule paths — so it proves itself
@@ -103,6 +105,8 @@ export default async function ViewerPage({
     redirect("/reports");
   }
   const definition = ReportSchema.parse(JSON.parse(row.definition));
+  // Home's "Pick up where you left off" — a person opening it, not a PDF render.
+  if (!print) ee.home?.noteView(sessionUser, "report", row.id);
 
   // RBAC: hide blocks gated by visibleToRoles that don't match the viewer's roles.
   // Admins always see everything UNLESS they opted into ?previewAsRole=slug
@@ -234,7 +238,7 @@ export default async function ViewerPage({
     // server-side locale resolution, same pattern as RootLayout's
     // initialLocale, rather than inheriting ReportViewerShell's
     // useT()-sourced one.
-    const cookieLocale = cookies().get("rd_locale")?.value;
+    const cookieLocale = (await cookies()).get("rd_locale")?.value;
     const locale = cookieLocale && (LOCALES as readonly string[]).includes(cookieLocale) ? cookieLocale : undefined;
     return (
       <div className="bg-card">

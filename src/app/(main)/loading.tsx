@@ -9,19 +9,11 @@
  * sidebar plus a page-shape-agnostic content area (PageHeader + a generic
  * block grid) since it has to fit ~76 different route shapes.
  */
+import { ShellSkeleton } from "@/components/layout/ShellSkeleton";
+
 export default function Loading() {
   return (
-    <div className="grid min-h-screen bg-background lg:grid-cols-[224px_1fr]" role="status" aria-busy="true">
-      <span className="sr-only">Loading…</span>
-
-      {/* Sidebar stand-in */}
-      <div className="hidden border-r border-sidebar-border bg-sidebar p-3 lg:block">
-        <div className="skeleton mb-4 h-8 w-full rounded-md" />
-        {Array.from({ length: 7 }).map((_, i) => (
-          <div key={i} className="skeleton mb-2 h-7 w-full rounded-md" />
-        ))}
-      </div>
-
+    <ShellSkeleton label="Loading…">
       <div className="mx-auto w-full max-w-[1264px] px-8 pb-12 pt-7">
         {/* PageHeader stand-in */}
         <div className="mb-6 flex items-end justify-between gap-6">
@@ -54,6 +46,6 @@ export default function Loading() {
           ))}
         </div>
       </div>
-    </div>
+    </ShellSkeleton>
   );
 }

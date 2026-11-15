@@ -102,8 +102,8 @@ export function ProvenanceBadge({
                   tone === "destructive" ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-warning/30 bg-warning/5 text-warning"
                 }`}
               >
-                <div className="break-words font-mono text-[11px]">{state.reason}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
+                <div className="break-words font-mono text-2xs">{state.reason}</div>
+                <div className="mt-1 text-2xs text-muted-foreground">
                   {state.kind === "failed"
                     ? "Any number shown for this block is a placeholder, not a result."
                     : "Nothing was read from this source for you."}
@@ -185,7 +185,7 @@ function HashRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3">
       <span className="text-muted-foreground">{label}</span>
       <div className="flex min-w-0 items-center gap-1.5">
-        <code className="truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{value}</code>
+        <code className="truncate rounded bg-muted px-1.5 py-0.5 font-mono text-2xs">{value}</code>
         <button
           type="button"
           onClick={onCopy}

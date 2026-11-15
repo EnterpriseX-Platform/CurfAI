@@ -7,6 +7,7 @@ import { visibleReport } from "@/lib/reporting/visibleReport";
 import { serverLocale } from "@/lib/i18n/serverLocale";
 import { ReportDocument } from "@/components/reports/ReportDocument";
 import { hashInviteToken } from "@/lib/invites";
+import { tenantIsOpen } from "@/lib/tenantGuard";
 
 /**
  * Chromeless, iframe-friendly read-only viewer. Same auth model as
@@ -26,13 +27,14 @@ import { hashInviteToken } from "@/lib/invites";
 
 export const dynamic = "force-dynamic";
 
-export default async function EmbedPage({
-  params,
-  searchParams,
-}: {
-  params: { token: string };
-  searchParams?: { theme?: string; compact?: string; brand?: string };
-}) {
+export default async function EmbedPage(
+  props: {
+    params: Promise<{ token: string }>;
+    searchParams?: Promise<{ theme?: string; compact?: string; brand?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   // The token is the credential and says whose report this is: look it up
   // across workspaces, then render as that workspace — also when the
   // visitor is signed in to a different one (row-level security, BE-TEN-03).
@@ -40,6 +42,8 @@ export default async function EmbedPage({
     where: { tokenHash: hashInviteToken(params.token) },
   }));
   if (!share) notFound();
+  // A suspended or pending-deletion workspace's link is as gone as a revoked one.
+  if (!(await tenantIsOpen(share.tenantId))) notFound();
   pinRequestDbContext({ tenantId: share.tenantId, userId: "public", role: "viewer" });
   if (share.expiresAt && new Date(share.expiresAt) < new Date()) {
     return <ExpiredEmbed expiredAt={new Date(share.expiresAt)} />;
@@ -70,10 +74,10 @@ export default async function EmbedPage({
   return (
     <div className={"min-h-screen " + (dark ? "bg-foreground text-background" : "bg-card text-foreground")}>
       <main className={compact ? "px-4 py-3" : "px-6 py-6"}>
-        <ReportDocument report={def} dataset={dataset} params={pvals} provenance={provenance} tenantCurrency={tenantRow?.currency ?? null} locale={serverLocale()} />
+        <ReportDocument report={def} dataset={dataset} params={pvals} provenance={provenance} tenantCurrency={tenantRow?.currency ?? null} locale={await serverLocale()} />
       </main>
       {brand && (
-        <footer className={"border-t py-2 text-center text-[10px] " + (dark ? "border-faint text-muted-foreground" : "border-border text-muted-foreground")}>
+        <footer className={"border-t py-2 text-center text-2xs " + (dark ? "border-faint text-muted-foreground" : "border-border text-muted-foreground")}>
           Powered by Curf
         </footer>
       )}

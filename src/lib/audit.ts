@@ -67,10 +67,10 @@ export type AuditOptions = {
 };
 
 /** The AuditEvent row for these options, or null when it has no tenant. */
-function auditRow(opts: AuditOptions) {
+async function auditRow(opts: AuditOptions) {
   const tenantId = opts.tenantId === null ? null : (opts.tenantId ?? opts.user?.tenantId);
   if (tenantId === undefined) return null;
-  const { ip, userAgent } = captureRequest(opts.req);
+  const { ip, userAgent } = await captureRequest(opts.req);
   return {
     tenantId,
     userId: opts.userId ?? (opts.user?.viaApiKey ? null : opts.user?.id ?? null),
@@ -92,7 +92,7 @@ function auditRow(opts: AuditOptions) {
  * a platform admin's waitlist invite was being refused and dropped
  * (BE-SEC-04). Every other row is written as the request, as before.
  */
-function writeAuditRow(client: any, data: NonNullable<ReturnType<typeof auditRow>>): Promise<unknown> {
+function writeAuditRow(client: any, data: NonNullable<Awaited<ReturnType<typeof auditRow>>>): Promise<unknown> {
   const write = () => client.auditEvent.create({ data });
   return data.tenantId === null ? withSystemDbContext(write) : write();
 }
@@ -102,25 +102,23 @@ function writeAuditRow(client: any, data: NonNullable<ReturnType<typeof auditRow
  * so audit failures never break the user's action.
  */
 export function recordAudit(opts: AuditOptions): void {
-  const data = auditRow(opts);
-  if (!data) {
-    console.warn("[audit] dropping event - no tenantId", { kind: opts.kind });
-    return;
-  }
-  // Wrap in try/catch so synchronous throws (e.g. AuditEvent missing because
-  // `prisma db push` hasn't run yet) never break the calling request.
-  try {
+  // auditRow reads the request's headers (Next 15 hands them over as a
+  // promise); it asks for them before its first await, so they are taken
+  // while the request is still in scope and the row is written behind it.
+  auditRow(opts).then((data) => {
+    if (!data) {
+      console.warn("[audit] dropping event - no tenantId", { kind: opts.kind });
+      return;
+    }
     const client: any = prisma;
     if (!client?.auditEvent?.create) {
       console.warn("[audit] AuditEvent table missing - run `npx prisma db push`");
       return;
     }
-    writeAuditRow(client, data).catch((err: any) => {
-      console.error("[audit] write failed", err?.message ?? err, { kind: opts.kind });
-    });
-  } catch (err: any) {
-    console.error("[audit] sync throw", err?.message ?? err, { kind: opts.kind });
-  }
+    return writeAuditRow(client, data);
+  }).catch((err: any) => {
+    console.error("[audit] write failed", err?.message ?? err, { kind: opts.kind });
+  });
 }
 
 /**
@@ -131,13 +129,23 @@ export function recordAudit(opts: AuditOptions): void {
  * (FE-ACT-02) this exists to rule out. Everywhere else, keep recordAudit().
  */
 export async function persistAudit(opts: AuditOptions): Promise<void> {
-  const data = auditRow(opts);
+  const data = await auditRow(opts);
   if (!data) throw new Error(`[audit] ${String(opts.kind)} has no tenantId`);
   await writeAuditRow(prisma, data);
 }
 
-export function captureRequest(req?: NextRequest): { ip?: string; userAgent?: string } {
-  const h = req?.headers ?? currentRequestHeaders();
+/**
+ * persistAudit() inside a transaction: the audit row commits or rolls back with the change it describes, so a state change
+ * (issuing a tax document) can never exist without its audit row, nor the row without the change. `client` is the transaction.
+ */
+export async function persistAuditIn(client: any, opts: AuditOptions): Promise<void> {
+  const data = await auditRow(opts);
+  if (!data) throw new Error(`[audit] ${String(opts.kind)} has no tenantId`);
+  await writeAuditRow(client, data);
+}
+
+export async function captureRequest(req?: NextRequest): Promise<{ ip?: string; userAgent?: string }> {
+  const h = req?.headers ?? await currentRequestHeaders();
   if (!h) return {};
   const resolved = clientIp({ headers: h } as Pick<NextRequest, "headers">);
   const ip = resolved === "unknown" ? undefined : resolved;
@@ -153,8 +161,8 @@ export function captureRequest(req?: NextRequest): { ip?: string; userAgent?: st
  * investigation needs. Outside a request (cron scripts, tests) there is
  * none, and the row is written without one as before.
  */
-function currentRequestHeaders(): { get(name: string): string | null } | null {
-  try { return headers(); } catch { return null; }
+async function currentRequestHeaders(): Promise<{ get(name: string): string | null } | null> {
+  try { return (await headers()); } catch { return null; }
 }
 
 /**

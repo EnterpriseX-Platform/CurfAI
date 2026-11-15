@@ -164,3 +164,23 @@ export function localizeReport(report: Report, locale: string | undefined): Repo
     })),
   };
 }
+
+/** The words a block shows its reader: a title, a label or a text. Blocks with none (a divider, a page break) have nothing to translate. */
+function hasAuthoredWords(block: Block): boolean {
+  const c = block.config as Record<string, unknown> | undefined;
+  return ["title", "label", "text"].some((k) => typeof c?.[k] === "string" && (c[k] as string).trim() !== "");
+}
+
+/**
+ * What an author reading the report "as" `locale` should be told about a block: "partial" when the report is translated
+ * into that language elsewhere but this block's words are not (a reader sees the original words on it), "none" for a
+ * report with no text in that language at all (readers see it as written; said once, not on every block), null when
+ * the block is fine or has no words.
+ */
+export function missingTranslation(report: Report, block: Block, locale: string): "partial" | "none" | null {
+  const blocks = report.pages.flatMap((p) => p.blocks);
+  const translated = blocks.some((b) => Object.keys(b.i18n?.[locale] ?? {}).length > 0) || !!report.nameI18n?.[locale];
+  if (!translated) return blocks.some(hasAuthoredWords) ? "none" : null;
+  if (!hasAuthoredWords(block)) return null;
+  return Object.keys(block.i18n?.[locale] ?? {}).length > 0 ? null : "partial";
+}

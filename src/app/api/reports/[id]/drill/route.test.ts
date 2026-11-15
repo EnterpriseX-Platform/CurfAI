@@ -44,7 +44,7 @@ const DEFINITION = JSON.stringify({
 });
 const post = () => POST(
   new NextRequest("http://localhost:3100/api/reports/r1/drill", { method: "POST", body: JSON.stringify({ blockId: "b1", value: "Display" }) }),
-  { params: { id: "r1" } },
+  { params: Promise.resolve({ id: "r1" }) },
 );
 const runCtx = () => vi.mocked(runReportWithProof).mock.calls[0][0];
 
@@ -108,7 +108,7 @@ describe("POST /api/reports/:id/drill — a block hidden from the caller", () =>
   });
   const drill = (blockId: string) => POST(
     new NextRequest("http://localhost:3100/api/reports/r1/drill", { method: "POST", body: JSON.stringify({ blockId, value: "Exec" }) }),
-    { params: { id: "r1" } },
+    { params: Promise.resolve({ id: "r1" }) },
   );
 
   beforeEach(() => {
@@ -152,7 +152,7 @@ describe("POST /api/reports/:id/drill — tables, KPIs and the report's scope", 
   });
   const send = (blockId: string, value: unknown) => POST(
     new NextRequest("http://localhost:3100/api/reports/r1/drill", { method: "POST", body: JSON.stringify({ blockId, value }) }),
-    { params: { id: "r1" } },
+    { params: Promise.resolve({ id: "r1" }) },
   );
   beforeEach(() => {
     h.user = { id: "u1", email: "m@test.dev", role: "viewer", tenantId: "t1" };

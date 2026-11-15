@@ -11,11 +11,9 @@ const nextConfig = {
   // Minor info-disclosure fix (OWASP A02:2025 checklist, 2026-08-25) — stop
   // announcing the framework in every response header.
   poweredByHeader: false,
-  experimental: {
-    // Keep these native/heavy deps external so Next doesn't try to bundle them
-    // into route handlers.
-    serverComponentsExternalPackages: ["puppeteer", "better-sqlite3", "docx", "exceljs", "pg", "mysql2", "snowflake-sdk", "@google-cloud/bigquery", "@duckdb/node-api", "ssh2-sftp-client", "ssh2", "web-push"],
-  },
+  // Keep these native/heavy deps external so Next doesn't try to bundle them
+  // into route handlers.
+  serverExternalPackages: ["puppeteer", "better-sqlite3", "docx", "exceljs", "pg", "mysql2", "snowflake-sdk", "@google-cloud/bigquery", "@duckdb/node-api", "ssh2-sftp-client", "ssh2", "web-push"],
   async headers() {
     return [
       // Baseline hardening on every response. HSTS is only honoured over
@@ -67,6 +65,13 @@ const nextConfig = {
             ].join("; "),
           },
         ],
+      },
+      // The language scripts the build writes (scripts/i18n-static.ts): the
+      // version is in the file name, so a file never changes and the browser
+      // keeps it. Next would otherwise send public files with max-age=0.
+      {
+        source: "/_i18n/:file*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
       },
       // /embed/* is the documented exception — it must be iframable so tenants
       // can embed reports. It overrides the DENY above with a framing policy.

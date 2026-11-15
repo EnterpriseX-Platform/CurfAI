@@ -19,8 +19,8 @@ import type { Era } from "./formatDate";
  * app today (grep `function readLocale`). New callers should use this one;
  * the sweep to collapse the rest is deliberately not bundled here.
  */
-export function serverLocale(): Locale {
-  const v = cookies().get("rd_locale")?.value;
+export async function serverLocale(): Promise<Locale> {
+  const v = (await cookies()).get("rd_locale")?.value;
   return v && (LOCALES as readonly string[]).includes(v) ? (v as Locale) : "en";
 }
 
@@ -29,6 +29,6 @@ export function serverLocale(): Locale {
  * (RootLayout seeds it from User.preferencesJson.era). Buddhist era unless
  * they chose Gregorian — the same default as intlLocale().
  */
-export function serverEra(): Era {
-  return cookies().get("rd_era")?.value === "ce" ? "ce" : "be";
+export async function serverEra(): Promise<Era> {
+  return (await cookies()).get("rd_era")?.value === "ce" ? "ce" : "be";
 }

@@ -261,21 +261,46 @@ export function KpiDelta({
  * The number against its plan: "▼ 4.1% behind plan · plan $107K", or
  * "On plan". Red only when behind — ahead is green, on plan is quiet.
  */
-export function KpiPlan({ state, text, planFormatted, words }: {
+/**
+ * How far a number has come toward its plan, 0–1, read the same way for
+ * either polarity: up-is-good compares value to plan, down-is-good compares
+ * plan to value (a cost at twice its ceiling is halfway "there"). Null when
+ * either side is missing or not positive — a bar over nothing would mislead.
+ */
+export function planProgress(value: number | null | undefined, plan: number | null | undefined, goodDirection: "up" | "down" | null | undefined): number | null {
+  if (value == null || plan == null || !Number.isFinite(value) || !Number.isFinite(plan) || value <= 0 || plan <= 0) return null;
+  const r = goodDirection === "down" ? plan / value : value / plan;
+  return Math.max(0, Math.min(1, r));
+}
+
+export function KpiPlan({ state, text, planFormatted, words, progress }: {
   state: "ahead" | "behind" | "on";
   text: string;
   planFormatted: string;
   /** The reader's words: { ahead: "{gap} ahead of plan", behind: "…", on: "On plan", plan: "plan {value}" }. */
   words: { ahead: string; behind: string; on: string; plan: string };
+  /** planProgress(): when given, a slim bar under the words shows the gap at a glance, the plan as its end tick. */
+  progress?: number | null;
 }) {
   const cls = state === "ahead" ? "text-success" : state === "behind" ? "text-destructive" : "text-muted-foreground";
   return (
-    <p className="flex flex-wrap items-center gap-1.5 text-[12.5px] leading-tight">
-      <span className={cn("font-medium tabular-nums", cls)}>
-        {state === "on" ? words.on : `${state === "ahead" ? "▲" : "▼"} ${words[state].replace("{gap}", text)}`}
-      </span>
-      <span className="text-muted-foreground">· {words.plan.replace("{value}", planFormatted)}</span>
-    </p>
+    <div className="space-y-1">
+      <p className="flex flex-wrap items-center gap-1.5 text-[12.5px] leading-tight">
+        <span className={cn("font-medium tabular-nums", cls)}>
+          {state === "on" ? words.on : `${state === "ahead" ? "▲" : "▼"} ${words[state].replace("{gap}", text)}`}
+        </span>
+        <span className="text-muted-foreground">· {words.plan.replace("{value}", planFormatted)}</span>
+      </p>
+      {progress != null && (
+        <div className="relative h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+          <div
+            className={cn("absolute inset-y-0 left-0 rounded-full", state === "behind" ? "bg-destructive" : "bg-success")}
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+          <div className="absolute inset-y-0 right-0 w-0.5 bg-foreground/60" />
+        </div>
+      )}
+    </div>
   );
 }
 

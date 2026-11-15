@@ -54,7 +54,7 @@ const DEFINITION = JSON.stringify({
 const DEV = { id: "u-dev", isAdmin: false, roles: ["finance"] };
 const ADMIN = { id: "u-admin", isAdmin: true, roles: [] };
 
-const printWith = (rt: string) => ViewerPage({ params: { id: "r1" }, searchParams: { print: "1", rt } }) as Promise<any>;
+const printWith = (rt: string) => ViewerPage({ params: Promise.resolve({ id: "r1" }), searchParams: Promise.resolve({ print: "1", rt }) }) as Promise<any>;
 const ranAs = () => vi.mocked(runReportWithProof).mock.calls[0][0].viewer;
 /** Block ids the print page handed to ReportDocument. */
 const printedBlocks = (el: any): string[] => el.props.children.props.report.pages[0].blocks.map((b: any) => b.id);

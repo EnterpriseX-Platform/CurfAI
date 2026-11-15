@@ -74,7 +74,7 @@ async function main() {
   const admin = await prisma.user.upsert({
     where: { email: "admin@curf.local" },
     update: { passwordHash },
-    create: { email: "admin@curf.local", name: "Admin", passwordHash },
+    create: { email: "admin@curf.local", name: "Admin", passwordHash, emailVerifiedAt: new Date() },
   });
   const adminMembership = await prisma.membership.upsert({
     where: { userId_tenantId: { userId: admin.id, tenantId: demoTenant.id } },
@@ -513,7 +513,7 @@ async function main() {
   const acmeAdmin = await prisma.user.upsert({
     where: { email: "admin@acme.local" },
     update: { passwordHash: acmePasswordHash },
-    create: { email: "admin@acme.local", name: "Acme Admin", passwordHash: acmePasswordHash },
+    create: { email: "admin@acme.local", name: "Acme Admin", passwordHash: acmePasswordHash, emailVerifiedAt: new Date() },
   });
   await prisma.membership.upsert({
     where: { userId_tenantId: { userId: acmeAdmin.id, tenantId: acmeTenant.id } },
