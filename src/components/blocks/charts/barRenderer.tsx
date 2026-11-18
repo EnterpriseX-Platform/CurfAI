@@ -56,9 +56,9 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
   const styleWantsLabels = style.forceDataLabels && directLabelsFit(rows.length, isSingleSeries);
   const labels = showDataLabels ?? (ranked || styleWantsLabels);
   const listMode = horizontal && labels;
-  // Dropping the value axis is only safe once labels are actually carrying the
-  // numbers — otherwise the chart loses its scale entirely.
-  const hideValueAxis = !style.valueAxis && labels && isSingleSeries;
+  // Both axes always show, data labels or not: a bar chart with its value axis
+  // dropped read as unlabelled ("no X and Y"), while the same data switched to a
+  // line showed both. Labels on the bars are the readout; the axis keeps the scale.
   const r = style.bar.radius;
   // A pill is a full-height radius, so it only reads as one on a thin
   // horizontal bar — capped at half the bar thickness or it clips.
@@ -70,12 +70,7 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
   const showTrack = style.bar.track === "always"
     ? isSingleSeries
     : style.bar.track === "list" ? listMode : false;
-  // Grid lines exist to read a mark back to the value axis. With the axis
-  // hidden and the numbers written on the marks themselves there is nothing
-  // left to read them against, so they are just lines across the plot.
-  const gridProps = hideValueAxis
-    ? null
-    : gridPropsFor(style, { vertical: horizontal, horizontal: !horizontal });
+  const gridProps = gridPropsFor(style, { vertical: horizontal, horizontal: !horizontal });
   // Category labels need real room when they run down the side.
   const CATEGORY_AXIS_WIDTH = 150;
 
@@ -100,20 +95,20 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
           A ranked list carries its own track per bar instead, and a style with
           grid "none" skips the element entirely. */}
       {!listMode && gridProps && <CartesianGrid {...gridProps} />}
-      {horizontal ? (
-        <>
-          <XAxis type="number" {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} hide={listMode || hideValueAxis} />
-          <YAxis
-            type="category" dataKey={xField} {...AXIS_PROPS} width={CATEGORY_AXIS_WIDTH}
-            tick={(props: any) => <CategoryTick {...props} maxWidth={CATEGORY_AXIS_WIDTH - 8} />}
-          />
-        </>
-      ) : (
-        <>
-          <XAxis dataKey={xField} {...AXIS_PROPS} {...categoryAxisProps(rows.length)} tickFormatter={rows.length > 6 ? (v: any) => clipLabel(String(dateTick(ctx)(v) ?? v)) : dateTick(ctx)} />
-          <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} hide={hideValueAxis} />
-        </>
+      {/* Each axis is a direct child of the chart, never inside a fragment: Recharts finds its axes by
+          scanning children, and the react-is it uses (18) does not recognise a fragment made by the React 19
+          that Next's app router runs, so axes wrapped in <>...</> were silently dropped in the browser (a
+          bar chart with no X and no Y) while server-rendered tests still saw them. */}
+      {horizontal && <XAxis type="number" {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} />}
+      {horizontal && (
+        <YAxis
+          // every bar named: Recharts otherwise drops alternate names it guesses would collide
+          type="category" dataKey={xField} {...AXIS_PROPS} width={CATEGORY_AXIS_WIDTH} interval={0}
+          tick={(props: any) => <CategoryTick {...props} maxWidth={CATEGORY_AXIS_WIDTH - 8} />}
+        />
       )}
+      {!horizontal && <XAxis dataKey={xField} {...AXIS_PROPS} {...categoryAxisProps(rows.length)} tickFormatter={rows.length > 6 ? (v: any) => clipLabel(String(dateTick(ctx)(v) ?? v)) : dateTick(ctx)} />}
+      {!horizontal && <YAxis {...AXIS_PROPS} domain={Y_AXIS_DOMAIN} tickFormatter={yTickFormatter} width={Y_AXIS_WIDTH} />}
       <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: CURSOR_FILL }} formatter={tooltipFormatter as any} labelFormatter={dateLabel(ctx)} />
       {/* One series needs no legend — the title already names it. */}
       {(showLegend ?? !isSingleSeries) && <Legend wrapperStyle={LEGEND_STYLE} iconType="circle" iconSize={7} />}
@@ -195,7 +190,7 @@ export function renderBarChart(ctx: ChartRenderCtx): ReactElement {
                 // can sit back in muted ink. Once the style has dropped the
                 // value axis the label IS the readout, so it takes full ink —
                 // the same call the horizontal ranked list already made.
-                fill={horizontal || hideValueAxis ? "hsl(var(--foreground))" : LABEL_FILL}
+                fill={horizontal ? "hsl(var(--foreground))" : LABEL_FILL}
                 className="font-mono"
                 formatter={(v: any) => formatValue(Number(v), fmt, currency, numOpts)}
               />

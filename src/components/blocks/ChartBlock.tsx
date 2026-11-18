@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
+import { SessionContext } from "next-auth/react";
 import { Sparkles, BarChart3 as LucideBarChart, LineChart as LucideLineChart, PieChart as LucidePieChart, Activity as LucideAreaChart, TrendingUp as LucideTrendingUp, Activity as LucideActivity, HelpCircle, ChevronDown as LucideChevronDown } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { profileColumns, type ChartTypeValue } from "@/lib/reporting/chartCompatibility";
@@ -383,6 +384,32 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
   } = cfg;
   
   const chartType = overrideChartType ?? initialChartType;
+  // The "view as" pick is the reader's own until someone who may edit the report keeps it for everyone
+  // (POST /api/reports/[id]/chart-type, which checks the role again). Context, not useSession(): a chart
+  // also renders where there is no session provider (stories, previews) and then simply offers no save.
+  const sessionRole = (useContext(SessionContext)?.data?.user as { role?: string } | undefined)?.role;
+  const canSaveChartType = !!reportDbId && (sessionRole === "admin" || sessionRole === "developer");
+  // What this chart now saves as: the report's type until a save here moves it (the page's copy of the
+  // definition is not reloaded, and a chart also renders outside the app router).
+  const [savedChartType, setSavedChartType] = useState<string | null>(null);
+  const typeChanged = overrideChartType != null && overrideChartType !== (savedChartType ?? initialChartType);
+  const [typeSave, setTypeSave] = useState<{ saving: boolean; error: string | null }>({ saving: false, error: null });
+  async function saveChartType() {
+    if (!reportDbId || !overrideChartType) return;
+    setTypeSave({ saving: true, error: null });
+    try {
+      const res = await fetch(`/api/reports/${reportDbId}/chart-type`, {
+        method: "POST", headers: { "content-type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ blockId: block.id, chartType: overrideChartType }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setTypeSave({ saving: false, error: j?.error ?? t("chartTypePicker.saveFailed") }); return; }
+      setTypeSave({ saving: false, error: null });
+      setSavedChartType(overrideChartType);
+    } catch {
+      setTypeSave({ saving: false, error: t("chartTypePicker.saveFailed") });
+    }
+  }
   // Optional fields added in later schema revisions — destructured separately
   // so the strongly-typed core (yFields[], etc) keeps its narrow types.
   const annotations = (cfg as any).annotations as Array<{ xValue: string; label: string; icon?: string; variant: "info"|"success"|"warning"|"danger"|"neutral" }> | undefined;
@@ -954,6 +981,21 @@ function ChartBlockInner({ block, dataset, provenance, print, report, params, re
           {/* Build detail for whoever is working on the block; at rest a reader sees only the title. */}
           <span className="shrink-0 pt-1 font-mono text-xs text-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 print:hidden">{chartType} · {data.length} {t("kpi.rows")}</span>
         </header>
+      )}
+      {!print && typeChanged && (
+        <div className="no-print mb-2 flex flex-wrap items-center gap-2 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+          <span>{t(canSaveChartType ? "chartTypePicker.viewingAs" : "chartTypePicker.viewingAsReader").replace("{type}", t(`chartType.${chartType}`))}</span>
+          {canSaveChartType && (
+            <button type="button" onClick={saveChartType} disabled={typeSave.saving}
+              className="rounded-md bg-primary px-2 py-0.5 font-medium text-primary-foreground hover:bg-primary-ink disabled:opacity-60">
+              {typeSave.saving ? t("chartTypePicker.saving") : t("chartTypePicker.saveForEveryone")}
+            </button>
+          )}
+          <button type="button" onClick={() => { setOverrideChartType(savedChartType); setTypeSave({ saving: false, error: null }); }} className="rounded-md px-2 py-0.5 hover:bg-accent hover:text-foreground">
+            {t("chartTypePicker.undo")}
+          </button>
+          {typeSave.error && <span role="alert" className="text-destructive">{typeSave.error}</span>}
+        </div>
       )}
       {/* In bare mode there's no header reserving space below the floating
           BlockActions toolbar (h-6 trigger + top-2 offset ~= 32px) — without

@@ -403,8 +403,24 @@ model Membership {
   @@index([userId])
 }
 
-// ---------- Reports ----------
+// A person taken out of a workspace on purpose (an administrator, or the company's SCIM). Membership existence is access
+// everywhere, so a removal stays a deleted row; this is the record of the decision, read by one thing only: auto-join (a verified
+// domain's sign-in joins its workspace) must not bring back someone who was removed. SCIM provisioning the person again clears it.
+model MembershipRemoval {
+  id        String   @id @default(cuid())
+  userId    String
+  tenantId  String
+  // "scim" | "admin"
+  source    String
+  removedAt DateTime @default(now())
 
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+// A Keycloak step of a SCIM change that did not finish (Keycloak down, mail not sent), tried again by the cron tick
+// (src/ee/identity/scimRetry.ts). One open row per person per workspace: the latest change wins and a later successful step
+// removes it. What is retried is read from the account at that time, never from a stored copy of the change.
 model Report {
   id                String             @id @default(cuid())
   tenantId          String

@@ -23,6 +23,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { recordMembershipRemoval } from "@/lib/membershipRemoval";
 import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
@@ -70,6 +71,8 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     await tx.membership.delete({ where: { userId_tenantId: { userId: target.user.id, tenantId: u.tenantId } } });
     return { moved, revokedKeys };
   });
+  // An administrator's decision: auto-join must not bring the person back at their next sign-in.
+  await recordMembershipRemoval(target.user.id, u.tenantId, "admin");
   // Seat billing follows the membership change; best-effort, the hourly
   // reconcile in the paid cron covers a missed call.
   void ee.billing?.syncSeats(u.tenantId).catch(() => null);

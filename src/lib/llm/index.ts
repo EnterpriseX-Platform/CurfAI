@@ -25,7 +25,7 @@ import { openaiCompatibleDriver } from "./providers/openai-compatible";
 import { getLlmCredentials } from "./credentials";
 import { computeMicroCost, computeMicroCostMetered, type ModelRate } from "./pricing";
 import { hasEnvLlm } from "./credentials";
-import { llmTokens } from "@/lib/metrics";
+import { llmCalls, llmCallSeconds, llmCostUsd, llmTokens } from "@/lib/metrics";
 import { requireAiCredits } from "@/lib/billing";
 import { UPGRADE_URL } from "@/lib/plans";
 import { NextResponse } from "next/server";
@@ -361,10 +361,13 @@ type Meter = { keySource: "env" | "tenant" | "tenant-legacy"; rate: ModelRate | 
 /** Best-effort LlmTokenUsage row (setImmediate: the write adds nothing to the caller's latency). */
 function recordUsage(req: LlmRequest, resp: LlmResponse, meter: Meter): void {
   const keySource = meter.keySource;
+  // Counted for every call, workspace or not (cron and system calls have none): the failure rate is about the provider.
+  llmCalls.inc?.({ provider: resp.provider, status: resp.status, key_source: keySource });
+  llmCallSeconds.observe?.({ provider: resp.provider }, resp.durationMs / 1000);
   if (!req.tenantId) return;
   const tenantId = req.tenantId;
   llmTokens.inc?.(
-    { tenant: tenantId, kind: req.kind },
+    { kind: req.kind },
     resp.usage.inputTokens + resp.usage.outputTokens,
   );
   // Read now: the write below runs after the caller's async context is gone.
@@ -381,6 +384,7 @@ function recordUsage(req: LlmRequest, resp: LlmResponse, meter: Meter): void {
       cacheCreateTokens: resp.usage.cacheCreateTokens,
     };
     const microCostUsd = keySource === "env" ? computeMicroCostMetered(usage, meter.rate) : computeMicroCost(usage);
+    if (microCostUsd) llmCostUsd.inc?.({ provider: resp.provider, key_source: keySource }, microCostUsd / 1_000_000);
     prisma.llmTokenUsage.create({
       data: {
         tenantId,

@@ -3,6 +3,7 @@ import type { Dictionary } from "../locales";
 import { engineAdminShellEn } from "./engineAdmin/shell.en";
 import { navSystemsEn } from "./nav/systems.en";
 import { inboxEn } from "./inbox/inbox.en";
+import { statesEn } from "./states/states.en";
 import { askChatEn } from "./ask/chat.en";
 import { engineAdminStatusEn } from "./engineAdmin/status.en";
 import { engineAdminPeopleEn } from "./engineAdmin/people.en";
@@ -5001,6 +5002,12 @@ export const en: Dictionary = {
   "canvas.empty.step3": "3. Preview",
   "canvas.empty.step3Desc": "Hit the \"{run}\" button at the top to fetch your data and see the report come to life.",
   "chartTypePicker.change": "Change Chart Type",
+  "chartTypePicker.viewingAs": "Showing as {type}, only for you until you save it.",
+  "chartTypePicker.viewingAsReader": "Showing as {type} for you; the report keeps its own type.",
+  "chartTypePicker.saveForEveryone": "Save for everyone",
+  "chartTypePicker.saving": "Saving…",
+  "chartTypePicker.undo": "Undo",
+  "chartTypePicker.saveFailed": "Couldn't save the chart type. Try again.",
   "chartType.bar": "Bar",
   "chartType.line": "Line",
   "chartType.area": "Area",
@@ -7163,6 +7170,7 @@ export const en: Dictionary = {
   ...engineAdminShellEn,
   ...navSystemsEn,
   ...inboxEn,
+  ...statesEn,
   ...askChatEn,
   ...engineAdminStatusEn,
   ...engineAdminPeopleEn,

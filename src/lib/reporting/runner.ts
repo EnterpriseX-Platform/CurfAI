@@ -920,7 +920,7 @@ export async function runReportWithProof(ctx: RunContext): Promise<RunResult> {
     }
   } finally {
     await closeCachedConnections(connCache);
-    reportRunMs.observe?.({ tenant: tenantId }, Date.now() - metricStartedAt);
+    reportRunMs.observe?.({}, Date.now() - metricStartedAt);
   }
 
   return { dataset, provenance };

@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { LogOut, ChevronDown, Plus, Check, Sparkles, Monitor, Menu, Loader2, UserRound } from "lucide-react";
+import { LogOut, ChevronDown, Plus, Check, Sparkles, Monitor, Menu, Loader2, UserRound, Building2 } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogBody, DialogIcon,
 } from "@/components/ui/dialog";
 import { LanguageSwitcher } from "@/components/common/LanguageSwitcher";
 import { AiCreditsChip } from "@/components/layout/AiCreditsChip";
@@ -413,23 +413,32 @@ function TenantSwitcher() {
       <Dialog open={createOpen} onOpenChange={(o) => { setCreateOpen(o); if (!o) setCreateError(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{t("action.createWorkspace")}</DialogTitle>
-            <DialogDescription>
-              {t("workspace.createDesc")}
-            </DialogDescription>
+            <DialogIcon variant="primary"><Building2 className="h-4 w-4" /></DialogIcon>
+            <div>
+              <DialogTitle>{t("action.createWorkspace")}</DialogTitle>
+              <DialogDescription>{t("workspace.createDesc")}</DialogDescription>
+            </div>
           </DialogHeader>
-          <div className="space-y-2 py-1">
-            <Label htmlFor="new-workspace-name">{t("workspace.nameLabel")}</Label>
-            <Input
-              id="new-workspace-name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && newName.trim() && !creating) void createWorkspace(); }}
-              placeholder={t("workspace.namePlaceholder")}
-              autoFocus
-            />
-            {createError && <p className="text-xs text-destructive">{createError}</p>}
-          </div>
+          <DialogBody>
+            <div className="space-y-1.5">
+              <Label htmlFor="new-workspace-name">{t("workspace.nameLabel")}</Label>
+              <Input
+                id="new-workspace-name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && newName.trim() && !creating) void createWorkspace(); }}
+                placeholder={t("workspace.namePlaceholder")}
+                maxLength={80}
+                aria-invalid={!!createError}
+                autoFocus
+              />
+            </div>
+            {createError && (
+              <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {createError}
+              </p>
+            )}
+          </DialogBody>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreateOpen(false)} disabled={creating}>
               {t("action.cancel")}

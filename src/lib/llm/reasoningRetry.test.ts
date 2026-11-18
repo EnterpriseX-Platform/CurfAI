@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const call = vi.fn();
 
 vi.mock("@/lib/db", () => ({ prisma: { llmTokenUsage: { create: () => ({ catch: () => null }) } } }));
-vi.mock("@/lib/metrics", () => ({ llmTokens: { inc: () => {} } }));
+vi.mock("@/lib/metrics", () => ({ llmTokens: { inc: () => {} }, llmCalls: { inc: () => {} }, llmCallSeconds: { observe: () => {} }, llmCostUsd: { inc: () => {} } }));
 vi.mock("./pricing", () => ({ computeMicroCost: () => 0 }));
 vi.mock("./credentials", () => ({
   getLlmCredentials: async () => ({ provider: "anthropic", apiKey: "k", model: "m", baseUrl: null }),

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { withSystemDbContext } from "@/lib/dbContext";
+import { recordMembershipRemoval } from "@/lib/membershipRemoval";
 import { requireAdmin } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
@@ -75,6 +76,7 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     where: { userId: target.user.id, tenantId: u.tenantId },
   });
   await prisma.membership.delete({ where: { userId_tenantId: { userId: target.user.id, tenantId: u.tenantId } } });
+  await recordMembershipRemoval(target.user.id, u.tenantId, "admin");
   // Seat billing follows the membership change; best-effort, the hourly
   // reconcile in the paid cron covers a missed call.
   void ee.billing?.syncSeats(u.tenantId).catch(() => null);

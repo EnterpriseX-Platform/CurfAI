@@ -6,8 +6,8 @@ import { requireUser, requireAdminOrEditor, requireReportInScope } from "@/lib/a
 import { recordAudit } from "@/lib/audit";
 import { ee } from "@/ee";
 import { featureGate } from "@/lib/featureGate";
-import type { FeatureKey } from "@/lib/featureTiers";
 import { readableDefinition } from "@/lib/reporting/visibleReport";
+import { chartTypeFeaturesIn } from "@/lib/reporting/chartTypeGates";
 
 export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
@@ -83,32 +83,9 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ id: strin
   // Annotations on charts (free for everyone — no gate). We still scan to
   // keep the validation symmetric, but no gate is invoked.
 
-  // Gated chart types — Tier 2 viz roadmap. We refuse to persist a report
-  // that uses gauge/waterfall/bullet/sankey on a non-Team tenant. Same
-  // pattern as theme/conditional: viewer reads stay open, save is gated.
-  const GATED_CHART_TYPES: Record<string, FeatureKey> = {
-    gauge:     "viz.chart.gauge",
-    waterfall: "viz.chart.waterfall",
-    bullet:    "viz.chart.bullet",
-    sankey:    "viz.chart.sankey",
-    boxplot:   "viz.chart.boxplot",
-    network:   "viz.chart.network",
-    chord:     "viz.chart.chord",
-    parallel:  "viz.chart.parallel",
-    radial:    "viz.chart.radial",
-    scatter3d: "viz.chart.scatter3d",
-  };
-  const usedGatedTypes = new Set<string>();
-  for (const p of r.pages) {
-    for (const b of p.blocks) {
-      if (b.type === "chart") {
-        const ct = (b.config as any).chartType;
-        if (ct && GATED_CHART_TYPES[ct]) usedGatedTypes.add(ct);
-      }
-    }
-  }
-  for (const ct of usedGatedTypes) {
-    const block = await featureGate(user, GATED_CHART_TYPES[ct]);
+  // Gated chart types (lib/reporting/chartTypeGates.ts): viewer reads stay open, save is gated.
+  for (const key of chartTypeFeaturesIn(r)) {
+    const block = await featureGate(user, key);
     if (block) return block;
   }
 

@@ -3,6 +3,7 @@ import type { Dictionary } from "../locales";
 import { engineAdminShellZh } from "./engineAdmin/shell.zh";
 import { navSystemsZh } from "./nav/systems.zh";
 import { inboxZh } from "./inbox/inbox.zh";
+import { statesZh } from "./states/states.zh";
 import { askChatZh } from "./ask/chat.zh";
 import { engineAdminStatusZh } from "./engineAdmin/status.zh";
 import { engineAdminPeopleZh } from "./engineAdmin/people.zh";
@@ -4984,6 +4985,12 @@ export const zh: Dictionary = {
   "canvas.empty.step3": "3. 预览",
   "canvas.empty.step3Desc": "点击顶部的“{run}”按钮获取数据，查看报表的实际效果。",
   "chartTypePicker.change": "更改图表类型",
+  "chartTypePicker.viewingAs": "以{type}显示，仅对您可见，保存后对所有人生效。",
+  "chartTypePicker.viewingAsReader": "仅为您以{type}显示；报告保持原有类型。",
+  "chartTypePicker.saveForEveryone": "为所有人保存",
+  "chartTypePicker.saving": "正在保存…",
+  "chartTypePicker.undo": "撤销",
+  "chartTypePicker.saveFailed": "无法保存图表类型，请重试。",
   "chartType.bar": "柱状图",
   "chartType.line": "折线图",
   "chartType.area": "面积图",
@@ -7146,6 +7153,7 @@ export const zh: Dictionary = {
   ...engineAdminShellZh,
   ...navSystemsZh,
   ...inboxZh,
+  ...statesZh,
   ...askChatZh,
   ...engineAdminStatusZh,
   ...engineAdminPeopleZh,

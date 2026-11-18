@@ -16,7 +16,7 @@ const usageRows: any[] = [];
 const state = { provider: "openai-compatible" };
 
 vi.mock("@/lib/db", () => ({ prisma: { llmTokenUsage: { create: (a: any) => { usageRows.push(a.data); return { catch: () => null }; } } } }));
-vi.mock("@/lib/metrics", () => ({ llmTokens: { inc: () => {} } }));
+vi.mock("@/lib/metrics", () => ({ llmTokens: { inc: () => {} }, llmCalls: { inc: () => {} }, llmCallSeconds: { observe: () => {} }, llmCostUsd: { inc: () => {} } }));
 vi.mock("./pricing", () => ({ computeMicroCost: () => 0, computeMicroCostMetered: () => 0 }));
 vi.mock("@/lib/billing", () => ({ requireAiCredits: async () => null }));
 vi.mock("./credentials", () => ({

@@ -522,7 +522,14 @@ export async function readSession() {
   // (the switcher, the periodic role re-check) — cross-workspace by design,
   // so it runs with no workspace filter even when this request is already
   // bound to one.
-  return withSystemDbContext(() => getServerSession(authOptions));
+  const session = await withSystemDbContext(() => getServerSession(authOptions));
+  // An ended session (revoked, idle, account deleted, no open workspace —
+  // see jwt()/session() above) still comes back as an object, only with no
+  // id or workspace. It is "not signed in", same as requireUser() says, or
+  // every page that only checks `if (!session)` renders with no workspace
+  // and crashes (QA /brief, 2026-11-17).
+  const u = session?.user as any;
+  return u?.id && u?.tenantId ? session : null;
 }
 
 /** The signed-in session, with the rest of this request's database work

@@ -23,9 +23,27 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Request ids, request metrics and the per-request log context for every request (lib/observability/http.ts).
+    const { installHttpObserver } = await import("./lib/observability/http");
+    installHttpObserver();
     const { initOtel } = await import("./lib/otel");
     initOtel();
     const { ee } = await import("@/ee");
     await ee.lake?.registerStreamIngestShutdownFlush();
   }
+}
+
+/**
+ * Next calls this for every error thrown while rendering a page or running a route handler (not for a handler that returns a
+ * 500 itself — the HTTP observer counts and logs those). It is the line that says *what* threw: the error with a short stack, the
+ * route template (`/api/reports/[id]`, never the URL), and the request id the log context already holds.
+ */
+export async function onRequestError(
+  err: unknown,
+  _request: { path: string; method: string },
+  context: { routerKind: string; routePath: string; routeType: string },
+): Promise<void> {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  const { log } = await import("./lib/log");
+  log.error("unhandled error in request", { err, routePath: context.routePath, routeType: context.routeType, routerKind: context.routerKind });
 }

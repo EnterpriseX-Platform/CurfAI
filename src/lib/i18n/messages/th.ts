@@ -3,6 +3,7 @@ import type { Dictionary } from "../locales";
 import { engineAdminShellTh } from "./engineAdmin/shell.th";
 import { navSystemsTh } from "./nav/systems.th";
 import { inboxTh } from "./inbox/inbox.th";
+import { statesTh } from "./states/states.th";
 import { askChatTh } from "./ask/chat.th";
 import { engineAdminStatusTh } from "./engineAdmin/status.th";
 import { engineAdminPeopleTh } from "./engineAdmin/people.th";
@@ -4995,6 +4996,12 @@ export const th: Dictionary = {
   "canvas.empty.step3": "3. ดูตัวอย่าง",
   "canvas.empty.step3Desc": "กดปุ่ม \"{run}\" ด้านบนเพื่อดึงข้อมูลและดูรายงานแสดงผลจริง",
   "chartTypePicker.change": "เปลี่ยนประเภทกราฟ",
+  "chartTypePicker.viewingAs": "แสดงเป็น{type} เฉพาะคุณจนกว่าจะบันทึก",
+  "chartTypePicker.viewingAsReader": "แสดงเป็น{type} สำหรับคุณ รายงานยังคงใช้ประเภทเดิม",
+  "chartTypePicker.saveForEveryone": "บันทึกให้ทุกคนเห็น",
+  "chartTypePicker.saving": "กำลังบันทึก…",
+  "chartTypePicker.undo": "ย้อนกลับ",
+  "chartTypePicker.saveFailed": "บันทึกประเภทกราฟไม่สำเร็จ ลองอีกครั้ง",
   "chartType.bar": "แท่ง",
   "chartType.line": "เส้น",
   "chartType.area": "พื้นที่",
@@ -7157,6 +7164,7 @@ export const th: Dictionary = {
   ...engineAdminShellTh,
   ...navSystemsTh,
   ...inboxTh,
+  ...statesTh,
   ...askChatTh,
   ...engineAdminStatusTh,
   ...engineAdminPeopleTh,

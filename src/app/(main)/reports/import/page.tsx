@@ -18,6 +18,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { requireUser } from "@/lib/auth";
 import { ReportSchema } from "@/lib/reporting/schema";
+import { pinnedPublicFetch } from "@/lib/security/pinnedFetch";
 import { extractWiringRequirements, slugify } from "@/lib/reporting/sanitizeTemplate";
 import { ExternalImportPanel } from "./ExternalImportPanel";
 import { AppShell } from "@/components/layout/AppShell";
@@ -82,7 +83,7 @@ export default async function ImportPage(props: { searchParams: Promise<SearchPa
     );
   }
 
-  // Validate the URL — only http(s), no file:// / data: / private IPs.
+  // Validate the URL — only http(s); private addresses are refused by the fetch below.
   let parsedUrl: URL;
   try { parsedUrl = new URL(externalUrl); }
   catch {
@@ -98,8 +99,16 @@ export default async function ImportPage(props: { searchParams: Promise<SearchPa
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const r = await fetch(externalUrl, { signal: ctrl.signal, redirect: "follow" });
+    // Only a public address, checked on the address the connection really uses
+    // (pinnedPublicFetch); a redirect is not followed — its target was never checked.
+    const r = await pinnedPublicFetch(externalUrl, {
+      signal: ctrl.signal,
+      maxBytes: MAX_FETCH_BYTES,
+      // Some hosts (GitHub's API) refuse a request with no User-Agent; plain fetch sent one.
+      headers: { "user-agent": "Curf-Importer", accept: "application/json, text/plain" },
+    });
     clearTimeout(timer);
+    if (r.status >= 300 && r.status < 400) throw new Error(`The address redirects (HTTP ${r.status}). Use the final URL it points to.`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const ct = r.headers.get("content-type") ?? "";
     if (!ct.includes("application/json") && !ct.includes("text/plain") && !ct.includes("text/json")) {
@@ -108,7 +117,9 @@ export default async function ImportPage(props: { searchParams: Promise<SearchPa
     const text = (await r.text()).slice(0, MAX_FETCH_BYTES);
     definition = JSON.parse(text);
   } catch (e: any) {
-    fetchError = (e?.message ?? String(e)).slice(0, 300);
+    // A refused address gets one plain line: the guard's own message names the
+    // private IP a host resolved to, which a reader has no business learning.
+    fetchError = e?.code === "ESSRF" ? "Only public addresses can be imported from." : (e?.message ?? String(e)).slice(0, 300);
   }
 
   if (fetchError) return <ImportError reason={`Could not fetch ${externalUrl}: ${fetchError}`} />;

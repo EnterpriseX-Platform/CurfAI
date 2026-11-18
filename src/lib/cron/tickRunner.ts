@@ -18,9 +18,14 @@ import type { FiredItem } from "@/lib/cron/types";
 import { tickLakePulls, tickMaterializedViews, tickLakeBackups, tickBackupSnapshots } from "@/lib/cron/lakeTicks";
 import { tickAuditRetention, tickAiUsageThreshold, tickSecurityAlerts, tickWebhookSecrets, tickLifecycle } from "@/lib/cron/opsTicks";
 import { ee } from "@/ee";
+import { countFired, countSweepErrors, observeCronRun } from "@/lib/cron/observe";
 
 /** The due schedules. Returns false when the Schedule table isn't there yet (a fresh database). */
-export async function runScheduleLoop(req: NextRequest, now: Date, force: boolean, fired: FiredItem[]): Promise<boolean> {
+export function runScheduleLoop(req: NextRequest, now: Date, force: boolean, fired: FiredItem[]): Promise<boolean> {
+  return observeCronRun("schedule_loop", () => scheduleLoop(req, now, force, fired));
+}
+
+async function scheduleLoop(req: NextRequest, now: Date, force: boolean, fired: FiredItem[]): Promise<boolean> {
   let schedules: any[] = [];
   try {
     // A closed workspace's scheduled reports, watchers, briefs and digests
@@ -39,6 +44,12 @@ export async function runScheduleLoop(req: NextRequest, now: Date, force: boolea
 
 /** Fire one schedule row, recording a failure on the row. Never throws. */
 export async function fireSchedule(sched: any, req: NextRequest): Promise<FiredItem> {
+  const item = await fireScheduleRow(sched, req);
+  countFired([item]);
+  return item;
+}
+
+async function fireScheduleRow(sched: any, req: NextRequest): Promise<FiredItem> {
   try {
     if (sched.kind === "delivery" || !sched.kind) {
       const result = await fireDelivery(sched, req);
@@ -59,7 +70,17 @@ export async function fireSchedule(sched: any, req: NextRequest): Promise<FiredI
 }
 
 /** Everything but the schedule loop. Community ticks first, in the order they always ran; then the paid edition's. */
-export async function runPlatformTicks(req: NextRequest, now: Date, force: boolean, fired: FiredItem[]): Promise<Record<string, unknown>> {
+export function runPlatformTicks(req: NextRequest, now: Date, force: boolean, fired: FiredItem[]): Promise<Record<string, unknown>> {
+  return observeCronRun("platform_ticks", async () => {
+    const before = fired.length;
+    const result = await platformTicks(req, now, force, fired);
+    countFired(fired.slice(before));
+    countSweepErrors(result);
+    return result;
+  });
+}
+
+async function platformTicks(req: NextRequest, now: Date, force: boolean, fired: FiredItem[]): Promise<Record<string, unknown>> {
   await tickLakePulls(fired, now, force);
   await tickMaterializedViews(fired, now, force);
   await tickLakeBackups(fired, now, force);

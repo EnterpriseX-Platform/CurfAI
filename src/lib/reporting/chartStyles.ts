@@ -66,6 +66,8 @@ export type ResolvedChartStyle = {
   /**
    * Show the numeric value axis. When false the renderer substitutes direct
    * data labels — but only where they actually fit; see `directLabelsFit()`.
+   * Read by the waterfall only: a bar chart always keeps both axes (readers
+   * took a bar with its value axis dropped for a chart with no X and Y).
    */
   valueAxis: boolean;
   /** Turn data labels on even when the block config didn't ask for them. */

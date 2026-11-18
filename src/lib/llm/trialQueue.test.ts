@@ -9,7 +9,7 @@ const call = vi.fn();
 const creds = { current: null as any };
 
 vi.mock("@/lib/db", () => ({ prisma: { llmTokenUsage: { create: () => ({ catch: () => null }) } } }));
-vi.mock("@/lib/metrics", () => ({ llmTokens: { inc: () => {} } }));
+vi.mock("@/lib/metrics", () => ({ llmTokens: { inc: () => {} }, llmCalls: { inc: () => {} }, llmCallSeconds: { observe: () => {} }, llmCostUsd: { inc: () => {} } }));
 vi.mock("./pricing", () => ({ computeMicroCost: () => 0, computeMicroCostMetered: () => 0 }));
 vi.mock("@/lib/billing", () => ({ requireAiCredits: async () => null }));
 vi.mock("./credentials", () => ({ getLlmCredentials: async () => creds.current, hasEnvLlm: () => true }));

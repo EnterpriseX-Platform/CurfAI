@@ -169,10 +169,23 @@ export type EeRegistry = {
       enrollInvitee: (user: { id: string; email: string; name: string | null; emailVerifiedAt?: Date | null; keycloakSub?: string | null }, opts: { reason: string; mail?: boolean }) => Promise<{ mail: "sent" | "failed" | "not_needed"; linked: boolean }>;
       mail: (email: string, actions: Array<"VERIFY_EMAIL" | "UPDATE_PASSWORD">) => Promise<"sent" | "failed">;
     };
+    /**
+     * A company's SCIM provisioning reaches Keycloak (Keycloak-only mode): `provisioned` gives a new person a way to sign in,
+     * `updated` carries a changed address or name, `deprovisioned` (after the membership is removed) closes the account when it
+     * belongs to no workspace any more. Each answers with what happened ("off", "enrolled", "company_idp", "failed", ...) and
+     * never throws: a Keycloak that is down must not fail the IdP's call.
+     */
+    scim: {
+      provisioned: (user: { id: string; email: string; name: string | null; emailVerifiedAt?: Date | null; keycloakSub?: string | null }) => Promise<string>;
+      updated: (user: { id: string; email: string; name: string | null; keycloakSub?: string | null }, changed: { email?: boolean; name?: boolean }) => Promise<string>;
+      deprovisioned: (user: { id: string; email: string; keycloakSub?: string | null }) => Promise<string>;
+    };
     /** The person's account is being erased: remove their Keycloak user too. */
     onUserErased: (user: { id: string; keycloakSub: string | null }) => Promise<void>;
     /** Where the browser goes to end the Keycloak session as well (RP-initiated logout). */
     endSessionUrl: (postLogoutRedirect: string) => string | null;
+    /** SCIM Keycloak steps waiting to be retried, and how many were due before `overdueBefore` (the metrics scrape). */
+    scimRetryCounts: (overdueBefore: Date) => Promise<{ all: number; overdue: number }>;
   };
 
   /** Embeddings behind "Find by meaning" and semantic search. */
@@ -556,5 +569,10 @@ export type EeRegistry = {
    *  those items. */
   navCounts?: {
     paid: (user: CurfSessionUser) => Promise<NavCounts>;
+  };
+
+  /** The BullMQ queues (lib/jobs, Cloud only): each queue's job counts by state, for the metrics scrape. Absent in Community. */
+  jobs?: {
+    queueCounts: () => Promise<Array<{ queue: string; counts: Record<"waiting" | "active" | "delayed" | "failed", number> }>>;
   };
 };

@@ -1,4 +1,4 @@
 Curf Community edition
-Exported from private commit 1e4f90cd141cc0df6f25bc1992b6e02b2eabe00b
+Exported from private commit 573ab5d5dade884a06e178bf66495529659a5d7e
 Version 1.4.14
-2026-11-15T16:11:56.915Z
+2026-11-18T06:19:51.617Z
